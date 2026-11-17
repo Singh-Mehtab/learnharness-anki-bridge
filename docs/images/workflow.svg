@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="296" viewBox="0 0 1200 296" role="img" aria-labelledby="title description">
   <title id="title">Anki Bridge target workflow and development status</title>
-  <desc id="description">LearnHarness graph selection is planned for 0.3.0. The shared card writer is merged in 0.1.1. In-app draft review and approval are planned for 0.3.0. Anki delivery through AnkiConnect is implemented in the open 0.2.0 pull request, not yet merged.</desc>
+  <desc id="description">LearnHarness graph selection is planned for 0.3.0. The shared card writer is merged in 0.1.1. In-app draft review and approval are planned for 0.3.0. Anki delivery through AnkiConnect is implemented in 0.2.0 for hand-written cards.</desc>
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#64748b"/></marker>
   </defs>
@@ -33,7 +33,7 @@
       <text x="52" y="209" fill="#475569">0.3.0 · PLANNED</text>
       <text x="342" y="209" fill="#166534">0.1.1 · MERGED</text>
       <text x="632" y="209" fill="#475569">0.3.0 · PLANNED</text>
-      <text x="922" y="209" fill="#1e40af">0.2.0 · OPEN PR #2</text>
+      <text x="922" y="209" fill="#1e40af">0.2.0 · IMPLEMENTED</text>
     </g>
     <text x="32" y="271" font-size="15" fill="#475569">One-way delivery. Existing Anki notes and scheduling stay untouched.</text>
   </g>

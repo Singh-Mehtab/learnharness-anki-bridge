@@ -2,7 +2,7 @@
 
 An unofficial LearnHarness community plugin in development. The goal is to draft cards from your knowledge graph, let you edit and approve them, and send them to Anki through AnkiConnect. Delivery is one-way; Anki keeps responsibility for reviews and scheduling. This project is not affiliated with Anki or LearnHarness.
 
-**Current merged version: 0.1.1.** The shared card writer and quality bench are merged. The Anki connection and delivery UI are implemented in [PR #2](https://github.com/Singh-Mehtab/learnharness-anki-bridge/pull/2), which is still open. There is no public release or end-to-end graph-to-Anki plugin on `main` yet.
+**Version 0.2.0.** The shared card writer, quality bench and hand-written-card Anki delivery shell are included. There is no public release or end-to-end graph-to-Anki plugin yet.
 
 ![Target workflow: graph selection, card writing, approval, then delivery to Anki. Each step shows its implementation status.](docs/images/workflow.svg)
 
@@ -14,7 +14,7 @@ The diagram shows the intended workflow. Graph selection and in-app draft review
 | --- | --- | --- |
 | 0.1.0 | Merged | Shared writer input builder, graph context, batching, prompts, result schema and validation. Sonnet bench with real QM nodes and labelled synthetic fixtures. Local browser scoring, JSON results and per-run reports. |
 | 0.1.1 | Merged in [PR #1](https://github.com/Singh-Mehtab/learnharness-anki-bridge/pull/1) | Multiline code support, stronger accuracy and answer-leak guidance, soft word targets, a hard generation-call budget, and separate automated/human scoring. 22 tests, typecheck and browser checks passed. Sol approved the code. |
-| 0.2.0 | Implemented and tested; [PR #2](https://github.com/Singh-Mehtab/learnharness-anki-bridge/pull/2) open | Hand-written-card UI, connection/profile pairing, owned Basic note type, approval, durable delivery state, interrupted-send recovery, presence checks and Show in Anki. 77 automated tests, build and typecheck pass. Real AnkiConnect and scratch LearnHarness integration checks passed before the renderer-only Sol review fixes. Sol approved those fixes; user acceptance and packaged Electron behavior remain pending. |
+| 0.2.0 | Implemented and tested in [PR #2](https://github.com/Singh-Mehtab/learnharness-anki-bridge/pull/2) | Hand-written-card UI, connection/profile pairing, owned Basic note type, approval, durable delivery state, interrupted-send recovery, presence checks and Show in Anki. 77 automated tests, build and typecheck pass. Real AnkiConnect and scratch LearnHarness integration checks passed before the renderer-only Sol review fixes. Sol approved those fixes; packaged Electron behavior remains unverified. |
 
 ### Card writer
 
@@ -38,7 +38,7 @@ Additional card-quality validation is deferred until before public release. No a
 
 ![Anki Bridge in a scratch LearnHarness host, showing a hand-written test card sent to a throwaway Anki profile and found in Anki.](docs/images/0.2.0-scratch-host.png)
 
-Actual 0.2.0 integration-test screenshot, not a mockup. It uses synthetic cards, an empty scratch LearnHarness environment and a throwaway Anki profile. This UI belongs to the pending PR, not the merged 0.1.1 package. It demonstrates manual delivery, not graph-based generation.
+Actual 0.2.0 integration-test screenshot, not a mockup. It uses synthetic cards, an empty scratch LearnHarness environment and a throwaway Anki profile. The screenshot demonstrates 0.2.0 manual delivery, not graph-based generation.
 
 The 0.2.0 tests used LearnHarness 0.6.1, Anki 26.08.1 and AnkiConnect builds 26.10.11.0 and 26.11.15.0. They covered note type creation and repair, duplicate rejection, profile mismatches, Show in Anki, and recovery after killing the bridge immediately after a real `addNote`. Scratch browser tests covered enabling the plugin, manual approval, sending and data preservation after disable/re-enable. The live checks predate the renderer-only review fixes. See [verification details](docs/0.2.0-verification.md).
 
