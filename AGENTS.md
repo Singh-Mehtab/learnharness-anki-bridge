@@ -8,7 +8,7 @@ Read the plan before answering project questions or changing anything: `/Users/m
 - Plugin ID `anki-bridge`, display name Anki Bridge.
 - Target: LearnHarness 0.6.1, plugin API v1. Reference clone of the app at tag v0.6.1 may exist at `/tmp/lh-src/repo` (temporary; re-clone `amosblomqvist/learnharness` if missing). Key docs: `docs/plugin-authoring.md`, `docs/plugin-api/`, `plugins/flashcards/`.
 - Milestones go by version (0.1.0 bench, 0.2.0 Anki plumbing, 0.3.0 manual drafting, 0.4.0 session flow, 0.5.0 coverage, 0.6.0 first public release). Use version numbers, not "Milestone N".
-- Current: 0.1.1 closes out the 0.1.0 writer bench. The original run failed the zero-leak gate; the user's knowledgeable spot-check is finished and unfamiliar cards stay Sol-assessed. Fresh-run generation is blocked by Claude quota after all real QM targets completed. See `bench/0.1.1-closeout.md` for evidence and continuation. Do not call the partial run a pass. Separate 0.2.0 worktrees are out of this chat's scope.
+- Current: 0.1.1 writer/bench code is merged in PR #1. The user's human spot-check is finished; model scores remain separate. Full card-quality validation is incomplete and the user deferred additional testing until before public release. Do not automatically resume the bench or call the partial run a pass. 0.2.0 Anki plumbing is implemented/tested in open PR #2, not merged or user-accepted. See `README.md` for the version summary and the plan for evidence. Do not modify another chat's worktree.
 
 ## Rules
 
@@ -21,5 +21,6 @@ Read the plan before answering project questions or changing anything: `/Users/m
 - Anki: never send test cards to the user's real profile. Use a throwaway Anki profile. His AnkiConnect is on `http://127.0.0.1:8766` (8765 is another local service).
 - Model calls (the bench, generation tests) use the user's Claude subscription. Say roughly how many calls before running anything large.
 - License AGPL-3.0. Attribute anything adapted from Twig (`amoghu1s1/twig`) or core Flashcards.
+- For every project version bump, including patch versions, update `README.md` in the same PR. Update the version/status summary, completed features, verification results, known limitations and any affected setup instructions or pictures. Distinguish merged, implemented-but-unmerged, tested and planned work; never imply that a partial bench passed. Use only synthetic or scratch-profile data in screenshots, with useful alt text, and label previews that are not shipped. Documentation-only changes do not require a version bump.
 - Update the plan after a verified milestone or a user decision, separating tested results from assumptions. Keep `~/pi/PROJECTS.md` in step for state changes only.
 - Global Pi instructions apply, including the `unslop` writing skill for prose and README text.
