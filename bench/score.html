@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8">
 <title>Anki Bridge · card bench scoring</title>
+<link rel="icon" href="data:,">
 <script>
   window.MathJax = {
     tex: { inlineMath: [["$", "$"], ["\\(", "\\)"]], displayMath: [["$$", "$$"], ["\\[", "\\]"]], processEscapes: true },
@@ -95,7 +96,8 @@ const saveTimers = {};
 
 function esc(s) { return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
 
-// Minimal Markdown: protect maths and code, then bold, italics, line breaks.
+// Minimal Markdown: protect maths and code, then bold and line breaks.
+// No single-asterisk italics: graph text uses * for complex conjugates.
 function md(text) {
   const keep = [];
   const stash = (s) => { keep.push(s); return `\u0000${keep.length - 1}\u0000`; };
@@ -106,7 +108,6 @@ function md(text) {
     .replace(/`([^`]+)`/g, (_, c) => stash(`<code>${esc(c)}</code>`));
   s = esc(s)
     .replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>")
-    .replace(/(^|[^*])\*([^*\n]+)\*/g, "$1<i>$2</i>")
     .replace(/\n/g, "<br>");
   return s.replace(/\u0000(\d+)\u0000/g, (_, i) => keep[Number(i)]);
 }
