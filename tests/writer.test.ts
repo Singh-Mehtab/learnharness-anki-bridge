@@ -1,0 +1,194 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import {
+  buildTarget,
+  capText,
+  containsName,
+  findProblems,
+  givesAwayAnswer,
+  messageText,
+  neighbours,
+  pack,
+  sourcePassage,
+  trimToFit,
+  validateResult,
+  writerInstructions,
+  writerPrompt,
+  type GraphLike,
+  type WriterInput,
+} from "../src/writer/index.ts";
+
+const graph: GraphLike = {
+  propositions: [
+    { id: "a", name: "Premise A", statement: "A holds.", aliases: [], provenance: [{ chatId: "c1", messageId: "m1" }] },
+    { id: "b", name: "Premise B", statement: "B holds.", aliases: [] },
+    { id: "c", name: "Conclusion C", statement: "A and B give C.", aliases: ["C rule"] },
+    { id: "d", name: "Sibling D", statement: "A gives D with E.", aliases: [] },
+    { id: "e", name: "Premise E", statement: "E holds.", aliases: [] },
+    { id: "f", name: "Downstream F", statement: "C gives F.", aliases: [] },
+  ],
+  chains: [
+    { id: "ch1", premises: ["a", "b"], conclusion: "c" },
+    { id: "ch2", premises: ["a", "e"], conclusion: "d" },
+    { id: "ch3", premises: ["c"], conclusion: "f" },
+  ],
+};
+
+test("buildTarget keeps concluding chains whole and lists feeds", () => {
+  const t = buildTarget(graph, "c");
+  assert.deepEqual(t.concludedBy.map((c) => c.premises.map((p) => p.id)), [["a", "b"]]);
+  assert.deepEqual(t.feeds.map((f) => f.conclusion.id), ["f"]);
+  assert.deepEqual(t.aliases, ["C rule"]);
+});
+
+test("neighbours rank siblings first", () => {
+  assert.equal(neighbours(graph, "c")[0], "d");
+  assert.ok(!neighbours(graph, "c").includes("c"));
+});
+
+test("buildTarget throws on a broken chain", () => {
+  const broken: GraphLike = { ...graph, chains: [{ id: "x", premises: ["zz"], conclusion: "c" }] };
+  assert.throws(() => buildTarget(broken, "c"), /Incomplete reasoning chain/);
+});
+
+test("messageText prefers send_to_user over text parts", () => {
+  const msg = {
+    id: "m1",
+    content: [
+      { type: "thinking", thinking: "" },
+      { type: "text", text: "draft" },
+      { type: "toolCall", name: "send_to_user", arguments: { message: "taught text" } },
+    ],
+  };
+  assert.equal(messageText(msg as never), "taught text");
+  assert.equal(messageText({ content: [{ type: "text", text: "only text" }] }), "only text");
+});
+
+test("sourcePassage follows the first provenance with a messageId and caps it", () => {
+  const long = `${"Para one. ".repeat(100)}\n\n${"Para two. ".repeat(100)}`;
+  const chat = { messages: [{ id: "m1", content: [{ type: "toolCall", name: "send_to_user", arguments: { message: long } }] }] };
+  const s = sourcePassage(graph.propositions[0], (id) => (id === "c1" ? chat : null));
+  assert.ok(s && s.length <= 1510 && s.endsWith("[…]"));
+  assert.equal(sourcePassage(graph.propositions[1], () => chat), undefined);
+});
+
+test("capText leaves short text alone", () => {
+  assert.equal(capText("short"), "short");
+});
+
+test("givesAwayAnswer and containsName", () => {
+  assert.ok(givesAwayAnswer("Which came first, 1980 or 1982? (1980)", "1980"));
+  assert.ok(!givesAwayAnswer("What does the integral of $e^{-\\alpha x}$ from 0 to infinity equal?", "$\\frac{1}{\\alpha}$"));
+  assert.ok(!givesAwayAnswer("anything", "$i$"));
+  assert.ok(containsName("Use the **Premise A** here", "Premise A"));
+  assert.ok(!containsName("Premises are listed", "Premise A"));
+});
+
+const input = (overrides: Partial<WriterInput> = {}): WriterInput => ({
+  version: 1,
+  maxCardsPerNode: 2,
+  enabledKinds: ["recall", "why", "compose", "discriminate"],
+  targets: [buildTarget(graph, "c"), buildTarget(graph, "b")],
+  ...overrides,
+});
+
+test("a valid result passes", () => {
+  const result = {
+    targets: [
+      { nodeId: "c", cards: [{ kind: "why", front: "Why must C hold here?", back: "A and B together" }] },
+      { nodeId: "b", cards: [], skipReason: "Prior knowledge." },
+    ],
+  };
+  assert.deepEqual(findProblems(result, input()), []);
+  assert.doesNotThrow(() => validateResult(result, { input: input() }));
+});
+
+test("validator catches target, kind, leak, name, format and duplicate problems", () => {
+  const i = input({
+    enabledKinds: ["recall", "why"],
+    targets: [
+      { ...buildTarget(graph, "c"), existingCards: [{ kind: "recall", front: "Old front?", back: "Old" }] },
+      buildTarget(graph, "b"),
+    ],
+  });
+  const result = {
+    targets: [
+      {
+        nodeId: "c",
+        cards: [
+          { kind: "compose", front: "Given A and B, what follows?", back: "Conclusion C" },
+          { kind: "recall", front: "Old front?", back: "something else" },
+          { kind: "recall", front: "When does Conclusion C apply? It is the rule", back: "rule" },
+        ],
+      },
+      { nodeId: "zzz", cards: [] },
+      { nodeId: "c", cards: [] },
+    ],
+  };
+  const problems = findProblems(result, i).join("\n");
+  assert.match(problems, /not enabled/);
+  assert.match(problems, /cap is 2/);
+  assert.match(problems, /repeats an existing card/);
+  assert.match(problems, /must not contain the idea's name/);
+  assert.match(problems, /gives the answer away/);
+  assert.match(problems, /Unknown target "zzz"/);
+  assert.match(problems, /more than once/);
+  assert.match(problems, /Missing targets: b/);
+});
+
+test("why and discriminate need graph support; images and fences rejected; skipReason required", () => {
+  const i = input({ targets: [buildTarget(graph, "b")] });
+  i.targets[0].neighbours = [];
+  const result = {
+    targets: [
+      {
+        nodeId: "b",
+        cards: [
+          { kind: "why", front: "Why?", back: "Because" },
+          { kind: "discriminate", front: "Which fits ![x](y)?", back: "this one" },
+        ],
+      },
+    ],
+  };
+  const problems = findProblems(result, i).join("\n");
+  assert.match(problems, /needs a chain/);
+  assert.match(problems, /needs a listed neighbour/);
+  assert.match(problems, /images/);
+  assert.match(findProblems({ targets: [{ nodeId: "b", cards: [] }] }, i).join(), /skipReason/);
+  assert.match(findProblems({ targets: [{ nodeId: "b", cards: [{ kind: "recall", front: "x ```y```", back: "z" }] }] }, i).join(), /code fences/);
+});
+
+test("pack respects the chunk budget, rides big nodes alone and skips oversized ones", () => {
+  const ids = graph.propositions.map((n) => n.id);
+  const { batches, skipped } = pack(graph, ids, () => ({}), { maxCardsPerNode: 2, enabledKinds: ["recall"], chunkBudget: 250 });
+  assert.equal(skipped.length, 0);
+  assert.ok(batches.length > 1);
+  assert.deepEqual(batches.flatMap((b) => b.input.targets.map((t) => t.nodeId)), ids);
+  for (const b of batches) assert.ok(b.input.targets.length === 1 || b.inputTokens <= 250);
+
+  const huge = "x".repeat(60000);
+  const r = pack(graph, ["a", "b"], (id) => (id === "a" ? { source: huge } : {}), { maxCardsPerNode: 2, enabledKinds: ["recall"] });
+  assert.deepEqual(r.skipped.map((s) => s.nodeId), ["a"]);
+  assert.match(r.skipped[0].reason, /Too large/);
+
+  const limited = pack(graph, ids, () => ({}), { maxCardsPerNode: 2, enabledKinds: ["recall"], maxTokens: 900 });
+  assert.ok(limited.batches.every((b) => b.input.targets.length <= 1));
+});
+
+test("trimToFit drops feeds whole before giving up", () => {
+  const t = buildTarget(graph, "c", { existingCards: [{ kind: "recall", front: "q".repeat(400), back: "a" }] });
+  const trimmed = trimToFit(t, 200);
+  assert.ok(trimmed);
+  assert.equal(trimmed.existingCards.length, 0);
+  assert.deepEqual(trimmed.concludedBy, t.concludedBy);
+});
+
+test("instructions describe only requested kinds; prompt carries cap and kinds", () => {
+  const core = writerInstructions();
+  assert.ok(core.includes("- discriminate:") && !core.includes("mini-problem"));
+  const trial = writerInstructions({ kinds: ["mini-problem", "spot-the-mistake"], completion: "Return JSON." });
+  assert.ok(trial.includes("- mini-problem:") && !trial.includes("- recall:") && trial.endsWith("Return JSON."));
+  const p = writerPrompt(input());
+  assert.match(p, /at most 2 cards per target/);
+  assert.match(p, /Enabled kinds: recall, why, compose, discriminate/);
+});

@@ -1,0 +1,24 @@
+{
+  "name": "learnharness-anki-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "LearnHarness community plugin: draft Anki cards from your knowledge graph, review them, send them through AnkiConnect.",
+  "license": "AGPL-3.0-only",
+  "engines": {
+    "node": ">=23.6"
+  },
+  "scripts": {
+    "test": "node --test 'tests/**/*.test.ts'",
+    "typecheck": "tsc --noEmit",
+    "bench:fixtures": "node bench/extract-fixtures.ts",
+    "bench:run": "node bench/run.ts",
+    "bench:score": "node bench/score-server.ts",
+    "bench:summary": "node bench/summarise.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "mathjax": "^3.2.2",
+    "typescript": "^5.9.0"
+  }
+}
