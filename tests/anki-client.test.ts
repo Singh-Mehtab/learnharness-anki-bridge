@@ -31,7 +31,7 @@ test("normalizeUrl accepts only root HTTP(S) endpoints", () => {
   }
 });
 
-test("connection sends v6 POST requests with body key and validates null profile", async () => {
+test("connection sends v6 POST requests with body key for an open profile", async () => {
   const requests: Record<string, unknown>[] = [];
   const http = await server((req, res) => {
     assert.equal(req.method, "POST");
@@ -41,14 +41,60 @@ test("connection sends v6 POST requests with body key and validates null profile
     req.on("end", () => {
       const request = JSON.parse(body);
       requests.push(request);
-      const result = { version: 6, getActiveProfile: null, deckNames: ["Default", "Test"] }[request.action as string];
+      const result = { version: 6, getActiveProfile: "Scratch", deckNames: ["Default", "Test"] }[request.action as string];
       res.end(JSON.stringify({ result, error: null }));
     });
   });
   try {
     const client = new AnkiClient({ url: http.url, apiKey: "secret" });
-    assert.deepEqual(await client.connection(), { profile: null, decks: ["Default", "Test"] });
+    assert.deepEqual(await client.connection(), { profile: "Scratch", decks: ["Default", "Test"] });
     assert.deepEqual(requests, ["version", "getActiveProfile", "deckNames"].map((action) => ({ action, version: 6, key: "secret", params: {} })));
+  } finally { await http.close(); }
+});
+
+test("connection returns null profile without requesting decks from a closed collection", async () => {
+  const actions: string[] = [];
+  const http = await server((req, res) => {
+    let body = "";
+    req.on("data", (data) => { body += data; });
+    req.on("end", () => {
+      const { action } = JSON.parse(body) as { action: string };
+      actions.push(action);
+      if (action === "deckNames") {
+        res.end(JSON.stringify({ result: null, error: "collection is not available" }));
+      } else {
+        res.end(JSON.stringify({ result: action === "version" ? 6 : null, error: null }));
+      }
+    });
+  });
+  try {
+    const client = new AnkiClient({ url: http.url });
+    assert.deepEqual(await client.connection(), { profile: null, decks: [] });
+    assert.deepEqual(actions, ["version", "getActiveProfile"]);
+    await assert.rejects(client.call("deckNames"), kind("api"));
+  } finally { await http.close(); }
+});
+
+test("client accepts current and older legacy createModel and notesInfo shapes", async () => {
+  let result: unknown;
+  const http = await server((_req, res) => res.end(JSON.stringify({ result, error: null })));
+  try {
+    const client = new AnkiClient({ url: http.url });
+    // Both implementations return the native model dictionary, not a null result.
+    result = { id: 1, name: "LearnHarness Basic", flds: [{ name: "Front", ord: 0 }], tmpls: [] };
+    assert.deepEqual(await client.call("createModel"), result);
+    const oldNote = {
+      noteId: 123,
+      tags: ["learnharness"],
+      fields: { Front: { value: "Question", order: 0 } },
+      modelName: "LearnHarness Basic",
+      cards: [456],
+    };
+    // Current legacy projections add profile/mod; missing notes remain {} in both.
+    for (const note of [oldNote, { ...oldNote, profile: "Scratch", mod: 1_800_000_000 }]) {
+      result = [note, {}];
+      assert.deepEqual(await client.call("notesInfo", { notes: [123, 999] }), result);
+    }
   } finally { await http.close(); }
 });
 

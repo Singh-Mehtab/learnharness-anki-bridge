@@ -144,6 +144,7 @@ export class AnkiClient {
   async connection(): Promise<{ profile: string | null; decks: string[] }> {
     await this.call("version");
     const profile = await this.call<string | null>("getActiveProfile");
+    if (profile === null) return { profile, decks: [] };
     const decks = await this.call<string[]>("deckNames");
     return { profile, decks };
   }
