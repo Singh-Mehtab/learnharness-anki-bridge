@@ -55,7 +55,8 @@ const formatRules = `## Format
 - Fronts, backs and extras are Markdown. Use **bold** for the one decisive word or phrase if it helps.
 - Maths in LaTeX: $...$ inline, or $$ on their own lines for display maths.
 - A literal dollar sign is written \\$; literal tokens go in inline code.
-- No Mermaid, images, code fences, raw HTML or lists longer than three items. Inline code is fine.
+- Inline code and multiline fenced code blocks are allowed. For a code-reading question, use a fenced block with a language label and preserve indentation. Keep the code short.
+- No Mermaid, images, raw HTML or lists longer than three items.
 - In JSON strings, double every backslash: "\\\\frac{a}{b}" gives \\frac{a}{b}.
 - Return every target exactly once, keyed by its nodeId, with its cards or a skipReason.`;
 

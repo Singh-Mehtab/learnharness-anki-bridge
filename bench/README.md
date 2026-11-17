@@ -22,6 +22,16 @@ npm run bench:summary                  # check the scores against the pass crite
 
 `bench:run` takes `--model` (default `sonnet`), `--cap` (cards per node, default 2) and `--sets qm,humanities,programming`. Each request goes to `claude -p` with no tools, MCP servers or settings files, from an empty temp directory, so the model sees only the writer's instructions and input. When the validator rejects a result, the bench resumes the same conversation with the validator's message, up to two times, as the plugin's worker does.
 
+## Automated review and human scores
+
+An automated reviewer can check factual accuracy, answer leaks and card design, but cannot decide whether the material is useful to this learner. Save provisional model scores as `scores.sol.json`, separate from the human `scores.json`. The scoring page and `bench:summary` use only human scores; an automated review does not satisfy the human keep-rate gate.
+
+For a small human spot-check, copy unchanged cards into separate run folders and pass those folders explicitly to `bench:score`. Keep their scores separate from the original full runs. A deliberately selected diagnostic sample does not estimate the full bench's keep rate.
+
+## Code formatting
+
+Cards may contain inline code and multiline fenced code. The preview escapes code as text and preserves indentation; maths and Markdown inside it remain literal. Use matching opening and closing backtick or tilde fences. Longer closing fences are not yet supported by this minimal preview.
+
 ## Data
 
 - `bench/private/` holds nodes copied from your own graph. Git ignores it, because the repository will be public.
