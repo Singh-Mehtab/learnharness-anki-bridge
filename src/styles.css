@@ -1,0 +1,11 @@
+.anki-bridge { max-width: 860px; margin: 0 auto; padding: 1rem; color: var(--text-primary, inherit); }
+.anki-bridge fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
+.anki-bridge label { display: flex; flex-direction: column; gap: .3rem; margin: .65rem 0; }
+.anki-bridge input, .anki-bridge textarea, .anki-bridge select { font: inherit; color: inherit; background: var(--bg-secondary, transparent); border: 1px solid var(--border-color, #888); border-radius: .25rem; padding: .5rem; max-width: 100%; }
+.anki-bridge textarea { width: 100%; box-sizing: border-box; resize: vertical; }
+.anki-bridge input[type=checkbox] { align-self: flex-start; }
+.anki-bridge button { font: inherit; cursor: pointer; padding: .45rem .7rem; margin: .25rem .4rem .25rem 0; }
+.anki-bridge button:disabled, .anki-bridge fieldset:disabled button { cursor: default; opacity: .55; }
+.anki-bridge article { border: 1px solid var(--border-color, #888); border-radius: .4rem; padding: 1rem; margin: 1rem 0; }
+.anki-bridge p { overflow-wrap: anywhere; }
+.anki-bridge [role=status] { min-height: 1.5em; white-space: pre-wrap; }

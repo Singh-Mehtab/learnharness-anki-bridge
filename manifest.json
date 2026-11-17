@@ -1,0 +1,11 @@
+{
+  "id": "anki-bridge",
+  "name": "Anki Bridge",
+  "version": "0.2.0",
+  "apiVersion": 1,
+  "minAppVersion": "0.6.1",
+  "description": "One-way AnkiConnect bridge. Hand-written card testing shell.",
+  "main": "main.js",
+  "backend": "backend.cjs",
+  "styles": "styles.css"
+}
