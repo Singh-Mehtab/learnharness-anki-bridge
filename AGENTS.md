@@ -8,7 +8,7 @@ Read the plan before answering project questions or changing anything: `/Users/m
 - Plugin ID `anki-bridge`, display name Anki Bridge.
 - Target: LearnHarness 0.6.1, plugin API v1. Reference clone of the app at tag v0.6.1 may exist at `/tmp/lh-src/repo` (temporary; re-clone `amosblomqvist/learnharness` if missing). Key docs: `docs/plugin-authoring.md`, `docs/plugin-api/`, `plugins/flashcards/`.
 - Milestones go by version (0.1.0 bench, 0.2.0 Anki plumbing, 0.3.0 manual drafting, 0.4.0 session flow, 0.5.0 coverage, 0.6.0 first public release). Use version numbers, not "Milestone N".
-- Current: 0.1.0 bench built and run. Sol provisionally scored all 76 cards; a 12-card human spot-check is pending. Automated scores stay separate from human scores and do not establish acceptance. See `bench/README.md` and the plan's "0.1.0 progress" section.
+- Current: 0.1.1 closes out the 0.1.0 writer bench. The original run failed the zero-leak gate; the user's knowledgeable spot-check is finished and unfamiliar cards stay Sol-assessed. Fresh-run generation is blocked by Claude quota after all real QM targets completed. See `bench/0.1.1-closeout.md` for evidence and continuation. Do not call the partial run a pass. Separate 0.2.0 worktrees are out of this chat's scope.
 
 ## Rules
 
