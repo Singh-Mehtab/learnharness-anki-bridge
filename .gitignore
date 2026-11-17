@@ -5,6 +5,7 @@ dist/
 .env
 .DS_Store
 bench-output/
+bench/private/
 
 # Local agent instructions
 AGENTS.md
