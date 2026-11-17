@@ -75,6 +75,13 @@ test("connection returns null profile without requesting decks from a closed col
   } finally { await http.close(); }
 });
 
+test("old builds without profile identity fail closed with an upgrade instruction", async () => {
+  const http = await server((_req, res) => res.end(JSON.stringify({ result: null, error: "unsupported action" })));
+  try {
+    await assert.rejects(new AnkiClient({ url: http.url }).call("getActiveProfile"), /does not support getActiveProfile.*Upgrade/);
+  } finally { await http.close(); }
+});
+
 test("client accepts current and older legacy createModel and notesInfo shapes", async () => {
   let result: unknown;
   const http = await server((_req, res) => res.end(JSON.stringify({ result, error: null })));

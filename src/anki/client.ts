@@ -125,7 +125,10 @@ export class AnkiClient {
       if (typeof envelope.error === "string") {
         const kind = /(?:invalid|missing|incorrect|reject|must|require).*(?:api.?key|key)|(?:api.?key|key).*(?:invalid|incorrect|reject|required|must|provided)/i.test(envelope.error)
           ? "key-rejected" : "api";
-        throw new AnkiError(kind, envelope.error);
+        const message = action === "getActiveProfile" && /unsupported action|unknown action|method not found/i.test(envelope.error)
+          ? "This AnkiConnect build does not support getActiveProfile. Upgrade to a build with profile identity support; Anki Bridge will not send without it."
+          : envelope.error;
+        throw new AnkiError(kind, message);
       }
       if (!validResult(action, envelope.result)) {
         throw new AnkiError("not-anki-connect", `Invalid AnkiConnect result for ${action}.`);
