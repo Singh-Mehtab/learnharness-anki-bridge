@@ -34,6 +34,26 @@ $$`;
   assert.equal(renderMarkdown(String.raw`\(x_i\) and \[y_j\]`), '<p>\\(x_i\\) and \\[y_j\\]</p>');
 });
 
+test("renderMarkdown converts numeric-leading inline math without consuming surrounding currency", () => {
+  assert.equal(renderMarkdown('$2 x + 1$'), String.raw`<p>\(2 x + 1\)</p>`);
+  assert.equal(renderMarkdown('Cost $5 and $10 then $2 x + 1$.'), String.raw`<p>Cost $5 and $10 then \(2 x + 1\).</p>`);
+  assert.equal(renderMarkdown(String.raw`$2 x + \$5$`), String.raw`<p>\(2 x + \$5\)</p>`);
+});
+
+test("renderMarkdown does not close currency with a math opener inside emphasis", () => {
+  for (const [marker, tag] of [['**', 'strong'], ['*', 'em'], ['__', 'strong'], ['_', 'em'], ['~~', 'del']]) {
+    assert.equal(renderMarkdown(`Cost $5 and ${marker}$x$${marker}.`), `<p>Cost $5 and <${tag}>\\(x\\)</${tag}>.</p>`);
+  }
+  assert.equal(renderMarkdown(String.raw`Cost $5 and **$\alpha$**.`), String.raw`<p>Cost $5 and <strong>\(\alpha\)</strong>.</p>`);
+  assert.equal(renderMarkdown('$2 x^*$ and $*$.'), String.raw`<p>\(2 x^*\) and \(*\).</p>`);
+});
+
+test("renderMarkdown bounds emphasis detection to the next unescaped dollar", () => {
+  assert.equal(renderMarkdown('$2 x^ *$ and $3 y^ *$.'), String.raw`<p>\(2 x^ *\) and \(3 y^ *\).</p>`);
+  assert.equal(renderMarkdown('$2 x^ *$ and *$3 y$*.'), String.raw`<p>\(2 x^ *\) and <em>\(3 y\)</em>.</p>`);
+  assert.equal(renderMarkdown(String.raw`Cost $5 and **$x + \$5$**.`), String.raw`<p>Cost $5 and <strong>\(x + \$5\)</strong>.</p>`);
+});
+
 test("renderMarkdown keeps currency, escaped dollars, unmatched dollars and identifiers literal", () => {
   assert.equal(renderMarkdown(String.raw`Cost $5 and $10; pay \$20. An unmatched $ remains. foo_bar_baz`), '<p>Cost $5 and $10; pay $20. An unmatched $ remains. foo_bar_baz</p>');
   assert.equal(renderMarkdown(String.raw`\$x\$ and $x + \$5$`), '<p>$x$ and \\(x + \\$5\\)</p>');

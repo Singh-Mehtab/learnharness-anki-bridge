@@ -16,7 +16,6 @@ function math(text: string, index: number): { html: string; end: number } | unde
   else if (text.startsWith("\\(", index)) { open = "\\("; close = "\\)"; display = false; }
   else if (text.startsWith("$$", index)) { open = close = "$$"; display = true; }
   else if (text[index] === "$" && !/\s|\$/.test(text[index + 1] ?? " ")) {
-    if (/^\$\d[\d,.]*(?=\s+(?:[A-Za-z]|\$)|[;:!?](?:\s|$)|$)/.test(text.slice(index))) return;
     open = close = "$"; display = false;
   }
   else return;
@@ -27,6 +26,14 @@ function math(text: string, index: number): { html: string; end: number } | unde
   }
   if (end === -1) return;
   const content = text.slice(index + open.length, end);
+  // Currency must not consume later math, including math wrapped in emphasis.
+  if (open === "$" && [...content.matchAll(/\$/g)].some(match => !escaped(content, match.index))) return;
+  const emphasis = /\s(\*\*|__|~~|\*|_)$/.exec(content)?.[1];
+  if (open === "$" && emphasis) {
+    let next = end + 1;
+    while ((next = text.indexOf("$", next)) !== -1 && escaped(text, next)) next++;
+    if (next !== -1 && text.startsWith(emphasis, next + 1)) return;
+  }
   if (!content.trim() || content.includes("\0") || (!display && content.includes("\n"))) return;
   // MathJax can create links/styles too. Only mathematical TeX belongs in cards.
   if (/\\(?:href|url|style|class|cssId|html\w*|includegraphics|require|newcommand|renewcommand|def|gdef|let)\b/i.test(content)) {
