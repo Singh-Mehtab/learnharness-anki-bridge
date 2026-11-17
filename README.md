@@ -18,7 +18,7 @@ Use a throwaway Anki profile. Do not test sends against your real collection.
 2. Run LearnHarness from a checkout with scratch `LH_DATA_DIR` and `LH_AUTH_FILE` paths. Do not point either at your normal LearnHarness data or credentials. No model calls are needed for this shell.
 3. Install the built plugin into that scratch app's plugins directory, shown under Settings → Community plugins. Refresh and enable Anki Bridge; discovery alone leaves it disabled.
 4. Open Anki Bridge from the sidebar. Set the AnkiConnect root URL and optional API key, save, then test the connection. The default is `http://127.0.0.1:8765`. Check your own port first; another service may use it. Use a separate port for isolated compatibility tests, such as 18765 or 18766. Never point an automated test at your usual profile. Prefer `127.0.0.1` over `localhost` to avoid IPv6 failures.
-5. Confirm that the displayed profile is the throwaway one, then pair it. Changing the URL or Anki profile blocks sending until the correct destination is restored or you explicitly re-pair.
+5. Confirm that the displayed profile is the throwaway one, then pair it. Changing the URL or Anki profile blocks sending until the correct destination is restored or you explicitly re-pair. Do not switch profiles during a send. Legacy AnkiConnect cannot make a profile check and a write one atomic operation.
 6. Create a hand-written draft, save any edits, approve it and send it to a scratch deck. The deck input accepts an existing deck or a new name. Use Show in Anki to check the actual card rendering.
 
 Close affected Anki editors before repairing fields or replacing styling. AnkiConnect refuses these writes while an editor is open; the bridge reports that refusal without bypassing it.
@@ -57,6 +57,8 @@ npm run test:anki-live -- --url http://127.0.0.1:18766 \
 ```
 
 The test leaves hand-written notes in the throwaway collection and removes its temporary bridge state. It refuses ports 8765 and 8766. It does not install, start or stop Anki.
+
+Scratch LearnHarness 0.6.1 browser verification also passed discovery, enable/disable, persistence and an end-to-end approved send to the throwaway Anki profile. See [verification details and screenshot](docs/0.2.0-verification.md). Packaged Electron-specific behavior and user acceptance remain unverified.
 
 ## License
 
