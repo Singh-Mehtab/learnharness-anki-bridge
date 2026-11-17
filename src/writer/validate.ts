@@ -10,14 +10,21 @@
 import type { DraftCard, WriterInput, WriterTarget } from "./types.ts";
 import { kindMisfit } from "./kinds.ts";
 
+// Code blocks come first: dollars, backticks and LaTeX inside them are code.
+const FENCE = /^ {0,3}(`{3,}|~{3,})[^\n]*\n([\s\S]*?)^ {0,3}\1[ \t]*$/gm;
 const SEGMENT = /\$\$[\s\S]+?\$\$|\$[^$\n]+?\$|`[^`\n]+`/g;
 
-/** Maths and inline-code segments, normalised for comparison. */
+/** Maths and code segments, normalised for comparison. */
 export function answerSegments(text: string): string[] {
-  return (text.replace(/\\\$/g, "").match(SEGMENT) ?? [])
-    .map((s) => s.replace(/^\$\$|\$\$$|^\$|\$$|^`|`$/g, ""))
-    .map((s) => s.replace(/\\(?:left|right|[,;!]|displaystyle)/g, "").replace(/\s+/g, ""))
-    .filter((s) => s.length > 0);
+  const blocks: string[] = [];
+  const prose = text.replace(FENCE, (_, _fence, code: string) => { blocks.push(code); return " "; });
+  const inline = (prose.replace(/\\\$/g, "").match(SEGMENT) ?? []).map((s) => {
+    if (s.startsWith("`")) return s.slice(1, -1).trim();
+    return s.replace(/^\$\$|\$\$$|^\$|\$$/g, "")
+      .replace(/\\(?:left|right|[,;!]|displaystyle)/g, "").replace(/\s+/g, "");
+  });
+  // Preserve code whitespace: Python indentation and spaces in strings matter.
+  return [...blocks.map((s) => s.trim()), ...inline].filter((s) => s.length > 0);
 }
 
 /** Distinctive prose terms outside maths and code: numbers and words of
@@ -25,6 +32,7 @@ export function answerSegments(text: string): string[] {
 export function answerTerms(text: string): string[] {
   return (
     text
+      .replace(FENCE, " ")
       .replace(/\\\$/g, "")
       .replace(SEGMENT, " ")
       .toLowerCase()
@@ -61,7 +69,6 @@ export function containsName(front: string, name: string): boolean {
 }
 
 const FORBIDDEN: Array<[RegExp, string]> = [
-  [/```|~~~/, "code fences"],
   [/!\[[^\]]*\]\(/, "images"],
   [/<img\b/i, "images"],
   [/\bmermaid\b/i, "Mermaid"],
