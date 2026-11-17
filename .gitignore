@@ -1,0 +1,10 @@
+node_modules/
+dist/
+.sdk/
+*.zip
+.env
+.DS_Store
+bench-output/
+
+# Local agent instructions
+AGENTS.md
