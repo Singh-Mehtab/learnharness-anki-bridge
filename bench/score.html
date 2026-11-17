@@ -85,7 +85,7 @@
     For each card: <b>keep</b> (send as is), <b>small edit</b> (a word or two), <b>big edit</b> (rewrite needed), <b>drop</b>.
     Tick <b>leak</b> if the front gives the answer away, <b>error</b> if anything on the card is wrong, <b>unclear</b> if the front could fairly have another answer.
     Keys: click a card, then <kbd>1</kbd>–<kbd>4</kbd> for the verdict (moves to the next card), <kbd>L</kbd> <kbd>E</kbd> <kbd>U</kbd> toggle flags, <kbd>J</kbd>/<kbd>K</kbd> move.
-    Word counts over the targets (front 25, back 10) show in amber. Scores save as you go.
+    Word counts over the targets (front 30, back 15) show in amber. Scores save as you go.
   </p>
   <div id="root">Loading…</div>
 </main>
@@ -151,7 +151,7 @@ function cardEl(entry, card, sourceText) {
     <div>
       <span class="kind ${TRIAL.has(card.kind) ? "trial" : ""}">${esc(card.kind)}</span>
       ${card.unvalidated ? '<span class="warn">failed validation after retries</span>' : ""}
-      <span class="words">front ${words(card.frontWords, 25)} · back ${words(card.backWords, 10)} words</span>
+      <span class="words">front ${words(card.frontWords, 30)} · back ${words(card.backWords, 15)} words</span>
       <div class="front">${md(card.front)}</div>
       <div class="label">Back</div>
       <div class="back ${document.getElementById("hide").checked ? "hidden" : ""}">${md(card.back)}</div>
