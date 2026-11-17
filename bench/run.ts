@@ -1,4 +1,4 @@
-// 0.1.0 card quality bench: run the shared card writer on the bench sets with
+// 0.1.x card quality bench: run the shared card writer on the bench sets with
 // the Claude Code CLI (the user's subscription), validate with the plugin's own
 // validator, retry with its correction message, and save every card for scoring.
 //
@@ -40,6 +40,7 @@ const { values } = parseArgs({
     "trial-targets": { type: "string", default: "4" },
     retries: { type: "string", default: "2" },
     concurrency: { type: "string", default: "3" },
+    "max-calls": { type: "string" },
     "dry-run": { type: "boolean", default: false },
   },
 });
@@ -48,6 +49,15 @@ const mode = values.mode === "trial" ? "trial" : "core";
 const kinds: CardKind[] = mode === "trial" ? [...TRIAL_KINDS] : [...CORE_KINDS];
 const cap = Number(values.cap);
 const retries = Number(values.retries);
+const concurrency = Number(values.concurrency);
+const maxCalls = values["max-calls"] === undefined ? Infinity : Number(values["max-calls"]);
+for (const [name, value, minimum] of [["cap", cap, 1], ["retries", retries, 0], ["concurrency", concurrency, 1], ["trial-targets", Number(values["trial-targets"]), 1]] as const) {
+  if (!Number.isSafeInteger(value) || value < minimum) throw new Error(`--${name} must be an integer >= ${minimum}`);
+}
+if (values["max-calls"] !== undefined && (!Number.isSafeInteger(maxCalls) || maxCalls < 1)) {
+  throw new Error("--max-calls must be a positive integer");
+}
+let calls = 0;
 
 const BENCH_COMPLETION = `Return the complete result as structured output matching the schema. If you are told about validation problems, return a corrected complete result.`;
 const instructions = writerInstructions({ kinds, completion: BENCH_COMPLETION });
@@ -74,6 +84,10 @@ const cwd = join(tmpdir(), "anki-bridge-bench-cwd");
 mkdirSync(cwd, { recursive: true });
 
 function callClaude(prompt: string, resume?: string): Promise<ClaudeReply> {
+  // Reserve synchronously before spawning, including correction calls. The pool
+  // cannot overspend the shared limit even with concurrent batches.
+  if (calls >= maxCalls) throw new Error(`Model call budget exhausted (${maxCalls}); no CLI launched.`);
+  calls++;
   const args = [
     "-p",
     "--model", values.model!,
@@ -178,7 +192,7 @@ for (const set of sets) {
 
 console.log(
   `${mode} run, ${values.model}: ${jobs.length} requests for ${jobs.reduce((n, j) => n + j.batch.input.targets.length, 0)} targets across ${sets.map((s) => s.name).join(", ")}` +
-    ` (plus up to ${retries} correction calls per request).`,
+    ` (plus up to ${retries} correction calls per request; total call limit ${maxCalls}).`,
 );
 if (values["dry-run"]) {
   for (const j of jobs) console.log(`  ${j.set.name}: ${j.batch.input.targets.length} targets, ~${j.batch.inputTokens} input tokens`);
@@ -186,7 +200,7 @@ if (values["dry-run"]) {
 }
 
 const runId = `${new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19)}-${mode}-${values.model}`;
-const results = await pool(jobs, Number(values.concurrency), async (job) => {
+const results = await pool(jobs, concurrency, async (job) => {
   const r = await runBatch(job.set, job.batch);
   const a = r.record.attempts;
   console.log(`  ${job.set.name} [${r.record.nodeIds.length}]: ${r.record.accepted ? "ok" : "FAILED"} after ${a.length} attempt(s)${a.at(-1)?.error ? ` (${a.at(-1)!.error})` : ""}`);
@@ -233,6 +247,8 @@ const run: BenchRun = {
   maxCardsPerNode: cap,
   enabledKinds: kinds,
   instructions,
+  modelCalls: calls,
+  writerVersion: (JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version: string }).version,
   batches: results.map((r) => r.record),
   cards,
   skips,
@@ -240,6 +256,5 @@ const run: BenchRun = {
 const dir = join("bench-output", runId);
 mkdirSync(dir, { recursive: true });
 writeFileSync(join(dir, "run.json"), `${JSON.stringify(run, null, 2)}\n`);
-const calls = run.batches.reduce((n, b) => n + b.attempts.length, 0);
 const cost = run.batches.flatMap((b) => b.attempts).reduce((n, a) => n + (a.costUsd ?? 0), 0);
 console.log(`Saved ${cards.length} cards, ${skips.length} skips to ${dir}/run.json. ${calls} calls; API-equivalent cost $${cost.toFixed(2)} (subscription, not billed).`);

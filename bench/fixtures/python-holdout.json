@@ -1,0 +1,25 @@
+{
+  "name": "python-holdout",
+  "subject": "Programming: Python containers and evaluation (new hand-written fixture, not real extraction)",
+  "origin": "hand-written",
+  "graph": {
+    "propositions": [
+      {"id":"p_slice_new","name":"List slicing creates a new outer list","statement":"For a built-in Python list a, b = a[:] creates a distinct outer list containing references to the same elements. Appending an element to b does not append it to a.","provenance":[{"chatId":"synthetic-python-fresh","messageId":"python-lesson"}]},
+      {"id":"p_refs","name":"List elements are object references","statement":"A Python list stores references to its element objects; copying those references does not copy the objects themselves."},
+      {"id":"p_nested_share","name":"Shallow copies share nested objects","statement":"After b = a[:] for a built-in list of lists, a and b are distinct outer lists but their corresponding nested lists are shared. Mutating a shared nested list is visible through either outer list.","provenance":[{"chatId":"synthetic-python-fresh","messageId":"python-lesson"}]},
+      {"id":"p_short_operands","name":"Short-circuit operators return operands","statement":"In Python, x and y returns x without evaluating y when x is falsey, otherwise evaluates and returns y. The expression x or y returns x without evaluating y when x is truthy, otherwise evaluates and returns y. These operators need not return a bool.","provenance":[{"chatId":"synthetic-python-fresh","messageId":"python-lesson"}]},
+      {"id":"p_exhaustion","name":"Generator iterators are exhausted","statement":"A Python generator object is a single-pass iterator: consuming it to exhaustion leaves subsequent iteration over that same object empty. Creating a new generator object starts a separate iteration.","provenance":[{"chatId":"synthetic-python-fresh","messageId":"python-lesson"}]},
+      {"id":"p_args","name":"Call arguments are evaluated before the call","statement":"In an ordinary Python function or method call, the argument expressions are evaluated before the called function or method executes."},
+      {"id":"p_get_eager","name":"Dictionary get defaults are evaluated eagerly","statement":"In d.get(key, build()), build() is evaluated as a call argument even when key is already present in the built-in dictionary d. The method chooses which value to return only after its arguments have been evaluated.","provenance":[{"chatId":"synthetic-python-fresh","messageId":"python-lesson"}]},
+      {"id":"p_is_none","name":"Identity testing for None","statement":"In Python, x is None checks identity with the singleton None, while x == None invokes equality semantics that a class can customise. Identity testing avoids accidentally treating an equal-but-distinct object as None.","provenance":[{"chatId":"synthetic-python-fresh","messageId":"python-lesson"}]}
+    ],
+    "chains": [
+      {"id":"pc-fresh1","premises":["p_slice_new","p_refs"],"conclusion":"p_nested_share"},
+      {"id":"pc-fresh2","premises":["p_args"],"conclusion":"p_get_eager"}
+    ]
+  },
+  "chats": {
+    "synthetic-python-fresh": {"id":"synthetic-python-fresh","messages":[{"id":"python-lesson","content":[{"type":"text","text":"This is an authored teaching fixture, not a real LearnHarness chat. We use Python 3 built-in lists and dictionaries unless stated otherwise. A full list slice creates a distinct outer list with references to the same items. Appending to the copy leaves the original outer list alone; mutating a nested list shared by both is visible through both. Python and/or short-circuit, and return an operand rather than coercing their result to bool. For example, an empty list or a fallback selects the fallback; a nonempty list or a fallback selects the list without evaluating the fallback. A generator object is a single-pass iterator: list(g) consumes g and a second list(g) is empty after exhaustion. A new generator object is independent. Arguments to ordinary function and method calls are evaluated before the call executes, so build() runs in d.get(key, build()) even if key exists. This differs from placing build() in the unselected arm of a conditional expression. None is a singleton; use is None to test its identity, since a user-defined __eq__ may report equality with None even for a distinct object."}]}]}
+  },
+  "targets": ["p_slice_new","p_nested_share","p_short_operands","p_exhaustion","p_get_eager","p_is_none"]
+}

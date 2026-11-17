@@ -1,0 +1,27 @@
+{
+  "name": "logic-holdout",
+  "subject": "Philosophy: deductive reasoning (new hand-written fixture, not real extraction)",
+  "origin": "hand-written",
+  "graph": {
+    "propositions": [
+      {"id":"l_valid","name":"Deductive validity","statement":"A deductive argument is valid exactly when no interpretation makes all its premises true and its conclusion false. Validity concerns the connection between premises and conclusion, not whether the actual premises are true.","provenance":[{"chatId":"synthetic-logic","messageId":"logic-lesson"}]},
+      {"id":"l_true","name":"True premises","statement":"Premise truth is distinct from deductive validity: a valid form can be instantiated with false premises."},
+      {"id":"l_sound","name":"Soundness","statement":"A sound deductive argument is valid and has true premises; therefore its conclusion is true. A true conclusion alone establishes neither validity nor soundness.","provenance":[{"chatId":"synthetic-logic","messageId":"logic-lesson"}]},
+      {"id":"l_conditional","name":"Material conditional","statement":"For a material conditional P implies Q, P true and Q false is the only truth-value assignment that makes the conditional false. P is sufficient for Q, and Q is necessary for P."},
+      {"id":"l_ponens","name":"Modus ponens","statement":"From P implies Q and P, Q follows deductively. This valid form does not assert that either premise is actually true.","provenance":[{"chatId":"synthetic-logic","messageId":"logic-lesson"}]},
+      {"id":"l_tollens","name":"Modus tollens","statement":"From P implies Q and not Q, not P follows deductively. This uses a material conditional and rules out P because P would imply Q.","provenance":[{"chatId":"synthetic-logic","messageId":"logic-lesson"}]},
+      {"id":"l_affirm","name":"Affirming the consequent","statement":"From P implies Q and Q, P does not follow deductively: Q might hold while P is false. A counterinterpretation with P false and Q true makes both premises true and P false.","provenance":[{"chatId":"synthetic-logic","messageId":"logic-lesson"}]},
+      {"id":"l_converse","name":"Converse versus contrapositive","statement":"For a material conditional P implies Q, not Q implies not P is logically equivalent, but Q implies P need not be. Reversing the conditional is not the same as taking its contrapositive.","provenance":[{"chatId":"synthetic-logic","messageId":"logic-lesson"}]}
+    ],
+    "chains": [
+      {"id":"lc1","premises":["l_valid","l_true"],"conclusion":"l_sound"},
+      {"id":"lc2","premises":["l_conditional"],"conclusion":"l_ponens"},
+      {"id":"lc3","premises":["l_conditional"],"conclusion":"l_tollens"},
+      {"id":"lc4","premises":["l_conditional","l_affirm"],"conclusion":"l_converse"}
+    ]
+  },
+  "chats": {
+    "synthetic-logic": {"id":"synthetic-logic","messages":[{"id":"logic-lesson","content":[{"type":"text","text":"This is an authored teaching fixture, not a real LearnHarness chat. Deductive validity means that the premises cannot all be true while the conclusion is false. An argument is sound when it is valid and its actual premises are true. A true conclusion alone proves neither property. For a material conditional P implies Q, only P true with Q false is excluded. Thus P and the conditional entail Q; not Q and the conditional entail not P. Observing Q alone does not establish P, since another situation could also yield Q. For example, being a square implies being a rectangle, but being a rectangle need not imply being a square. The contrapositive not Q implies not P is equivalent to P implies Q; the converse Q implies P is not in general equivalent. Necessary and sufficient conditions point in opposite directions. These are truth-functional claims, not claims that every causal or everyday use of 'if' is a material conditional."}]}]}
+  },
+  "targets": ["l_valid","l_sound","l_ponens","l_tollens","l_affirm","l_converse"]
+}

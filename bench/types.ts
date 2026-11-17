@@ -62,6 +62,9 @@ export interface BenchRun {
   maxCardsPerNode: number;
   enabledKinds: CardKind[];
   instructions: string;
+  /** Present on 0.1.1+ runs; older runs counted attempts, not CLI launches. */
+  modelCalls?: number;
+  writerVersion?: string;
   batches: BatchRecord[];
   cards: BenchCard[];
   skips: BenchSkip[];

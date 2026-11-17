@@ -6,11 +6,18 @@
 
 import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { parseArgs } from "node:util";
+import { LENGTH_TARGETS } from "../src/writer/index.ts";
 import type { BenchCard, BenchRun, CardScore, Scores } from "./types.ts";
 
+const { values, positionals } = parseArgs({ options: { scores: { type: "string", default: "human" } }, allowPositionals: true });
+if (values.scores !== "human" && values.scores !== "sol") throw new Error("--scores must be human or sol");
+const automated = values.scores === "sol";
+const scoreFile = automated ? "scores.sol.json" : "scores.json";
+const summaryFile = automated ? "summary.sol.md" : "summary.md";
 const root = resolve("bench-output");
-const dirs = process.argv.slice(2).length
-  ? process.argv.slice(2).map((d) => resolve(d))
+const dirs = positionals.length
+  ? positionals.map((d) => resolve(d))
   : ["core", "trial"]
       .map((m) => readdirSync(root).filter((d) => d.includes(`-${m}-`) && existsSync(join(root, d, "run.json"))).sort().at(-1))
       .filter(Boolean)
@@ -38,29 +45,35 @@ function table(cards: BenchCard[], scores: Scores, key: (c: BenchCard) => string
 
 for (const dir of dirs) {
   const run = JSON.parse(readFileSync(join(dir, "run.json"), "utf8")) as BenchRun;
-  const scores: Scores = existsSync(join(dir, "scores.json")) ? JSON.parse(readFileSync(join(dir, "scores.json"), "utf8")) : { cards: {}, skips: {} };
+  const scores: Scores = existsSync(join(dir, scoreFile)) ? JSON.parse(readFileSync(join(dir, scoreFile), "utf8")) : { cards: {}, skips: {} };
   const cards = run.cards;
   const sc = (c: BenchCard) => scores.cards[c.id] ?? {};
   const scored = cards.filter((c) => sc(c).verdict);
   const keptCards = scored.filter((c) => kept(sc(c)));
   const leaks = cards.filter((c) => sc(c).leak);
   const keptErrors = keptCards.filter((c) => sc(c).error);
-  const allScored = scored.length === cards.length;
+  const allScored = cards.length > 0 && scored.length === cards.length;
+  const generationComplete = run.batches.length > 0 && run.batches.every((b) => b.accepted) && !cards.some((c) => c.unvalidated) && !run.skips.some((s) => s.by === "packer");
   const keepRate = scored.length ? keptCards.length / scored.length : 0;
-  const pass = allScored && keepRate >= 2 / 3 && !leaks.length && !keptErrors.length;
-  const calls = run.batches.reduce((n, b) => n + b.attempts.length, 0);
-  const firstTry = run.batches.filter((b) => b.accepted && b.attempts.length === 1).length;
   const modelSkips = run.skips.filter((s) => s.by === "model");
   const skipAgree = modelSkips.filter((s) => scores.skips[`${s.set}:${s.nodeId}`]?.agree === true).length;
+  const skipsApproved = skipAgree === modelSkips.length;
+  const pass = allScored && generationComplete && skipsApproved && keepRate >= 2 / 3 && !leaks.length && !keptErrors.length;
+  const calls = run.modelCalls ?? run.batches.reduce((n, b) => n + b.attempts.length, 0);
+  const firstTry = run.batches.filter((b) => b.accepted && b.attempts.length === 1).length;
 
   const lines = [
     `# Bench summary: ${run.runId}`,
     "",
-    `Mode ${run.mode}, model ${run.model}, cap ${run.maxCardsPerNode} per node, kinds ${run.enabledKinds.join(", ")}.`,
-    `${cards.length} cards for ${new Set(cards.map((c) => `${c.set}:${c.nodeId}`)).size} nodes; ${run.skips.length} skipped (${modelSkips.length} by the model${modelSkips.length ? `, you agreed with ${skipAgree}` : ""}).`,
+    `Mode ${run.mode}, model ${run.model}, writer ${run.writerVersion ?? "0.1.0"}, cap ${run.maxCardsPerNode} per node, kinds ${run.enabledKinds.join(", ")}.`,
+    automated ? "Evaluation: automated Sol scores, not human acceptance. Human scores are separate and unchanged." : "Evaluation: human scores only. Automated scores are not substituted for unassessed cards.",
+    `${cards.length} cards for ${new Set(cards.map((c) => `${c.set}:${c.nodeId}`)).size} nodes; ${run.skips.length} skipped (${modelSkips.length} by the model${modelSkips.length ? `, evaluator agreed with ${skipAgree}` : ""}).`,
     `${run.batches.length} requests, ${calls} calls, ${firstTry} passed validation first time; ${cards.filter((c) => c.unvalidated).length} cards never passed.`,
     "",
-    `## Verdict: ${!allScored ? `not finished (${scored.length}/${cards.length} scored)` : pass ? "PASS" : "FAIL"}`,
+    `## Verdict: ${!generationComplete || !cards.length ? "FAIL (incomplete generation or no cards)" : !allScored ? `not finished (${scored.length}/${cards.length} scored)` : pass ? "PASS" : "FAIL"}`,
+    "",
+    `- Generation complete and validated: ${generationComplete ? "yes" : "no"}`,
+    `- Model skips approved by evaluator: ${skipAgree}/${modelSkips.length} ${skipsApproved ? "✓" : "✗"}`,
     "",
     `- Kept as is or with small edits: ${keptCards.length}/${scored.length} (${pct(keptCards.length, scored.length)}; needs 67%) ${keepRate >= 2 / 3 ? "✓" : "✗"}`,
     `- Answer leaks: ${leaks.length} (needs 0) ${leaks.length ? "✗" : "✓"}`,
@@ -75,9 +88,9 @@ for (const dir of dirs) {
     "",
     table(cards, scores, (c) => c.kind),
     "",
-    "## Length (words; targets: front 25, back 10)",
+    `## Length (words; current targets: front ${LENGTH_TARGETS.front}, back ${LENGTH_TARGETS.back})`,
     "",
-    "| | Front median | Front over 25 | Back median | Back over 10 |",
+    `| | Front median | Front over ${LENGTH_TARGETS.front} | Back median | Back over ${LENGTH_TARGETS.back} |`,
     "|---|---|---|---|---|",
     ...(
       [
@@ -87,7 +100,7 @@ for (const dir of dirs) {
       ] as Array<[string, BenchCard[]]>
     ).map(
       ([label, cs]) =>
-        `| ${label} | ${median(cs.map((c) => c.frontWords))} | ${cs.filter((c) => c.frontWords > 25).length}/${cs.length} | ${median(cs.map((c) => c.backWords))} | ${cs.filter((c) => c.backWords > 10).length}/${cs.length} |`,
+        `| ${label} | ${median(cs.map((c) => c.frontWords))} | ${cs.filter((c) => c.frontWords > LENGTH_TARGETS.front).length}/${cs.length} | ${median(cs.map((c) => c.backWords))} | ${cs.filter((c) => c.backWords > LENGTH_TARGETS.back).length}/${cs.length} |`,
     ),
   ];
   const flagged = cards.filter((c) => sc(c).leak || sc(c).error || sc(c).note);
@@ -100,6 +113,6 @@ for (const dir of dirs) {
     }
   }
   const text = `${lines.join("\n")}\n`;
-  writeFileSync(join(dir, "summary.md"), text);
+  writeFileSync(join(dir, summaryFile), text);
   console.log(text);
 }

@@ -66,6 +66,8 @@
   .skip .agree button { flex: 1; border: 1px solid var(--line); background: #fff; border-radius: 5px; padding: 5px; cursor: pointer; font-size: 12.5px; }
   .skip .agree button.on { background: var(--accent); color: #fff; border-color: var(--accent); }
   code { background: #eeeae1; padding: 0 4px; border-radius: 3px; font-size: 90%; }
+  pre { background: #eeeae1; padding: 10px; border-radius: 5px; overflow: auto; white-space: pre; }
+  pre code { padding: 0; }
   details { font-size: 13px; margin-top: 6px; color: #47433d; }
   details summary { cursor: pointer; color: var(--muted); }
   details .src { white-space: pre-wrap; margin-top: 6px; padding: 8px; background: #f3f0e8; border-radius: 5px; max-height: 260px; overflow: auto; }
@@ -83,7 +85,7 @@
     For each card: <b>keep</b> (send as is), <b>small edit</b> (a word or two), <b>big edit</b> (rewrite needed), <b>drop</b>.
     Tick <b>leak</b> if the front gives the answer away, <b>error</b> if anything on the card is wrong, <b>unclear</b> if the front could fairly have another answer.
     Keys: click a card, then <kbd>1</kbd>–<kbd>4</kbd> for the verdict (moves to the next card), <kbd>L</kbd> <kbd>E</kbd> <kbd>U</kbd> toggle flags, <kbd>J</kbd>/<kbd>K</kbd> move.
-    Word counts over the targets (front 25, back 10) show in amber. Scores save as you go.
+    Word counts over the targets (front 30, back 15) show in amber. Scores save as you go.
   </p>
   <div id="root">Loading…</div>
 </main>
@@ -102,10 +104,11 @@ function md(text) {
   const keep = [];
   const stash = (s) => { keep.push(s); return `\u0000${keep.length - 1}\u0000`; };
   let s = String(text)
+    .replace(/^ {0,3}(`{3,}|~{3,})[^\n]*\n([\s\S]*?)^ {0,3}\1[ \t]*$/gm, (_, _fence, code) => stash(`<pre><code>${esc(code)}</code></pre>`))
+    .replace(/`([^`\n]+)`/g, (_, c) => stash(`<code>${esc(c)}</code>`))
     .replace(/\$\$[\s\S]+?\$\$/g, (m) => stash(esc(m)))
     .replace(/\\\$/g, (m) => stash("\\$"))
-    .replace(/\$[^$\n]+?\$/g, (m) => stash(esc(m)))
-    .replace(/`([^`]+)`/g, (_, c) => stash(`<code>${esc(c)}</code>`));
+    .replace(/\$[^$\n]+?\$/g, (m) => stash(esc(m)));
   s = esc(s)
     .replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>")
     .replace(/\n/g, "<br>");
@@ -148,7 +151,7 @@ function cardEl(entry, card, sourceText) {
     <div>
       <span class="kind ${TRIAL.has(card.kind) ? "trial" : ""}">${esc(card.kind)}</span>
       ${card.unvalidated ? '<span class="warn">failed validation after retries</span>' : ""}
-      <span class="words">front ${words(card.frontWords, 25)} · back ${words(card.backWords, 10)} words</span>
+      <span class="words">front ${words(card.frontWords, 30)} · back ${words(card.backWords, 15)} words</span>
       <div class="front">${md(card.front)}</div>
       <div class="label">Back</div>
       <div class="back ${document.getElementById("hide").checked ? "hidden" : ""}">${md(card.back)}</div>
