@@ -182,8 +182,9 @@ function mount(ctx: PluginFrontendContext, container: HTMLElement, signal: Abort
       if (!alive()) return;
       const target = connection?.profile;
       if (!target || !state) throw new Error("Test the connection with an open profile first.");
-      if (await confirmAction(ctx, signal, "Pair Anki destination", `Pair with profile ${target} at ${state.settings.url}? Previous sent cards keep their original destination. Use a throwaway profile for testing.`)) {
-        if (alive()) await snapshotAction("pair", { confirmed: true });
+      const expectedDestination = { url: state.settings.url, profile: target };
+      if (await confirmAction(ctx, signal, "Pair Anki destination", `Pair with profile ${target} at ${expectedDestination.url}? Previous sent cards keep their original destination. Use a throwaway profile for testing.`)) {
+        if (alive()) await snapshotAction("pair", { confirmed: true, expectedDestination });
       }
     });
     pair.disabled = !connection?.profile;

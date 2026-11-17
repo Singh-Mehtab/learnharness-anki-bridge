@@ -25,6 +25,7 @@ async function fixture() {
   const addEntered = new Promise<void>(r => { enterAdd = r; });
   const addCompleted = new Promise<void>(r => { finishAdd = r; });
   const calls: { action: string; params: any }[] = [];
+  const errors = new Map<string, string>();
   const notes: Note[] = [];
   const server = createServer(async (req, res) => {
     try {
@@ -61,6 +62,7 @@ async function fixture() {
       else if (action === 'guiBrowse') result = [];
       else if (['updateModelStyling', 'updateModelTemplates'].includes(action)) result = null;
       else throw new Error('Unexpected API action: ' + action);
+      if (errors.has(action)) { result = null; error = errors.get(action)!; }
       res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ result, error }));
     } catch (error) { res.statusCode = 500; res.end(JSON.stringify({ result: null, error: String(error) })); }
   });
@@ -79,7 +81,7 @@ async function fixture() {
   const send = (ids: string[], deck = 'Scratch::New') => service.command('send', { ids, deck });
   const reopen = async () => { await service.close(); store = await StateStore.open(directory); service = new DeliveryService(store); await service.activate(); };
   const close = async () => { await service.close(); server.closeAllConnections(); await new Promise<void>((resolve, reject) => server.close(e => e ? reject(e) : resolve())); await rm(directory, { recursive: true, force: true }); };
-  return { directory, url, calls, notes, snap, draft, pair, approve, send, reopen, close, addEntered, addCompleted, get service() { return service; }, get store() { return store; },
+  return { directory, url, calls, notes, errors, snap, draft, pair, approve, send, reopen, close, addEntered, addCompleted, get service() { return service; }, get store() { return store; },
     setProfile: (v: string | null) => { profile = v; }, setFields: (v: string[]) => { fields = v; }, setCss: (v: string) => { css = v; },
     failFront: (v: string) => { failFront = v; }, dropAfterAdd: () => { dropAfterAdd = true; }, switchAfterAdd: () => { switchAfterAdd = true; }, gate: (v: Promise<void>) => { addGate = v; } };
 }
@@ -111,6 +113,17 @@ test('hand-written cards require explicit pairing and durable approval, then add
     await f.send([id]);
     assert.equal(f.notes.length, 1);
     assert(!f.calls.some(c => /delete|updateNote|suspend|due/i.test(c.action)));
+  } finally { await f.close(); }
+});
+
+test('source names and hidden node metadata are escaped as text, not interpreted as HTML', async () => {
+  const f = await fixture();
+  try {
+    await f.pair();
+    const state = await f.service.command('draft', { front: 'Prompt', back: 'Answer', nodeId: '<img src=x>', nodeName: '<script>alert(1)</script>', sessionName: 'Names $with dollars$ & symbols' }) as PublicSnapshot;
+    const id = state.cards[0].id; await f.approve([id]); await f.send([id]);
+    assert.equal(f.notes[0].fields.LH_Node, '&lt;img src=x&gt;');
+    assert.equal(f.notes[0].fields.Source, 'Names $with dollars$ &amp; symbols / &lt;script&gt;alert(1)&lt;/script&gt;');
   } finally { await f.close(); }
 });
 
@@ -216,6 +229,27 @@ test('editing invalidates approval and API key is not exposed in snapshots', asy
     await f.service.command('edit', { id, front: 'Changed', back: 'answer' });
     assert.equal(f.snap().cards[0].status, 'draft'); await assert.rejects(f.send([id]), /Approve/);
     const mode = (await stat(path.join(f.directory, 'state.json'))).mode & 0o777; assert.equal(mode, 0o600);
+  } finally { await f.close(); }
+});
+
+test('pairing rejects a profile or endpoint different from the confirmed dialog', async () => {
+  const f = await fixture();
+  try {
+    await assert.rejects(f.service.command('pair', { confirmed: true, expectedDestination: { url: f.url, profile: 'Other' } }), /changed while pairing/);
+    assert.equal(f.snap().destination, null);
+    await assert.rejects(f.service.command('pair', { confirmed: true, expectedDestination: { url: 'http://127.0.0.1:19999', profile: 'Throwaway' } }), /changed while pairing/);
+    assert.equal(f.snap().destination, null);
+    await f.service.command('pair', { confirmed: true, expectedDestination: { url: f.url, profile: 'Throwaway' } });
+    assert.equal(f.snap().destination?.profile, 'Throwaway');
+  } finally { await f.close(); }
+});
+
+test('backend errors do not echo the saved API key into the frontend', async () => {
+  const f = await fixture();
+  try {
+    await f.service.command('settings', { apiKey: 'scratch-key-for-redaction' });
+    f.errors.set('version', 'Rejected scratch-key-for-redaction');
+    await assert.rejects(f.service.command('connection'), error => error instanceof Error && error.message === 'Rejected [API key hidden]');
   } finally { await f.close(); }
 });
 

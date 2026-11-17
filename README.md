@@ -14,12 +14,14 @@ Anki owns review scheduling. The bridge never updates or deletes Anki notes or t
 
 Use a throwaway Anki profile. Do not test sends against your real collection.
 
-1. Install Anki and the [AnkiConnect add-on](https://ankiweb.net/shared/info/2055492159). Open the throwaway profile and leave Anki running. Current AnkiConnect builds require Anki 26.08 or later; older compatible add-on builds use the same legacy version-6 API.
+1. Install Anki and the [AnkiConnect add-on](https://ankiweb.net/shared/info/2055492159). Open the throwaway profile and leave Anki running. Current AnkiConnect builds require Anki 26.08 or later. The bridge uses the legacy version-6 API and also requires `getActiveProfile` for destination safety. Tested add-on builds are 26.10.11.0 and 26.11.15.0. Archived 23.10.29.0 and 2025 GitHub builds lack profile identity support and are refused.
 2. Run LearnHarness from a checkout with scratch `LH_DATA_DIR` and `LH_AUTH_FILE` paths. Do not point either at your normal LearnHarness data or credentials. No model calls are needed for this shell.
 3. Install the built plugin into that scratch app's plugins directory, shown under Settings → Community plugins. Refresh and enable Anki Bridge; discovery alone leaves it disabled.
-4. Open Anki Bridge from the sidebar. Set the AnkiConnect root URL and optional API key, save, then test the connection. The default is `http://127.0.0.1:8765`. Check your own port first; another service may use it. The developer's real Anki profile uses port 8766, so automated tests must not use it. Isolated compatibility tests use scratch ports 18765 and 18766. Prefer `127.0.0.1` over `localhost` to avoid IPv6 failures.
+4. Open Anki Bridge from the sidebar. Set the AnkiConnect root URL and optional API key, save, then test the connection. The default is `http://127.0.0.1:8765`. Check your own port first; another service may use it. Use a separate port for isolated compatibility tests, such as 18765 or 18766. Never point an automated test at your usual profile. Prefer `127.0.0.1` over `localhost` to avoid IPv6 failures.
 5. Confirm that the displayed profile is the throwaway one, then pair it. Changing the URL or Anki profile blocks sending until the correct destination is restored or you explicitly re-pair.
 6. Create a hand-written draft, save any edits, approve it and send it to a scratch deck. The deck input accepts an existing deck or a new name. Use Show in Anki to check the actual card rendering.
+
+Close affected Anki editors before repairing fields or replacing styling. AnkiConnect refuses these writes while an editor is open; the bridge reports that refusal without bypassing it.
 
 The API key is stored in plain text under the installed plugin's `data/` folder. Treat that folder as private. The frontend never reads or displays a saved key; a blank password input keeps it, and the clear checkbox removes it. Use loopback and a trusted local AnkiConnect service. A remote HTTP endpoint can expose card content and the key.
 
@@ -43,9 +45,18 @@ For a built copy, put the contents of `dist/` under `anki-bridge/dist/` in the p
 
 ## Verification status
 
-Automated UI tests use a mocked public plugin context and a synthetic DOM. Build and installer tests use temporary directories, hand-written fixture code and no Anki connection. They do not prove behavior inside the LearnHarness desktop app or against a real AnkiConnect build.
+The automated suite covers delivery persistence, profile/URL guards, connection failures, rendering, UI behavior, build/install safety and restart recovery. UI unit tests use a synthetic DOM. Build and installer tests use temporary directories.
 
-Before calling 0.2.0 verified, test with throwaway profiles on current and older AnkiConnect builds. Cover a closed profile, wrong service or key, pairing mismatch, note type creation and missing fields, new decks, duplicate rejection, partial failure, restart after an uncertain send, presence checks and Show in Anki. Also check enable/disable and late async cleanup in a scratch LearnHarness instance.
+Real Anki 26.08.1 integration passed against AnkiConnect 26.10.11.0 and 26.11.15.0 in separate throwaway bases. Both runs covered note type creation and field repair, new decks, duplicate rejection with the next card succeeding, stored math/code HTML, presence checks, styling replacement and Show in Anki. A real bridge process was killed after Anki accepted a note and before the state write; restart recovered one note by UUID on both builds.
+
+Run that opt-in test only against an isolated profile named `Anki Bridge Test`, with no Anki editors open:
+
+```sh
+npm run test:anki-live -- --url http://127.0.0.1:18766 \
+  --profile "Anki Bridge Test" --confirm-scratch-profile
+```
+
+The test leaves hand-written notes in the throwaway collection and removes its temporary bridge state. It refuses ports 8765 and 8766. It does not install, start or stop Anki.
 
 ## License
 

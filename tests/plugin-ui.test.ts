@@ -110,7 +110,7 @@ test("plugin UI pairing and destructive styling changes require host dialog conf
     assert.equal(f.calls.some((c) => c.name === "pair"), false);
     f.button("Pair destination").click(); await tick();
     f.dialog()!.querySelectorAll("button")[1]!.click(); await tick();
-    assert.deepEqual(f.calls.at(-1), { name: "pair", input: { confirmed: true } });
+    assert.deepEqual(f.calls.at(-1), { name: "pair", input: { confirmed: true, expectedDestination: { url: f.state.settings.url, profile: "Throwaway <test>" } } });
     f.button("Update note type styling").click(); await tick();
     assert.match(f.dialog()!.textContent!, /template edits will be lost/);
     f.dialog()!.querySelectorAll("button")[1]!.click(); await tick();

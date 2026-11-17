@@ -74,7 +74,8 @@ export class AnkiClient {
 
   constructor(options: { url: string; apiKey?: string; timeoutMs?: number; signal?: AbortSignal }) {
     this.url = normalizeUrl(options.url);
-    this.apiKey = options.apiKey;
+    // AnkiConnect treats an explicit empty key as an authentication attempt.
+    this.apiKey = options.apiKey === "" ? undefined : options.apiKey;
     this.timeoutMs = options.timeoutMs ?? 10_000;
     this.signal = options.signal;
     if (!Number.isFinite(this.timeoutMs) || this.timeoutMs <= 0 || this.timeoutMs > 2_147_483_647) {

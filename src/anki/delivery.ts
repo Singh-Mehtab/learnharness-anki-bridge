@@ -36,6 +36,7 @@ function data(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 const query = (id: string) => `note:"${MODEL_NAME}" LH_ID:${id}`;
+const htmlText = (text: string) => text.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
 const kinds: CardKind[] = ['recall', 'why', 'compose', 'discriminate'];
 const slug = (text: string) => text.normalize('NFKC').replace(/[^\p{L}\p{N}_-]+/gu, '-').replace(/^-+|-+$/g, '').slice(0, 80) || 'manual';
 
@@ -76,6 +77,7 @@ export class DeliveryService {
     const pending = Promise.resolve().then(operation);
     this.busy = pending;
     try { return await pending; }
+    catch (error) { throw new Error(this.message(error)); }
     finally { if (this.busy === pending) this.busy = undefined; }
   }
   private async save(mutator: (state: State) => void): Promise<void> {
@@ -145,6 +147,10 @@ export class DeliveryService {
         this.active();
         if (!connection.profile) throw new Error('Open a profile in Anki before pairing.');
         const destination = { url: this.store.snapshot().settings.url, profile: connection.profile };
+        if (value.expectedDestination !== undefined) {
+          const expected = data(value.expectedDestination);
+          if (typeof expected.url !== 'string' || typeof expected.profile !== 'string' || normalizeUrl(expected.url) !== destination.url || expected.profile !== destination.profile) throw new Error('The destination changed while pairing was being confirmed. Test the connection and confirm again.');
+        }
         const unresolved = this.store.snapshot().cards.filter(c => c.status === 'sending');
         if (unresolved.some(c => !sameDestination(c.destination, destination))) throw new Error('Resolve interrupted deliveries in their original Anki profile and URL before re-pairing.');
         await this.save(s => { s.destination = destination; });
@@ -200,11 +206,11 @@ export class DeliveryService {
           await this.destination(client);
           // Model fields may have been edited in Anki while this batch was running.
           await ensureNoteType(client);
-          await this.patchCard(card.id, { status: 'sending', deck, destination, lastError: undefined });
           const fields = {
             Front: renderMarkdown(card.front), Back: renderMarkdown(card.back), Extra: renderMarkdown(card.extra),
-            Source: renderMarkdown(`${card.sessionName} / ${card.nodeName}`), LH_ID: card.id, LH_Node: card.nodeId,
+            Source: htmlText(`${card.sessionName} / ${card.nodeName}`), LH_ID: card.id, LH_Node: htmlText(card.nodeId),
           };
+          await this.patchCard(card.id, { status: 'sending', deck, destination, lastError: undefined });
           let result: unknown;
           try {
             await this.destination(client);

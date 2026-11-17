@@ -52,6 +52,18 @@ test("connection sends v6 POST requests with body key for an open profile", asyn
   } finally { await http.close(); }
 });
 
+test("a cleared optional API key is omitted, not sent as an empty authentication attempt", async () => {
+  let request: Record<string, unknown> | undefined;
+  const http = await server((req, res) => {
+    let body = ""; req.on("data", chunk => { body += chunk; });
+    req.on("end", () => { request = JSON.parse(body); res.end(JSON.stringify({ result: 6, error: null })); });
+  });
+  try {
+    await new AnkiClient({ url: http.url, apiKey: "" }).call("version");
+    assert(request); assert.equal(Object.hasOwn(request, "key"), false);
+  } finally { await http.close(); }
+});
+
 test("connection returns null profile without requesting decks from a closed collection", async () => {
   const actions: string[] = [];
   const http = await server((req, res) => {

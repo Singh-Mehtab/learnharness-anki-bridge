@@ -8,6 +8,7 @@ import { AnkiClient } from '../src/anki/client.ts';
 import { MODEL_NAME } from '../src/anki/note-type.ts';
 import { StateStore } from '../src/anki/state.ts';
 import { DeliveryService } from '../src/anki/delivery.ts';
+import { spawn } from 'node:child_process';
 import type { PublicSnapshot } from '../src/anki/delivery.ts';
 
 const args = process.argv.slice(2);
@@ -61,18 +62,28 @@ try {
   await service.command('send', { ids: [fourth], deck });
   assert.equal(service.snapshot().cards[3].status, 'sent');
   evidence.push('real missing-field block and explicit add-only repair');
-  // Simulate a process losing its state write after Anki has accepted a note.
-  const state = store.snapshot();
-  const recoverable = state.cards[3];
-  delete recoverable.noteId; recoverable.status = 'sending';
-  await store.replace(state);
+  // Kill a real bridge process at the write boundary after real Anki accepted addNote.
+  const crashId = await draft(`Run ${run}: what survives a process crash?`, 'A durable delivery UUID.');
+  await service.command('approve', { ids: [crashId] });
   await service.close();
+  const child = spawn(process.execPath, ['--input-type=module', '-e', `
+    import { StateStore } from ${JSON.stringify(new URL('../src/anki/state.ts', import.meta.url).href)};
+    import { DeliveryService } from ${JSON.stringify(new URL('../src/anki/delivery.ts', import.meta.url).href)};
+    const store = await StateStore.open(${JSON.stringify(directory)});
+    const replace = store.replace.bind(store);
+    store.replace = async state => { if (state.cards.some(c => c.id === ${JSON.stringify(crashId)} && c.status === 'sent')) process.kill(process.pid,'SIGKILL'); return replace(state); };
+    await new DeliveryService(store).command('send', {ids:[${JSON.stringify(crashId)}],deck:${JSON.stringify(deck)}});
+    throw Error('Crash injection was not reached');
+  `], { stdio: ['ignore', 'ignore', 'pipe'] });
+  let childError = ''; child.stderr.on('data', chunk => { childError += chunk; });
+  const signal = await new Promise<NodeJS.Signals | null>((resolve, reject) => { child.on('error', reject); child.on('exit', (_code, signal) => resolve(signal)); });
+  assert.equal(signal, 'SIGKILL', childError);
   const reopened = await StateStore.open(directory);
   service = new DeliveryService(reopened, { timeoutMs: 15_000 });
   await service.activate();
-  assert.equal(service.snapshot().cards[3].status, 'sent');
-  assert.equal((await client.call<number[]>('findNotes', { query: `note:"${MODEL_NAME}" LH_ID:${fourth}` })).length, 1);
-  evidence.push('restart reconciliation finds accepted note by UUID without re-adding');
+  assert.equal(service.snapshot().cards.find(c => c.id === crashId)!.status, 'sent');
+  assert.equal((await client.call<number[]>('findNotes', { query: `note:"${MODEL_NAME}" LH_ID:${crashId}` })).length, 1);
+  evidence.push('real process SIGKILL after real addNote, restart recovers one note by UUID');
   // URL mismatch is detected before searching a different endpoint.
   await service.command('settings', { url: 'http://127.0.0.1:19998' });
   await assert.rejects(service.command('reconcile'), /Pair/);
@@ -80,12 +91,13 @@ try {
   evidence.push('destination URL mismatch blocks reconciliation');
   await service.command('presence');
   assert.equal(service.snapshot().cards[0].presence, 'present');
+  // Current AnkiConnect blocks note-type writes while an affected editor is open.
+  await service.command('updateStyling', { confirmed: true });
+  evidence.push('explicit owned styling/template update');
   await service.command('show', { ids: [fourth] });
   const browsed = await client.call<number[]>('guiBrowse', { query: `LH_ID:${fourth}` });
   assert(browsed.length > 0, 'Show in Anki must select a real scratch note');
   evidence.push('notesInfo presence and real guiBrowse Show in Anki');
-  await service.command('updateStyling', { confirmed: true });
-  evidence.push('explicit owned styling/template update');
   console.log(JSON.stringify({ profile: expectedProfile, endpoint: url.origin, label: option('--label'), deck, checks: evidence, cards: service.snapshot().cards.map(c => ({ id: c.id, status: c.status, noteId: c.noteId })) }, null, 2));
 } finally {
   await service.close();

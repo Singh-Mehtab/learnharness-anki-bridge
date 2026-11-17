@@ -11,7 +11,7 @@ The frontend calls these names through `ctx.call`. Inputs and outputs are JSON-c
 | `snapshot` | none | Public state snapshot |
 | `settings` | optional `url`, `apiKey` | Snapshot; omit key to keep it, use empty string to clear it |
 | `connection` | none | `{profile, decks}`; profile can be null |
-| `pair` | `{confirmed: true}` | Snapshot with durable URL/profile pairing |
+| `pair` | `{confirmed: true, expectedDestination?: {url, profile}}` | Snapshot with durable URL/profile pairing; UI supplies the confirmed target to reject profile changes during the dialog |
 | `draft` | `{front, back, extra?, kind?, nodeId?, nodeName?, sessionId?, sessionName?, statementHash?}` | Snapshot with a new draft and durable UUID |
 | `edit` | `{id, front, back, extra?}` | Snapshot; resets approval |
 | `approve` | `{ids}` | Snapshot; explicit user approval is required |
