@@ -1,0 +1,34 @@
+{
+  "name": "programming",
+  "subject": "Programming: Python names, mutability and defaults (hand-written fixture)",
+  "origin": "hand-written",
+  "graph": {
+    "propositions": [
+      { "id": "p_binding", "name": "Assignment binds names to objects", "statement": "In Python, assignment binds a name to an object and never copies it. After `b = a`, both names refer to the same object, so a change made in place through one name is visible through the other.", "aliases": [], "provenance": [{ "chatId": "chat_py", "messageId": "msg_p1" }] },
+      { "id": "p_mutability", "name": "Mutable versus immutable types", "statement": "Lists, dicts and sets are mutable: they can change in place. Ints, floats, strings and tuples are immutable: operations that seem to change them build a new object instead.", "aliases": [], "provenance": [{ "chatId": "chat_py", "messageId": "msg_p1" }] },
+      { "id": "p_iadd", "name": "Augmented assignment depends on mutability", "statement": "`x += 1` on an int builds a new int and rebinds `x`, leaving other names unchanged. `xs += [4]` on a list extends that list in place (via `__iadd__`), so every name bound to the list sees the change.", "aliases": [], "provenance": [{ "chatId": "chat_py", "messageId": "msg_p1" }] },
+      { "id": "p_defaults_once", "name": "Default values are evaluated once", "statement": "A function's default argument values are evaluated once, when the `def` statement runs, and the same objects are reused on every call that omits those arguments.", "aliases": [], "provenance": [{ "chatId": "chat_py", "messageId": "msg_p2" }] },
+      { "id": "p_mutable_default", "name": "Mutable default argument pitfall", "statement": "With `def add(x, items=[])` that appends `x` to `items`, calls that omit `items` all share and grow one list: `add(1)` returns `[1]`, then `add(2)` returns `[1, 2]`.", "aliases": [], "provenance": [{ "chatId": "chat_py", "messageId": "msg_p2" }] },
+      { "id": "p_none_sentinel", "name": "None sentinel for fresh defaults", "statement": "To get a fresh mutable default on each call, default to `None` and create the object in the body: `if items is None: items = []`. Use `is None` rather than a truthiness test, so a caller's empty list is still used.", "aliases": [], "provenance": [{ "chatId": "chat_py", "messageId": "msg_p2" }] },
+      { "id": "p_late_binding", "name": "Closures bind late", "statement": "A closure looks up its free variables when it is called, not when it is defined. So `fs = [lambda: i for i in range(3)]` gives functions that all return 2, the value `i` has when they run.", "aliases": ["late binding closures"], "provenance": [{ "chatId": "chat_py", "messageId": "msg_p3" }] },
+      { "id": "p_capture_default", "name": "Capture a loop value with a default argument", "statement": "Writing `lambda i=i: i` fixes the late-binding problem: the default is evaluated when each lambda is defined, so each function keeps the value `i` had at that moment.", "aliases": [], "provenance": [{ "chatId": "chat_py", "messageId": "msg_p3" }] }
+    ],
+    "chains": [
+      { "id": "pc_iadd", "premises": ["p_binding", "p_mutability"], "conclusion": "p_iadd" },
+      { "id": "pc_pitfall", "premises": ["p_defaults_once", "p_mutability", "p_binding"], "conclusion": "p_mutable_default" },
+      { "id": "pc_sentinel", "premises": ["p_mutable_default", "p_defaults_once"], "conclusion": "p_none_sentinel" },
+      { "id": "pc_capture", "premises": ["p_late_binding", "p_defaults_once"], "conclusion": "p_capture_default" }
+    ]
+  },
+  "chats": {
+    "chat_py": {
+      "id": "chat_py",
+      "messages": [
+        { "id": "msg_p1", "role": "assistant", "content": [{ "type": "toolCall", "name": "send_to_user", "arguments": { "message": "## Names are labels, not boxes\n\nYour surprise came from treating `b = a` as a copy. In Python, assignment never copies. It sticks a second label on the same object:\n\n```python\na = [1, 2, 3]\nb = a\nb.append(4)\nprint(a)  # [1, 2, 3, 4]\n```\n\nWhether this bites depends on **mutability**. Lists, dicts and sets can change in place. Ints, strings and tuples can't; anything that looks like a change makes a new object.\n\nThat's why `+=` behaves differently by type. With `n = 5; m = n; n += 1`, `m` is still 5: a new int was made and `n` was rebound to it. With `xs = [1]; ys = xs; xs += [2]`, `ys` is `[1, 2]`, because a list's `+=` extends the list in place." } }] },
+        { "id": "msg_p2", "role": "assistant", "content": [{ "type": "toolCall", "name": "send_to_user", "arguments": { "message": "## Why the list kept growing\n\nHere's your function:\n\n```python\ndef add(x, items=[]):\n    items.append(x)\n    return items\n```\n\n`add(1)` gave `[1]`, and `add(2)` gave `[1, 2]`. The default `[]` is evaluated **once**, when Python runs the `def` line, not on each call. Every call that leaves out `items` gets that same list, and `append` changes it in place.\n\nThe standard fix uses `None` as a sentinel:\n\n```python\ndef add(x, items=None):\n    if items is None:\n        items = []\n    items.append(x)\n    return items\n```\n\nUse `is None`, not `if not items`. Otherwise a caller who passes their own empty list gets it silently replaced." } }] },
+        { "id": "msg_p3", "role": "assistant", "content": [{ "type": "toolCall", "name": "send_to_user", "arguments": { "message": "## Same rule, other direction\n\nYou expected `[f() for f in fs]` to give `[0, 1, 2]` and got `[2, 2, 2]`. The lambdas don't store `i`; they store a reference to the variable, and look it up when called. By then the loop has finished and `i` is 2. This is **late binding**.\n\nThe once-only evaluation of defaults, which caused the list bug, is the cure here:\n\n```python\nfs = [lambda i=i: i for i in range(3)]\n```\n\nEach lambda's default is evaluated when that lambda is created, so each one keeps the value of `i` at that moment." } }] }
+      ]
+    }
+  },
+  "targets": ["p_binding", "p_iadd", "p_defaults_once", "p_mutable_default", "p_none_sentinel", "p_capture_default"]
+}

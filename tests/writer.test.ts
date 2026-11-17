@@ -80,6 +80,14 @@ test("givesAwayAnswer and containsName", () => {
   assert.ok(givesAwayAnswer("Which came first, 1980 or 1982? (1980)", "1980"));
   assert.ok(!givesAwayAnswer("What does the integral of $e^{-\\alpha x}$ from 0 to infinity equal?", "$\\frac{1}{\\alpha}$"));
   assert.ok(!givesAwayAnswer("anything", "$i$"));
+  // Maths and code compare as whole expressions, not command names.
+  assert.ok(!givesAwayAnswer("Which single number is $\\langle f|f\\rangle$ for $f(x)$, versus $|f(x)|^2$?", "$\\int|f(x)|^2dx$"));
+  assert.ok(givesAwayAnswer("Since $\\int|f(x)|^2 dx$ is a total, which quantity is it?", "$\\int |f(x)|^2dx$"));
+  assert.ok(!givesAwayAnswer("Fix `callbacks = [lambda: print(name) for name in names]` so each prints its own name.", "`lambda name=name: print(name)`"));
+  assert.ok(!givesAwayAnswer("Is $(1,0)^T$ orthogonal to $(0,1)^T$? What is their bracket?", "$0$"));
+  assert.ok(givesAwayAnswer("The bracket is $0$. Are the states orthogonal? Give the bracket value: zero or not", "Zero, $0$"));
+  assert.ok(givesAwayAnswer("Costs \\$5 each", "\\$5"));
+  assert.ok(!givesAwayAnswer("What does one cost?", "\\$5"));
   assert.ok(containsName("Use the **Premise A** here", "Premise A"));
   assert.ok(!containsName("Premises are listed", "Premise A"));
 });
@@ -156,6 +164,16 @@ test("why and discriminate need graph support; images and fences rejected; skipR
   assert.match(problems, /images/);
   assert.match(findProblems({ targets: [{ nodeId: "b", cards: [] }] }, i).join(), /skipReason/);
   assert.match(findProblems({ targets: [{ nodeId: "b", cards: [{ kind: "recall", front: "x ```y```", back: "z" }] }] }, i).join(), /code fences/);
+});
+
+test("pack sets allowedKinds from chains and neighbours, and skips nodes no kind fits", () => {
+  const { batches, skipped } = pack(graph, ["c", "b"], () => ({}), { maxCardsPerNode: 2, enabledKinds: ["why", "recall"] });
+  const kinds = Object.fromEntries(batches.flatMap((b) => b.input.targets).map((t) => [t.nodeId, t.allowedKinds]));
+  assert.deepEqual(kinds, { c: ["why", "recall"], b: ["recall"] });
+  assert.equal(skipped.length, 0);
+  const onlyWhy = pack(graph, ["b"], () => ({}), { maxCardsPerNode: 2, enabledKinds: ["why"] });
+  assert.equal(onlyWhy.batches.length, 0);
+  assert.match(onlyWhy.skipped[0].reason, /None of the enabled card kinds/);
 });
 
 test("pack respects the chunk budget, rides big nodes alone and skips oversized ones", () => {
