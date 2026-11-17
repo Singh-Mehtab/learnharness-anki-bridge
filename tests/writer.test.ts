@@ -144,7 +144,7 @@ test("validator catches target, kind, leak, name, format and duplicate problems"
   assert.match(problems, /Missing targets: b/);
 });
 
-test("why and discriminate need graph support; images and fences rejected; skipReason required", () => {
+test("why and discriminate need graph support; images rejected; skipReason required", () => {
   const i = input({ targets: [buildTarget(graph, "b")] });
   i.targets[0].neighbours = [];
   const result = {
@@ -163,7 +163,24 @@ test("why and discriminate need graph support; images and fences rejected; skipR
   assert.match(problems, /needs a listed neighbour/);
   assert.match(problems, /images/);
   assert.match(findProblems({ targets: [{ nodeId: "b", cards: [] }] }, i).join(), /skipReason/);
-  assert.match(findProblems({ targets: [{ nodeId: "b", cards: [{ kind: "recall", front: "x ```y```", back: "z" }] }] }, i).join(), /code fences/);
+});
+
+test("fenced code is allowed while images and Mermaid remain forbidden", () => {
+  const i = input({ targets: [buildTarget(graph, "b")] });
+  const result = (front: string) => ({ targets: [{ nodeId: "b", cards: [{ kind: "recall", front, back: "2" }] }] });
+  assert.deepEqual(findProblems(result("What prints?\n```python\nx = [1]\nx.append(2)\nprint(len(x))\n```"), i), []);
+  assert.deepEqual(findProblems(result("What prints?\n~~~python\nx = [1]\nx.append(2)\nprint(len(x))\n~~~"), i), []);
+  assert.match(findProblems(result("```mermaid\ngraph TD; A-->B\n```"), i).join(), /Mermaid/);
+  assert.match(findProblems(result('<img src="x">'), i).join(), /images/);
+});
+
+test("leak checking treats a fenced block as code, not prose or maths", () => {
+  const front = 'What prints?\n```python\nx = "$answer$"\nprint(x)\n```';
+  assert.ok(givesAwayAnswer(front, '```python\nx = "$answer$"\nprint(x)\n```'));
+  assert.ok(!givesAwayAnswer(front, "answer"));
+  assert.ok(!givesAwayAnswer("~~~python\nprint(10)\n~~~", "0"));
+  assert.ok(!givesAwayAnswer('```python\nprint("a b")\n```', '`print("ab")`'));
+  assert.match(writerInstructions(), /multiline fenced code blocks are allowed/);
 });
 
 test("pack sets allowedKinds from chains and neighbours, and skips nodes no kind fits", () => {

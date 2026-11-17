@@ -1,65 +1,110 @@
 # Anki Bridge
 
-Unofficial, one-way AnkiConnect plugin for LearnHarness 0.6.1, plugin API v1. Not affiliated with Anki or LearnHarness.
+An unofficial LearnHarness community plugin in development. The goal is to draft cards from your knowledge graph, let you edit and approve them, and send them to Anki through AnkiConnect. Delivery is one-way; Anki keeps responsibility for reviews and scheduling. This project is not affiliated with Anki or LearnHarness.
 
-## What 0.2.0 does
+**Current merged version: 0.1.1.** The shared card writer and quality bench are merged. The Anki connection and delivery UI are implemented in [PR #2](https://github.com/Singh-Mehtab/learnharness-anki-bridge/pull/2), which is still open. There is no public release or end-to-end graph-to-Anki plugin on `main` yet.
 
-This is a testing shell for the Anki connection and delivery path. Write a front, back and optional Extra by hand, save edits, approve the card, pick a deck, then send. It also exposes destination pairing, uncertain-send reconciliation, presence checks and Show in Anki.
+![Target workflow: graph selection, card writing, approval, then delivery to Anki. Each step shows its implementation status.](docs/images/workflow.svg)
 
-There is no graph picker, AI drafting or session flow yet. The separate 0.1.0 writer bench lives in [bench/](bench/README.md). The core Flashcards plugin is independent and can stay enabled.
+The diagram shows the intended workflow. Graph selection and in-app draft review are planned; the current delivery UI accepts hand-written cards.
 
-Anki owns review scheduling. The bridge never updates or deletes Anki notes or their review history. Deleted notes are not offered for resend. Explicit note type repair and styling replacement are separate maintenance actions; styling replacement warns before overwriting Anki-side template edits.
+## What's done
 
-## Safe test setup
+| Version | Status | Work completed |
+| --- | --- | --- |
+| 0.1.0 | Merged | Shared writer input builder, graph context, batching, prompts, result schema and validation. Sonnet bench with real QM nodes and labelled synthetic fixtures. Local browser scoring, JSON results and per-run reports. |
+| 0.1.1 | Merged in [PR #1](https://github.com/Singh-Mehtab/learnharness-anki-bridge/pull/1) | Multiline code support, stronger accuracy and answer-leak guidance, soft word targets, a hard generation-call budget, and separate automated/human scoring. 22 tests, typecheck and browser checks passed. Sol approved the code. |
+| 0.2.0 | Implemented and tested; [PR #2](https://github.com/Singh-Mehtab/learnharness-anki-bridge/pull/2) open | Hand-written-card UI, connection/profile pairing, owned Basic note type, approval, durable delivery state, interrupted-send recovery, presence checks and Show in Anki. 77 automated tests, build and typecheck pass. Real AnkiConnect and scratch LearnHarness integration checks passed before the renderer-only Sol review fixes. Sol approved those fixes; user acceptance and packaged Electron behavior remain pending. |
 
-Use a throwaway Anki profile. Do not test sends against your real collection.
+### Card writer
 
-1. Install Anki and the [AnkiConnect add-on](https://ankiweb.net/shared/info/2055492159). Open the throwaway profile and leave Anki running. Current AnkiConnect builds require Anki 26.08 or later. The bridge uses the legacy version-6 API and also requires `getActiveProfile` for destination safety. Tested add-on builds are 26.10.11.0 and 26.11.15.0. Archived 23.10.29.0 and 2025 GitHub builds lack profile identity support and are refused.
-2. Run LearnHarness from a checkout with scratch `LH_DATA_DIR` and `LH_AUTH_FILE` paths. Do not point either at your normal LearnHarness data or credentials. No model calls are needed for this shell.
-3. Install the built plugin into that scratch app's plugins directory, shown under Settings → Community plugins. Refresh and enable Anki Bridge; discovery alone leaves it disabled.
-4. Open Anki Bridge from the sidebar. Set the AnkiConnect root URL and optional API key, save, then test the connection. The default is `http://127.0.0.1:8765`. Check your own port first; another service may use it. Use a separate port for isolated compatibility tests, such as 18765 or 18766. Never point an automated test at your usual profile. Prefer `127.0.0.1` over `localhost` to avoid IPv6 failures.
-5. Confirm that the displayed profile is the throwaway one, then pair it. Changing the URL or Anki profile blocks sending until the correct destination is restored or you explicitly re-pair. Do not switch profiles during a send. Legacy AnkiConnect cannot make a profile check and a write one atomic operation.
-6. Create a hand-written draft, save any edits, approve it and send it to a scratch deck. The deck input accepts an existing deck or a new name. Use Show in Anki to check the actual card rendering.
+- Core kinds: recall, why, compose and discriminate. Why/compose need supporting chains; discriminate needs a relevant neighbour.
+- Up to two cards per node, not a quota. Prefer one useful card over a near-duplicate pair.
+- Soft targets of 30 front words and 15 back words. Correctness and necessary assumptions take priority.
+- Maths, inline code and multiline fenced code. Images and Mermaid are unsupported in cards.
+- Deterministic checks for structure, allowed kinds, duplicates and surface answer leaks. These checks cannot guarantee factual accuracy or detect every semantic leak.
 
-Close affected Anki editors before repairing fields or replacing styling. AnkiConnect refuses these writes while an editor is open; the bridge reports that refusal without bypassing it.
+Mini-problem and spot-the-mistake kinds remain experimental and off by default.
 
-The API key is stored in plain text under the installed plugin's `data/` folder. Treat that folder as private. The frontend never reads or displays a saved key; a blank password input keeps it, and the clear checkbox removes it. Use loopback and a trusted local AnkiConnect service. A remote HTTP endpoint can expose card content and the key.
+### Quality evidence and limits
 
-## Build and install
+The original core bench failed the zero-answer-leak criterion. The 0.1.1 follow-up produced 32 cards from previously unused QM target nodes in the same lecture. Sol provisionally kept 24 of 32 as-is or with small edits, with no flagged leaks or factual errors among the kept cards. Five rejected cards had factual-error flags.
 
-Requires Node 23.6 or later and npm. LearnHarness 0.6.1 supplies Node 24 for the backend.
+That is a partial result, **not a full benchmark pass**. Claude's quota stopped both synthetic-subject batches. The fixtures are hand-written and cleaner than real extraction output; the QM sample is not from an independent lecture. Human spot-checks and model scores remain separate.
+
+Additional card-quality validation is deferred until before public release. No automatic rerun is scheduled. See the [bench guide](bench/README.md) and [0.1.1 closeout](bench/0.1.1-closeout.md) for methods and limitations. Private graph data, generated cards and per-card scores are not committed.
+
+## Development preview
+
+![Anki Bridge in a scratch LearnHarness host, showing a hand-written test card sent to a throwaway Anki profile and found in Anki.](docs/images/0.2.0-scratch-host.png)
+
+Actual 0.2.0 integration-test screenshot, not a mockup. It uses synthetic cards, an empty scratch LearnHarness environment and a throwaway Anki profile. This UI belongs to the pending PR, not the merged 0.1.1 package. It demonstrates manual delivery, not graph-based generation.
+
+The 0.2.0 tests used LearnHarness 0.6.1, Anki 26.08.1 and AnkiConnect builds 26.10.11.0 and 26.11.15.0. They covered note type creation and repair, duplicate rejection, profile mismatches, Show in Anki, and recovery after killing the bridge immediately after a real `addNote`. Scratch browser tests covered enabling the plugin, manual approval, sending and data preservation after disable/re-enable. The live checks predate the renderer-only review fixes. See [verification details](docs/0.2.0-verification.md).
+
+## Development setup
+
+For this 0.2.0 branch, use Node.js 23.6 or newer and npm:
 
 ```sh
 npm ci
-npm run typecheck
 npm test
+npm run typecheck
 npm run build
-npm run install:local -- "/absolute/path/to/scratch/plugins"
 ```
 
-The build bundles `src/main.ts` as ESM and `src/backend.ts` as CommonJS. Only `dist/` is generated, containing the manifest, bundles, stylesheet, license and notices. The backend must be present in the source checkout. No host dependency tree is needed; `sdk/` contains the official generated type-only SDK from LearnHarness 0.6.1.
-
-The local installer copies `dist/` to `<plugins-directory>/anki-bridge/dist/`. It preserves sibling `data/`. Restart LearnHarness after changing already-loaded plugin code; Refresh is discovery, not hot reload.
-
-For a built copy, put the contents of `dist/` under `anki-bridge/dist/` in the plugins directory. Never distribute `data/`. Builds and the installer refuse a symlinked `dist/` or misplaced `dist/data/` before removing old code. Updates replace only `dist/`, not its sibling `data/`.
-
-## Verification status
-
-The automated suite covers delivery persistence, profile/URL guards, connection failures, rendering, UI behavior, build/install safety and restart recovery. UI unit tests use a synthetic DOM. Build and installer tests use temporary directories.
-
-Real Anki 26.08.1 integration passed against AnkiConnect 26.10.11.0 and 26.11.15.0 in separate throwaway bases. Both runs covered note type creation and field repair, new decks, duplicate rejection with the next card succeeding, stored math/code HTML, presence checks, styling replacement and Show in Anki. A real bridge process was killed after Anki accepted a note and before the state write; restart recovered one note by UUID on both builds.
-
-Run that opt-in test only against an isolated profile named `Anki Bridge Test`, with no Anki editors open:
+Inspect batch packing without making model calls:
 
 ```sh
-npm run test:anki-live -- --url http://127.0.0.1:18766 \
-  --profile "Anki Bridge Test" --confirm-scratch-profile
+npm run bench:run -- --dry-run
 ```
 
-The test leaves hand-written notes in the throwaway collection and removes its temporary bridge state. It refuses ports 8765 and 8766. It does not install, start or stop Anki.
+Dry runs still need the selected fixture sets. The default includes a private `qm` set; [prepare your own fixtures or select synthetic sets](bench/README.md). The following works with the committed fixtures only:
 
-Scratch LearnHarness 0.6.1 browser verification also passed discovery, enable/disable, persistence and an end-to-end approved send to the throwaway Anki profile. See [verification details and screenshot](docs/0.2.0-verification.md). Packaged Electron-specific behavior and user acceptance remain unverified.
+```sh
+npm run bench:run -- --dry-run --sets humanities,programming
+```
 
-## License
+Actual generation uses the Claude Code CLI and requires authentication. It consumes your Claude subscription quota. The tests and dry runs make no model calls.
 
-AGPL-3.0-only. See [LICENSE](LICENSE) and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+### Test the 0.2.0 delivery shell
+
+Do not send test cards to a personal Anki collection. Use a throwaway profile and a LearnHarness checkout with scratch `LH_DATA_DIR` and `LH_AUTH_FILE` paths. This hand-written-card shell makes no model calls.
+
+1. Install [AnkiConnect](https://git.sr.ht/~foosoft/anki-connect) and open the throwaway Anki profile. The tested AnkiConnect builds require Anki 26.08 or later. The bridge also requires `getActiveProfile`; older builds without it are refused.
+2. Install the built plugin in the scratch app's plugins directory, shown under Settings → Community plugins:
+
+   ```sh
+   npm run install:local -- "/absolute/path/to/scratch/plugins"
+   ```
+
+   The installer replaces `anki-bridge/dist/` and preserves its sibling `data/`. Discovery leaves the plugin disabled. Enable it in settings; restart LearnHarness after changing already-loaded plugin code.
+3. Open Anki Bridge from the sidebar. Save the AnkiConnect URL and optional API key, then test the connection. The default is `http://127.0.0.1:8765`; check your local port first because another service may use it. Use a separate port for isolated tests.
+4. Confirm and pair the displayed throwaway profile. Create a hand-written card, save edits, approve it and send it to a scratch deck. Check presence or use Show in Anki. URL or profile mismatches block sends and reconciliation; do not switch profiles during a send, since AnkiConnect cannot make a profile check and write atomic.
+
+The bridge never updates or deletes existing Anki notes or their review history. Field repair and styling replacement are separate actions; styling replacement can overwrite template edits after confirmation. Close affected Anki editors before either operation.
+
+The optional API key is stored in plain text in the plugin's `data/` directory. Keep it private, use loopback and a trusted local AnkiConnect service, and never distribute `data/`. A remote HTTP endpoint can expose both the key and card content. The saved key is not displayed; a blank key input keeps it, and the clear checkbox removes it.
+
+The opt-in [live integration test](docs/0.2.0-verification.md) requires an isolated profile named `Anki Bridge Test`, leaves notes in that collection, and refuses ports 8765 and 8766. It does not start or stop Anki. The core Flashcards plugin is independent and can remain enabled. A public installation guide will accompany a release.
+
+## Next versions
+
+| Version | Planned scope |
+| --- | --- |
+| 0.3.0 | Graph-node selection, model drafting and editable card approval inside LearnHarness. |
+| 0.4.0 | Session workflow and session-based card generation. |
+| 0.5.0 | Card coverage and no-cards filtering. |
+| 0.6.0 | First public release, after validation and explicit publication approval. |
+
+These are plans, not shipped features or promised dates. The design is one-way and approval-first: the plugin must not update or delete existing Anki notes or change scheduling. Anki edits win.
+
+## Keeping this page current
+
+Every version change, including patches, must update this README in the same PR. Keep the current version, completed work, test evidence, limitations and screenshots accurate. Mark unmerged or planned work explicitly. Repository instructions enforce this rule for coding agents.
+
+## License and acknowledgements
+
+[AGPL-3.0-only](LICENSE).
+
+The writer adapts card-design guidance from [LearnHarness core Flashcards](https://github.com/amosblomqvist/learnharness/tree/v0.6.1/plugins/flashcards) and [Twig](https://github.com/amoghu1s1/twig), under AGPL-3.0. Anki Bridge uses a different approval-first, one-way delivery design. [AnkiConnect](https://git.sr.ht/~foosoft/anki-connect) provides the local Anki API.
