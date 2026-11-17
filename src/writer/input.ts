@@ -22,6 +22,7 @@ import type {
   WriterInput,
   WriterTarget,
 } from "./types.ts";
+import { allowedKindsFor } from "./kinds.ts";
 
 export const SOURCE_CHAR_CAP = 1500;
 export const MAX_FEEDS = 3;
@@ -274,7 +275,12 @@ export function pack(
         continue;
       }
       target = trimmed;
-      tokens = estimateTokens(JSON.stringify(target));
+    }
+    target = { ...target, allowedKinds: allowedKindsFor(target, enabledKinds) };
+    tokens = estimateTokens(JSON.stringify(target));
+    if (!target.allowedKinds!.length) {
+      skipped.push({ nodeId, reason: `None of the enabled card kinds (${enabledKinds.join(", ")}) fit this node's reasoning chains.` });
+      continue;
     }
     if (current.length && (currentTokens + tokens > budget || current.length >= maxNodesPerTask)) flush();
     current.push(target);

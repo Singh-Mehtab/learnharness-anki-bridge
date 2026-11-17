@@ -3,32 +3,49 @@
 //
 // givesAwayAnswer is adapted (AGPL-3.0) from Twig,
 // src/agent/subagents/card-writer.ts, https://github.com/amoghu1s1/twig
+// Twig compares words and numbers only. Here maths and code are compared as
+// whole expressions, because LaTeX command names (\langle) and code
+// identifiers repeat on both sides without giving anything away.
 
-import type { CardKind, DraftCard, WriterInput, WriterTarget } from "./types.ts";
+import type { DraftCard, WriterInput, WriterTarget } from "./types.ts";
+import { kindMisfit } from "./kinds.ts";
 
-/** LaTeX commands that are layout, not content. Removed before comparing
- *  terms so "\frac" on both sides doesn't count as a leak. */
-const LAYOUT_COMMANDS =
-  /\\(?:d?frac|tfrac|sqrt|left|right|big|Big|bigg|Bigg|mathrm|mathbf|mathit|mathcal|text|textbf|textit|operatorname|begin|end|quad|qquad|cdot|cdots|ldots|dots|displaystyle|,|;|!)/g;
+const SEGMENT = /\$\$[\s\S]+?\$\$|\$[^$\n]+?\$|`[^`\n]+`/g;
 
-/** Distinctive terms: numbers and words of 4+ letters, lower-cased. */
+/** Maths and inline-code segments, normalised for comparison. */
+export function answerSegments(text: string): string[] {
+  return (text.replace(/\\\$/g, "").match(SEGMENT) ?? [])
+    .map((s) => s.replace(/^\$\$|\$\$$|^\$|\$$|^`|`$/g, ""))
+    .map((s) => s.replace(/\\(?:left|right|[,;!]|displaystyle)/g, "").replace(/\s+/g, ""))
+    .filter((s) => s.length > 0);
+}
+
+/** Distinctive prose terms outside maths and code: numbers and words of
+ *  4+ letters, lower-cased. */
 export function answerTerms(text: string): string[] {
   return (
     text
+      .replace(/\\\$/g, "")
+      .replace(SEGMENT, " ")
       .toLowerCase()
-      .replace(LAYOUT_COMMANDS, " ")
       .replace(/\*\*/g, "")
       .match(/\d+|[a-zÀ-ɏ]{4,}/g) ?? []
   );
 }
 
-/** The front gives the answer away: every distinctive term of the back
- *  already appears on the front. */
+/** The front gives the answer away: every distinctive prose term of the
+ *  back is on the front, and every maths or code segment of the back appears
+ *  whole on the front. Very short segments ($0$, $i$) must match a whole
+ *  front segment, since they occur inside unrelated expressions. A back with
+ *  neither terms nor segments never counts as a leak. */
 export function givesAwayAnswer(front: string, back: string): boolean {
   const terms = answerTerms(back);
-  if (!terms.length) return false;
-  const shown = new Set(answerTerms(front));
-  return terms.every((t) => shown.has(t));
+  const segments = answerSegments(back);
+  if (!terms.length && !segments.length) return false;
+  const shownTerms = new Set(answerTerms(front));
+  const frontSegments = answerSegments(front);
+  const shown = (s: string) => (s.length < 3 ? frontSegments.includes(s) : frontSegments.some((f) => f.includes(s)));
+  return terms.every((t) => shownTerms.has(t)) && segments.every(shown);
 }
 
 const normalise = (text: string) =>
@@ -50,24 +67,14 @@ const FORBIDDEN: Array<[RegExp, string]> = [
   [/\bmermaid\b/i, "Mermaid"],
 ];
 
-function kindFits(kind: CardKind, target: WriterTarget): string | null {
-  if ((kind === "why" || kind === "compose") && !target.concludedBy.length) {
-    return `a ${kind} card needs a chain that concludes in the target, and this target has none`;
-  }
-  if (kind === "discriminate" && !target.neighbours.length) {
-    return "a discriminate card needs a listed neighbour, and this target has none";
-  }
-  return null;
-}
-
 export function cardProblems(card: DraftCard, target: WriterTarget, input: WriterInput): string[] {
   const problems: string[] = [];
   const front = typeof card.front === "string" ? card.front : "";
   const quote = `"${front.slice(0, 60)}${front.length > 60 ? "…" : ""}"`;
   if (!input.enabledKinds.includes(card.kind)) problems.push(`${quote}: kind "${card.kind}" is not enabled`);
   else {
-    const fit = kindFits(card.kind, target);
-    if (fit) problems.push(`${quote}: ${fit}`);
+    const misfit = kindMisfit(card.kind, target);
+    if (misfit) problems.push(`${quote}: ${misfit}; allowed kinds for this target: ${(target.allowedKinds ?? input.enabledKinds).join(", ")}`);
   }
   const blankFront = !front.trim();
   const blankBack = typeof card.back !== "string" || !card.back.trim();

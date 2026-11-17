@@ -1,0 +1,245 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Anki Bridge · card bench scoring</title>
+<script>
+  window.MathJax = {
+    tex: { inlineMath: [["$", "$"], ["\\(", "\\)"]], displayMath: [["$$", "$$"], ["\\[", "\\]"]], processEscapes: true },
+    svg: { fontCache: "global" },
+    startup: { typeset: false },
+  };
+</script>
+<script src="/mathjax.js" defer></script>
+<style>
+  :root {
+    --bg: #f6f4ef; --panel: #fffdf8; --ink: #22201c; --muted: #77716a; --line: #e2ddd3;
+    --keep: #2f7d4f; --small: #6b8f2a; --big: #b07a1c; --drop: #b2412f; --accent: #3b5b8c;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.5 -apple-system, "Helvetica Neue", sans-serif; }
+  header { position: sticky; top: 0; z-index: 5; background: var(--ink); color: #f6f4ef; padding: 10px 24px; display: flex; gap: 20px; align-items: center; flex-wrap: wrap; }
+  header h1 { font-size: 15px; margin: 0; font-weight: 600; }
+  header .progress { font-variant-numeric: tabular-nums; }
+  header label { font-size: 13px; display: flex; gap: 6px; align-items: center; cursor: pointer; }
+  header .saved { margin-left: auto; font-size: 12px; opacity: .7; }
+  main { max-width: 980px; margin: 0 auto; padding: 18px 24px 120px; }
+  .help { color: var(--muted); font-size: 13px; margin: 4px 0 18px; }
+  h2 { font-size: 13px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin: 34px 0 10px; border-bottom: 1px solid var(--line); padding-bottom: 4px; }
+  .node { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; margin: 14px 0; overflow: hidden; }
+  .node-head { padding: 12px 16px; border-bottom: 1px solid var(--line); background: #faf8f2; }
+  .node-head b { font-size: 15px; }
+  .node-head .stmt { font-size: 13.5px; color: #47433d; margin-top: 4px; }
+  .card { display: grid; grid-template-columns: 1fr 220px; gap: 14px; padding: 12px 16px; border-top: 1px solid var(--line); outline: none; }
+  .card:first-of-type { border-top: 0; }
+  .card.focus { box-shadow: inset 4px 0 0 var(--accent); }
+  .card[data-verdict="keep"] { background: #eef6f0; }
+  .card[data-verdict="small-edit"] { background: #f2f6e8; }
+  .card[data-verdict="big-edit"] { background: #fbf4e6; }
+  .card[data-verdict="drop"] { background: #f9ece9; }
+  .kind { display: inline-block; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; padding: 1px 7px; border-radius: 10px; background: #e7e2d8; color: #4d4740; margin-right: 6px; }
+  .kind.trial { background: #e3e9f4; color: var(--accent); }
+  .warn { font-size: 11px; color: var(--drop); font-weight: 600; margin-left: 6px; }
+  .label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; margin-top: 8px; }
+  .front { font-size: 15.5px; margin-top: 4px; }
+  .back { font-weight: 600; }
+  .back.hidden { filter: blur(6px); cursor: pointer; user-select: none; }
+  .extra { color: #5a554e; font-size: 13.5px; }
+  .words { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .words .long { color: var(--big); font-weight: 600; }
+  .controls { display: flex; flex-direction: column; gap: 6px; }
+  .verdicts { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; }
+  .verdicts button { border: 1px solid var(--line); background: #fff; border-radius: 5px; padding: 5px 4px; font-size: 12.5px; cursor: pointer; color: var(--ink); }
+  .verdicts button kbd { font-size: 10px; color: var(--muted); margin-right: 3px; }
+  .verdicts button.on[data-v="keep"] { background: var(--keep); color: #fff; border-color: var(--keep); }
+  .verdicts button.on[data-v="small-edit"] { background: var(--small); color: #fff; border-color: var(--small); }
+  .verdicts button.on[data-v="big-edit"] { background: var(--big); color: #fff; border-color: var(--big); }
+  .verdicts button.on[data-v="drop"] { background: var(--drop); color: #fff; border-color: var(--drop); }
+  .verdicts button.on kbd { color: inherit; }
+  .flags { display: flex; gap: 10px; font-size: 12.5px; flex-wrap: wrap; }
+  .flags label { display: flex; gap: 4px; align-items: center; cursor: pointer; }
+  input[type=text] { width: 100%; border: 1px solid var(--line); border-radius: 5px; padding: 4px 6px; font: inherit; font-size: 12.5px; background: #fff; }
+  .skip { padding: 12px 16px; border-top: 1px solid var(--line); display: grid; grid-template-columns: 1fr 220px; gap: 14px; font-size: 14px; }
+  .skip .reason { color: #5a554e; font-style: italic; }
+  .skip .agree { display: flex; gap: 4px; }
+  .skip .agree button { flex: 1; border: 1px solid var(--line); background: #fff; border-radius: 5px; padding: 5px; cursor: pointer; font-size: 12.5px; }
+  .skip .agree button.on { background: var(--accent); color: #fff; border-color: var(--accent); }
+  code { background: #eeeae1; padding: 0 4px; border-radius: 3px; font-size: 90%; }
+  details { font-size: 13px; margin-top: 6px; color: #47433d; }
+  details summary { cursor: pointer; color: var(--muted); }
+  details .src { white-space: pre-wrap; margin-top: 6px; padding: 8px; background: #f3f0e8; border-radius: 5px; max-height: 260px; overflow: auto; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Card bench scoring</h1>
+  <span class="progress" id="progress"></span>
+  <label><input type="checkbox" id="hide"> Hide answers until clicked</label>
+  <span class="saved" id="saved"></span>
+</header>
+<main>
+  <p class="help">
+    For each card: <b>keep</b> (send as is), <b>small edit</b> (a word or two), <b>big edit</b> (rewrite needed), <b>drop</b>.
+    Tick <b>leak</b> if the front gives the answer away, <b>error</b> if anything on the card is wrong, <b>unclear</b> if the front could fairly have another answer.
+    Keys: click a card, then <kbd>1</kbd>–<kbd>4</kbd> for the verdict (moves to the next card), <kbd>L</kbd> <kbd>E</kbd> <kbd>U</kbd> toggle flags, <kbd>J</kbd>/<kbd>K</kbd> move.
+    Word counts over the targets (front 25, back 10) show in amber. Scores save as you go.
+  </p>
+  <div id="root">Loading…</div>
+</main>
+<script>
+const VERDICTS = [["keep", "Keep"], ["small-edit", "Small edit"], ["big-edit", "Big edit"], ["drop", "Drop"]];
+const TRIAL = new Set(["mini-problem", "spot-the-mistake"]);
+let data = [];
+let focusEl = null;
+const saveTimers = {};
+
+function esc(s) { return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
+
+// Minimal Markdown: protect maths and code, then bold, italics, line breaks.
+function md(text) {
+  const keep = [];
+  const stash = (s) => { keep.push(s); return `\u0000${keep.length - 1}\u0000`; };
+  let s = String(text)
+    .replace(/\$\$[\s\S]+?\$\$/g, (m) => stash(esc(m)))
+    .replace(/\\\$/g, (m) => stash("\\$"))
+    .replace(/\$[^$\n]+?\$/g, (m) => stash(esc(m)))
+    .replace(/`([^`]+)`/g, (_, c) => stash(`<code>${esc(c)}</code>`));
+  s = esc(s)
+    .replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>")
+    .replace(/(^|[^*])\*([^*\n]+)\*/g, "$1<i>$2</i>")
+    .replace(/\n/g, "<br>");
+  return s.replace(/\u0000(\d+)\u0000/g, (_, i) => keep[Number(i)]);
+}
+
+function words(n, target) { return n > target ? `<span class="long">${n}</span>` : `${n}`; }
+
+function save(entry) {
+  clearTimeout(saveTimers[entry.id]);
+  saveTimers[entry.id] = setTimeout(async () => {
+    const r = await fetch(`/scores?run=${encodeURIComponent(entry.id)}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(entry.scores) });
+    document.getElementById("saved").textContent = r.ok ? `Saved ${new Date().toLocaleTimeString()}` : "Save failed";
+  }, 250);
+  progress();
+}
+
+function progress() {
+  let total = 0, done = 0;
+  for (const e of data) {
+    for (const c of e.run.cards) { total++; if (e.scores.cards[c.id]?.verdict) done++; }
+    for (const s of e.run.skips.filter((s) => s.by === "model")) { total++; if (e.scores.skips[`${s.set}:${s.nodeId}`]?.agree !== undefined) done++; }
+  }
+  document.getElementById("progress").textContent = `${done} / ${total} scored`;
+}
+
+function setFocus(el) {
+  if (focusEl) focusEl.classList.remove("focus");
+  focusEl = el;
+  if (el) { el.classList.add("focus"); el.focus({ preventScroll: true }); el.scrollIntoView({ block: "nearest", behavior: "smooth" }); }
+}
+
+function cardEl(entry, card, sourceText) {
+  const sc = entry.scores.cards[card.id] ?? (entry.scores.cards[card.id] = {});
+  const el = document.createElement("div");
+  el.className = "card";
+  el.tabIndex = 0;
+  if (sc.verdict) el.dataset.verdict = sc.verdict;
+  el.innerHTML = `
+    <div>
+      <span class="kind ${TRIAL.has(card.kind) ? "trial" : ""}">${esc(card.kind)}</span>
+      ${card.unvalidated ? '<span class="warn">failed validation after retries</span>' : ""}
+      <span class="words">front ${words(card.frontWords, 25)} · back ${words(card.backWords, 10)} words</span>
+      <div class="front">${md(card.front)}</div>
+      <div class="label">Back</div>
+      <div class="back ${document.getElementById("hide").checked ? "hidden" : ""}">${md(card.back)}</div>
+      ${card.extra ? `<div class="label">Extra</div><div class="extra">${md(card.extra)}</div>` : ""}
+    </div>
+    <div class="controls">
+      <div class="verdicts">${VERDICTS.map(([v, l], i) => `<button data-v="${v}" class="${sc.verdict === v ? "on" : ""}"><kbd>${i + 1}</kbd>${l}</button>`).join("")}</div>
+      <div class="flags">
+        <label><input type="checkbox" data-f="leak" ${sc.leak ? "checked" : ""}>leak</label>
+        <label><input type="checkbox" data-f="error" ${sc.error ? "checked" : ""}>error</label>
+        <label><input type="checkbox" data-f="unclear" ${sc.unclear ? "checked" : ""}>unclear</label>
+      </div>
+      <input type="text" placeholder="note (optional)" value="${esc(sc.note ?? "")}">
+    </div>`;
+  const apply = () => {
+    el.querySelectorAll(".verdicts button").forEach((b) => b.classList.toggle("on", b.dataset.v === sc.verdict));
+    el.querySelectorAll("[data-f]").forEach((b) => (b.checked = !!sc[b.dataset.f]));
+    if (sc.verdict) el.dataset.verdict = sc.verdict; else delete el.dataset.verdict;
+  };
+  el._set = (v) => { sc.verdict = sc.verdict === v ? undefined : v; apply(); save(entry); };
+  el._flag = (f) => { sc[f] = !sc[f]; apply(); save(entry); };
+  el.querySelectorAll(".verdicts button").forEach((b) => b.addEventListener("click", (ev) => { ev.stopPropagation(); setFocus(el); el._set(b.dataset.v); }));
+  el.querySelectorAll("[data-f]").forEach((b) => b.addEventListener("change", () => { sc[b.dataset.f] = b.checked; save(entry); }));
+  el.querySelector("input[type=text]").addEventListener("input", (ev) => { sc.note = ev.target.value; save(entry); });
+  el.querySelector(".back").addEventListener("click", (ev) => ev.currentTarget.classList.remove("hidden"));
+  el.addEventListener("click", () => setFocus(el));
+  return el;
+}
+
+function skipEl(entry, skip) {
+  const key = `${skip.set}:${skip.nodeId}`;
+  const sc = entry.scores.skips[key] ?? (entry.scores.skips[key] = {});
+  const el = document.createElement("div");
+  el.className = "skip";
+  el.innerHTML = `
+    <div><span class="kind">${skip.by === "model" ? "model skipped" : "not sent"}</span> <span class="reason">${esc(skip.reason)}</span></div>
+    ${skip.by === "model" ? `<div class="agree"><button data-a="1" class="${sc.agree === true ? "on" : ""}">Skip is right</button><button data-a="0" class="${sc.agree === false ? "on" : ""}">Should have cards</button></div>` : "<div></div>"}`;
+  el.querySelectorAll("button").forEach((b) => b.addEventListener("click", () => {
+    const v = b.dataset.a === "1";
+    sc.agree = sc.agree === v ? undefined : v;
+    el.querySelectorAll("button").forEach((x) => x.classList.toggle("on", (x.dataset.a === "1") === sc.agree && sc.agree !== undefined));
+    save(entry);
+  }));
+  return el;
+}
+
+function render() {
+  const root = document.getElementById("root");
+  root.innerHTML = "";
+  for (const entry of data) {
+    const { run } = entry;
+    const bySet = new Map();
+    for (const c of run.cards) { if (!bySet.has(c.set)) bySet.set(c.set, new Map()); const m = bySet.get(c.set); if (!m.has(c.nodeId)) m.set(c.nodeId, { name: c.nodeName, statement: c.statement, subject: c.subject, cards: [], skips: [] }); m.get(c.nodeId).cards.push(c); }
+    for (const s of run.skips) { if (!bySet.has(s.set)) bySet.set(s.set, new Map()); const m = bySet.get(s.set); if (!m.has(s.nodeId)) m.set(s.nodeId, { name: s.nodeName, statement: s.statement, cards: [], skips: [] }); m.get(s.nodeId).skips.push(s); }
+    for (const [set, nodes] of bySet) {
+      const h = document.createElement("h2");
+      const first = [...nodes.values()].find((n) => n.subject);
+      h.textContent = `${run.mode === "trial" ? "Trial kinds" : "Core kinds"} · ${first?.subject ?? set}`;
+      root.appendChild(h);
+      for (const [, node] of nodes) {
+        const box = document.createElement("div");
+        box.className = "node";
+        box.innerHTML = `<div class="node-head"><b>${esc(node.name)}</b><div class="stmt">${md(node.statement)}</div></div>`;
+        for (const c of node.cards) box.appendChild(cardEl(entry, c));
+        for (const s of node.skips) box.appendChild(skipEl(entry, s));
+        root.appendChild(box);
+      }
+    }
+  }
+  progress();
+  const typeset = () => window.MathJax?.typesetPromise ? MathJax.typesetPromise([root]) : setTimeout(typeset, 100);
+  typeset();
+}
+
+document.addEventListener("keydown", (ev) => {
+  if (ev.target.tagName === "INPUT" && ev.target.type === "text") return;
+  const cards = [...document.querySelectorAll(".card")];
+  const i = cards.indexOf(focusEl);
+  if (["1", "2", "3", "4"].includes(ev.key) && focusEl) {
+    focusEl._set(VERDICTS[Number(ev.key) - 1][0]);
+    if (cards[i + 1]) setFocus(cards[i + 1]);
+  } else if (ev.key === "j") setFocus(cards[Math.min(cards.length - 1, i + 1)]);
+  else if (ev.key === "k") setFocus(cards[Math.max(0, i - 1)]);
+  else if (focusEl && ev.key === "l") focusEl._flag("leak");
+  else if (focusEl && ev.key === "e") focusEl._flag("error");
+  else if (focusEl && ev.key === "u") focusEl._flag("unclear");
+  else return;
+  ev.preventDefault();
+});
+document.getElementById("hide").addEventListener("change", (ev) => document.querySelectorAll(".back").forEach((b) => b.classList.toggle("hidden", ev.target.checked)));
+
+fetch("/data").then((r) => r.json()).then((d) => { data = d; render(); });
+</script>
+</body>
+</html>

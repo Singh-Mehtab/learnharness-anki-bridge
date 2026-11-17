@@ -74,7 +74,7 @@ export function writerInstructions(options: InstructionOptions = {}): string {
   return [
     role,
     cardRules,
-    `## Kinds\n\nWrite only kinds that the input lists as enabled, and only where they fit the target. Tag each card with its kind.\n\n${kinds.map((k) => kindText[k]).join("\n")}`,
+    `## Kinds\n\nEach target lists its allowedKinds: the enabled kinds its chains and neighbours support. Write only those kinds for it, and only where they make a good card. Tag each card with its kind.\n\n${kinds.map((k) => kindText[k]).join("\n")}`,
     lengthRules,
     countRules,
     accuracyRules,

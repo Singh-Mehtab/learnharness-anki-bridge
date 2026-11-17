@@ -3,6 +3,7 @@
 // both import it; only the model call differs.
 
 export * from "./types.ts";
+export * from "./kinds.ts";
 export * from "./input.ts";
 export * from "./prompt.ts";
 export * from "./schema.ts";

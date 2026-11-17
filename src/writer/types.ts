@@ -72,6 +72,8 @@ export interface WriterTarget {
   flagNote?: string;
   /** Newest first, at most 6. */
   existingCards: ExistingCard[];
+  /** Enabled kinds this target's chains and neighbours support. Set by pack. */
+  allowedKinds?: CardKind[];
 }
 
 export interface WriterInput {
