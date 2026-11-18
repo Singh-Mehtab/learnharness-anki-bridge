@@ -170,6 +170,9 @@ test("fenced code is allowed while images and Mermaid remain forbidden", () => {
   const result = (front: string) => ({ targets: [{ nodeId: "b", cards: [{ kind: "recall", front, back: "2" }] }] });
   assert.deepEqual(findProblems(result("What prints?\n```python\nx = [1]\nx.append(2)\nprint(len(x))\n```"), i), []);
   assert.deepEqual(findProblems(result("What prints?\n~~~python\nx = [1]\nx.append(2)\nprint(len(x))\n~~~"), i), []);
+  assert.match(findProblems(result(String.raw`What is the magnitude of \(a+b?`), i).join(), /Unpaired or empty TeX delimiters/);
+  assert.deepEqual(findProblems(result(String.raw`What is the magnitude of \(a+b\)?`), i), []);
+  assert.deepEqual(findProblems(result('What prints?\n```tex\n\\(unclosed\n```'), i), []);
   assert.match(findProblems(result("```mermaid\ngraph TD; A-->B\n```"), i).join(), /Mermaid/);
   assert.match(findProblems(result('<img src="x">'), i).join(), /images/);
 });

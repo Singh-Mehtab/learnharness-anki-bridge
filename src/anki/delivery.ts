@@ -46,7 +46,6 @@ function data(value: unknown): Record<string, unknown> {
 const query = (id: string) => `"LH_ID:${id}"`;
 const htmlText = (text: string) => text.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
 const kinds: CardKind[] = ['recall', 'why', 'compose', 'discriminate'];
-const slug = (text: string) => text.normalize('NFKC').replace(/[^\p{L}\p{N}_-]+/gu, '-').replace(/^-+|-+$/g, '').slice(0, 80) || 'manual';
 
 /** No Anki update/delete/scheduling operations. All delivery identities are durable before I/O. */
 export class DeliveryService {
@@ -247,7 +246,7 @@ export class DeliveryService {
           try {
             await this.destination(client);
             result = await client.call('addNote', { note: { deckName: deck, modelName: MODEL_NAME, fields,
-              tags: ['learnharness', `learnharness::kind::${card.kind}`, `learnharness::session::${slug(card.sessionName)}`],
+              tags: ['learnharness', `learnharness::kind::${card.kind}`],
               options: { allowDuplicate: false, duplicateScope: 'deck', duplicateScopeOptions: { deckName: deck, checkChildren: false, checkAllModels: false } } } });
           } catch (error) {
             // API rejections are definite, but still look up the UUID before failing.

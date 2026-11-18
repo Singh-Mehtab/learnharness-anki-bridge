@@ -42,7 +42,7 @@ function math(text: string, index: number): { html: string; end: number } | unde
   return { html: `${display ? "\\[" : "\\("}${escapeHtml(content)}${display ? "\\]" : "\\)"}`, end: end + close.length };
 }
 
-function inline(source: string): string {
+function inline(source: string, checkMath: boolean): string {
   const tokens: string[] = [];
   const protect = (html: string) => `\0${tokens.push(html) - 1}\0`;
   const text = source.replace(/\0/g, "\uFFFD");
@@ -70,6 +70,10 @@ function inline(source: string): string {
   for (let index = 0; index < codeProtected.length;) {
     const tex = math(codeProtected, index);
     if (tex) { protectedText += protect(tex.html); index = tex.end; continue; }
+    // A lone dollar can be currency or prose, so only require explicit delimiters to pair.
+    if (checkMath && /^(?:\\[()[\]]|\$\$)/u.test(codeProtected.slice(index))) {
+      throw new Error("Unpaired or empty TeX delimiters. Use \\(…\\) for inline math and \\[…\\] or $$…$$ for display math.");
+    }
     if (codeProtected[index] === "\\" && /[\\`*_{}\[\]()#+\-.!$>]/.test(codeProtected[index + 1] ?? "")) {
       protectedText += protect(escapeHtml(codeProtected[index + 1]!)); index += 2; continue;
     }
@@ -120,14 +124,14 @@ function inline(source: string): string {
 }
 
 /** Safe Markdown subset: raw HTML is always text; no images or executable media. */
-export function renderMarkdown(text: string): string {
+export function renderMarkdown(text: string, { checkMath = false } = {}): string {
   const lines = text.replace(/\r\n?/g, "\n").split("\n");
   const blocks: string[] = [];
   let paragraph: string[] = [];
   let list: { tag: "ul" | "ol"; items: string[] } | undefined;
   const flush = () => {
-    if (paragraph.length) { blocks.push(`<p>${inline(paragraph.join("\n"))}</p>`); paragraph = []; }
-    if (list) { blocks.push(`<${list.tag}>${list.items.map((item) => `<li>${inline(item)}</li>`).join("")}</${list.tag}>`); list = undefined; }
+    if (paragraph.length) { blocks.push(`<p>${inline(paragraph.join("\n"), checkMath)}</p>`); paragraph = []; }
+    if (list) { blocks.push(`<${list.tag}>${list.items.map((item) => `<li>${inline(item, checkMath)}</li>`).join("")}</${list.tag}>`); list = undefined; }
   };
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]!;
@@ -150,14 +154,14 @@ export function renderMarkdown(text: string): string {
       let end = i;
       while (body.indexOf(close, body.indexOf(open) + open.length) === -1 && end + 1 < lines.length) body += `\n${lines[++end]}`;
       if (body.indexOf(close, body.indexOf(open) + open.length) !== -1) {
-        blocks.push(`<p>${inline(body)}</p>`);
+        blocks.push(`<p>${inline(body, checkMath)}</p>`);
         i = end;
         continue;
       }
     }
     if (!line.trim()) { flush(); continue; }
     const heading = /^ {0,3}(#{1,6})\s+(.+)$/.exec(line);
-    if (heading) { flush(); const level = heading[1]!.length; blocks.push(`<h${level}>${inline(heading[2]!)}</h${level}>`); continue; }
+    if (heading) { flush(); const level = heading[1]!.length; blocks.push(`<h${level}>${inline(heading[2]!, checkMath)}</h${level}>`); continue; }
     if (/^ {0,3}(?:\*\s*){3,}$|^ {0,3}(?:-\s*){3,}$|^ {0,3}(?:_\s*){3,}$/.test(line)) { flush(); blocks.push("<hr>"); continue; }
     const item = /^ {0,3}([-+*]|\d+[.)])\s+(.+)$/.exec(line);
     if (item) {

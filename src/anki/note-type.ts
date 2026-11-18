@@ -2,9 +2,14 @@ import { AnkiClient, AnkiError } from "./client.ts";
 
 export const MODEL_NAME = "LearnHarness Basic";
 export const FIELDS = ["Front", "Back", "Extra", "Source", "LH_ID", "LH_Node"] as const;
-export const MARKER = "/* learnharness-anki v1 */";
+export const MARKER = "/* learnharness-anki owned */";
+export const STYLE_REVISION = "/* learnharness-anki style v1 */";
+const LEGACY_MARKER = "/* learnharness-anki v1 */";
 
+// Keep the old marker as an alias so rolling back to 0.6.0 can still send.
 const CSS = `${MARKER}
+${STYLE_REVISION}
+${LEGACY_MARKER}
 .card { font-family: sans-serif; font-size: 20px; text-align: left; }
 .lh-extra { margin-top: 1em; }
 .lh-source { margin-top: 1em; font-size: 0.75em; opacity: 0.7; }
@@ -26,7 +31,7 @@ function fail(message: string): never {
 async function inspect(client: AnkiClient): Promise<string[]> {
   const styling = await client.call<{ css: string }>("modelStyling", { modelName: MODEL_NAME });
   const fields = await client.call<string[]>("modelFieldNames", { modelName: MODEL_NAME });
-  if (!styling.css.includes(MARKER)) {
+  if (!styling.css.includes(MARKER) && !styling.css.includes(LEGACY_MARKER)) {
     fail(`The note type "${MODEL_NAME}" is not owned by Anki Bridge (CSS marker missing). Rename it in Anki before continuing.`);
   }
   return fields;

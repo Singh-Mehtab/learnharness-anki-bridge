@@ -62,7 +62,7 @@ Before submitting, check every claim in front, back AND extra:
 const formatRules = `## Format
 
 - Fronts, backs and extras are Markdown. Use **bold** for the one decisive word or phrase if it helps.
-- Maths in LaTeX: $...$ inline, or $$ on their own lines for display maths.
+- Maths in LaTeX: \\(...\\) inline, or $$ on their own lines for display maths. Close each opening delimiter.
 - A literal dollar sign is written \\$; literal tokens go in inline code.
 - Inline code and multiline fenced code blocks are allowed. For a code-reading question, use a fenced block with a language label and preserve indentation. Keep the code short.
 - No Mermaid, images, raw HTML or lists longer than three items.

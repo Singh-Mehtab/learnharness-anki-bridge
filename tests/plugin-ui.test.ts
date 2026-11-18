@@ -64,13 +64,19 @@ async function setup(handler?: (name: string, input: unknown) => unknown | Promi
   window.document.body.append(container);
   const cleanup = await view.mount(container as unknown as HTMLElement, controller.signal);
   await tick();
+  const openHistory = () => {
+    const section = container.querySelector('details[data-keep="sent-history"]');
+    assert.ok(section);
+    section.setAttribute("open", "");
+    section.dispatchEvent(new window.Event("toggle"));
+  };
   const button = (label: string, parent = container) => {
     const found = Array.from(parent.querySelectorAll("button")).find((node) => node.textContent === label);
     assert.ok(found, `button ${label}`);
     return found;
   };
   return {
-    window, controller, activation, calls, state, container, button, settings, ctx,
+    window, controller, activation, calls, state, container, button, settings, ctx, openHistory,
     dialog: () => dialog,
     dialogDisposals: () => dialogDisposals,
     openSidebar: () => {
@@ -131,6 +137,7 @@ test("a background review refresh is retried when a card action finishes as its 
   try {
     f.button('Refresh generation').click(); await tick();
     assert.equal(reads, 2);
+    f.openHistory();
     f.button('Show in Anki').click();
     const older = structuredClone(state);
     state.cards.push({ id: 'new', nodeId: 'target:id', kind: 'recall', status: 'draft', front: 'New draft', back: 'Answer', extra: '' });
@@ -159,6 +166,7 @@ test("a deferred graph refresh does not overwrite the saved dismissal acknowledg
     return structuredClone(state);
   });
   try {
+    f.openHistory();
     f.button('Show in Anki').click();
     f.button("Don't card this").click(); await tick();
     assert.equal(failedReads, 1);
@@ -353,6 +361,7 @@ test("a failed action keeps typing, and read-only cards show saved text", async 
     editor().value = "Unsaved local edit"; editor().dispatchEvent(new f.window.Event("input"));
     state.cards[0]!.status = "sent"; state.cards[0]!.destination = paired();
     f.resync(); await tick(); await tick();
+    f.openHistory();
     assert.equal(editor().readOnly, true);
     assert.equal(editor().value, "Saved", "a card sent elsewhere shows the text that was sent");
   } finally { await f.dispose(); }
@@ -424,7 +433,10 @@ test("plugin UI never offers resend for sent, deleted or uncertain cards and exp
       { id: "uncertain", status: "sending", front: "F2", back: "B2", extra: "", kind: "why" },
     );
     f.button("Refresh cards").click(); await tick();
-    // Only the card sent to the current pairing offers Show; older history stays read-only.
+    assert.match(f.container.textContent!, /Sent history \(2\)/);
+    assert.equal(f.container.querySelectorAll("article").length, 1, "only unresolved cards mount before opening history");
+    f.openHistory();
+    // Only the current pairing offers Show. Older history stays read-only.
     assert.equal(f.container.querySelectorAll("article button").length, 1);
     assert.match(f.container.textContent!, /Anki presence: deleted/);
     assert.match(f.container.textContent!, /Sent destination: Previous/);

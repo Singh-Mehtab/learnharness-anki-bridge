@@ -1,5 +1,6 @@
 import type { PluginFrontendContext } from "../sdk/index.d.ts";
 import { mountDrafting } from "./drafting-ui.ts";
+import { renderMarkdown } from "./anki/render.ts";
 import { isWaitingCard } from "./coverage/flow.ts";
 import { mountSessionFlow, registerSessionActions, SessionRequests } from "./session-ui.ts";
 
@@ -390,7 +391,7 @@ function mount(ctx: PluginFrontendContext, container: HTMLElement, signal: Abort
     if (sent.length) bulk.append(button("Show sent cards in Anki", async () => { await ctx.call("show", { ids: sent.map(card => card.id) }); }));
     controls.append(bulk);
     if (!state.cards.some(card => card.status !== "dropped")) controls.append(element("p", "No cards to review yet. Select graph nodes above, or write a card by hand."));
-    for (const card of state.cards.filter(card => card.status !== "dropped")) {
+    const renderCard = (card: Card, parent: HTMLElement) => {
       const row = element("article");
       if (card.nodeId && isWaitingCard(card)) {
         row.dataset.waitingNode = card.nodeId;
@@ -422,8 +423,34 @@ function mount(ctx: PluginFrontendContext, container: HTMLElement, signal: Abort
       editor.append(field("Front", cardFront), field("Back", cardBack), field("Extra", cardExtra));
       const preview = element("div");
       preview.className = "anki-bridge-preview";
-      preview.append(element("h5", "Preview"));
+      preview.append(element("h5", "LearnHarness preview"));
       const length = element("p");
+      const deliveryPreview = element("details");
+      deliveryPreview.append(element("summary", "Preview Anki field formatting"), element("p", "Shows the HTML Anki receives for Front, Back and Extra. Anki applies its own styling and renders the TeX shown here."));
+      const frame = element("iframe");
+      frame.title = "Anki field formatting";
+      frame.setAttribute("sandbox", "");
+      frame.style.width = "100%";
+      const formatError = element("p");
+      formatError.setAttribute("role", "status");
+      deliveryPreview.append(formatError, frame);
+      const showDelivery = () => {
+        if (!deliveryPreview.open) return;
+        try {
+          const fields = [cardFront, cardBack, cardExtra].map((input, index) =>
+            `<h2>${["Front", "Back", "Extra"][index]}</h2>${renderMarkdown(input.value.trim())}`);
+          // No script, resources or interaction in this isolated view. The field HTML
+          // comes from the same renderer as delivery, not from the host Markdown UI.
+          frame.setAttribute("srcdoc", `<!doctype html><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'"><main inert>${fields.join("")}</main>`);
+          formatError.textContent = "";
+          frame.hidden = false;
+        } catch (error) {
+          frame.removeAttribute("srcdoc");
+          frame.hidden = true;
+          formatError.textContent = error instanceof Error ? error.message : String(error);
+        }
+      };
+      deliveryPreview.ontoggle = showDelivery;
       const parts = [cardFront, cardBack, cardExtra].map(input => {
         const target = element("div"); preview.append(target);
         const handle = ctx.ui.mountMarkdown(target, { text: input.value }, { signal });
@@ -432,6 +459,7 @@ function mount(ctx: PluginFrontendContext, container: HTMLElement, signal: Abort
       });
       const updatePreview = (typed = true) => {
         parts.forEach(({ input, handle }) => handle.update({ text: input.value }));
+        showDelivery();
         const words = (text: string) => text.trim().split(/\s+/u).filter(Boolean).length;
         const f = words(cardFront.value), b = words(cardBack.value);
         length.textContent = f > 30 || b > 15 ? `Long card: ${f} front words, ${b} back words. Targets are about 30 and 15. Keep enough context for correctness.` : "";
@@ -439,7 +467,7 @@ function mount(ctx: PluginFrontendContext, container: HTMLElement, signal: Abort
       };
       parts.forEach(({ input }) => { input.oninput = () => updatePreview(); });
       updatePreview(false);
-      editor.append(length, preview);
+      editor.append(length, preview, deliveryPreview);
       columns.append(editor);
       row.append(columns);
       if (editable) {
@@ -461,7 +489,21 @@ function mount(ctx: PluginFrontendContext, container: HTMLElement, signal: Abort
         }));
       }
       if (card.status === "sent" && atShown(card)) row.append(button("Show in Anki", async () => { await ctx.call("show", { ids: [card.id] }); }));
-      controls.append(row);
+      parent.append(row);
+    };
+    for (const card of state.cards) {
+      if (card.status === "sent") edits.delete(card.id);
+      else if (card.status !== "dropped") renderCard(card, controls);
+    }
+    const history = state.cards.filter(card => card.status === "sent");
+    if (history.length) {
+      const section = keep(element("details"), "sent-history");
+      section.append(element("summary", `Sent history (${history.length})`));
+      section.addEventListener("toggle", () => {
+        if (!section.open || !alive() || !controls.contains(section) || section.childElementCount > 1) return;
+        for (const card of history) renderCard(card, section);
+      });
+      controls.append(section);
     }
   }
   // After the first load, resync uses the background path so typing survives a reconnect.

@@ -105,7 +105,7 @@ test('hand-written cards require explicit pairing and durable approval, then add
     const note = f.notes[0];
     assert.equal(note.fields.LH_ID, id);
     assert.equal(note.fields.LH_Node, 'node-1');
-    assert.deepEqual(note.tags, ['learnharness', 'learnharness::kind::recall', 'learnharness::session::Session-one']);
+    assert.deepEqual(note.tags, ['learnharness', 'learnharness::kind::recall']);
     const add = f.calls.find(c => c.action === 'addNote')!;
     assert.equal(add.params.note.options.allowDuplicate, false);
     assert.equal(add.params.note.options.duplicateScope, 'deck');

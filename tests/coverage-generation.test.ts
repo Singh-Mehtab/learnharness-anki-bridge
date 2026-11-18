@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { mkdtemp, rm, readFile, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, readFile, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { StateStore } from '../src/anki/state.ts';
@@ -52,8 +52,18 @@ test('schema 3 migration preserves populated flags, settings, applied results an
     await until(() => host.workers.starts.length === 2); await close();
     const file = path.join(directory, 'state.json'), saved = JSON.parse(await readFile(file, 'utf8'));
     const { dismissals: _dismissals, ...old } = saved; const v3 = { ...old, schemaVersion: 3 };
-    await writeFile(file, JSON.stringify(v3)); const store = await StateStore.open(directory);
+    const bytes = JSON.stringify(v3) + '\n\n';
+    const backup = path.join(directory, 'state.v3.bak');
+    await writeFile(file, bytes);
+    await writeFile(backup, 'an older backup', { mode: 0o600 });
+    await assert.rejects(StateStore.open(directory), /backup to a safe place/);
+    assert.equal(await readFile(file, 'utf8'), bytes);
+    assert.equal(await readFile(backup, 'utf8'), 'an older backup');
+    await rm(backup);
+    const store = await StateStore.open(directory);
     try {
+      assert.equal(await readFile(backup, 'utf8'), bytes);
+      assert.equal((await stat(backup)).mode & 0o777, 0o600);
       assert.deepEqual(store.snapshot(), { ...saved, dismissals: [], schemaVersion: 4 });
       assert.equal(store.snapshot().flags[0].note, 'Preserve this note');
       assert.equal(store.snapshot().generations[0].tasks[0].status, 'applied');

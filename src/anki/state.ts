@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir, open, readFile, rename, unlink } from 'node:fs/promises';
+import { link, mkdir, open, readFile, rename, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import { defaultGenerationSettings, validateGenerations, validSource } from '../generation/types.ts';
 import type { Generation, GenerationSettings, SourceSnapshot } from '../generation/types.ts';
@@ -90,6 +90,26 @@ export function migrateState(raw: unknown): State {
   return value;
 }
 
+/** Keep the original bytes before upgrading. Never replace an earlier backup. */
+async function backUpBeforeMigration(directory: string, version: number, original: Buffer): Promise<void> {
+  const backup = path.join(directory, `state.v${version}.bak`);
+  const temporary = path.join(directory, `state.${randomUUID()}.tmp`);
+  const file = await open(temporary, 'wx', 0o600);
+  try {
+    try { await file.writeFile(original); await file.sync(); }
+    finally { await file.close(); }
+    try { await link(temporary, backup); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+      if (!original.equals(await readFile(backup))) {
+        throw new Error(`The existing state.v${version}.bak differs from state.json. Move that backup to a safe place before upgrading. Neither file was changed.`);
+      }
+    }
+    const dir = await open(directory, 'r');
+    try { await dir.sync(); } finally { await dir.close(); }
+  } finally { await unlink(temporary); }
+}
+
 /** One backend owns a data directory. Writes are private, fsynced, atomic snapshots. */
 export class StateStore {
   private value: State;
@@ -155,9 +175,15 @@ export class StateStore {
       } finally { await unlink(recovery); }
     }
     try {
-      let value: State;
-      try { const raw: unknown = JSON.parse(await readFile(path.join(directory, 'state.json'), 'utf8')); value = migrateState(raw); }
-      catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; value = initialState(); }
+      const original = await readFile(path.join(directory, 'state.json')).catch((error: NodeJS.ErrnoException) => {
+        if (error.code !== 'ENOENT') throw error;
+        return undefined;
+      });
+      const raw: unknown = original === undefined ? undefined : JSON.parse(original.toString('utf8'));
+      const value = original === undefined ? initialState() : migrateState(raw);
+      if (original !== undefined && object(raw) && raw.schemaVersion !== value.schemaVersion) {
+        await backUpBeforeMigration(directory, raw.schemaVersion as number, original);
+      }
       const store = new StateStore(directory, value, token);
       // Create a durable initial snapshot without overwriting a malformed/newer file.
       await store.replace(value);
