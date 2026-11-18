@@ -201,8 +201,8 @@ test("make cards opens the view on that session with flagged nodes ticked and ca
     assert.match(container.textContent!, /2 not yet sent/);
     assert.match(container.textContent!, /1 sent to another profile/);
     assert.match(container.textContent!, /Note: sign/);
-    assert.match(container.textContent!, /Selected: 1 idea, up to 2 cards\./);
-    f.buttonIn(container, "Select all uncarded: 2 ideas, about 4 cards").click();
+    assert.match(container.textContent!, /1 node selected\. Up to 2 cards\./);
+    f.buttonIn(container, "Select all uncarded: 2 ideas, up to 4 cards").click();
     await tick();
     f.buttonIn(container, "Draft cards for selected").click();
     await tick();
@@ -378,5 +378,69 @@ test("flags in other sessions stay listed and can be removed or opened", async (
     await tick();
     assert.deepEqual(f.calls.find((c) => c.name === "unflag")?.input, { id: "f2" });
     assert.doesNotMatch(container.textContent!, /Note: lens/);
+  } finally { await f.close(); }
+});
+
+test("session coverage mutations invalidate drafting immediately and refresh both coverage views with the current hash", async () => {
+  const flow: any = flowFixture();
+  flow.nodes = [{ ...flow.nodes[1], statementHash: "a".repeat(64), coverage: { state: "no-cards", base: "no-cards", selectable: true,
+    uncarded: true, canDismiss: true, dismissed: false, generating: false, unresolved: 0, olderSourceCards: 0, unknownSourceCards: 0, deletedNotes: 0 } }];
+  let invalidated = 0, refreshed = 0;
+  const f = setup((name) => {
+    if (name === "sessions") return { sessions: [], unresolved: [] };
+    if (name === "dismissNode") Object.assign(flow.nodes[0].coverage, { state: "dismissed", base: "dismissed", selectable: false, uncarded: false, canDismiss: false, dismissed: true });
+    if (name === "restoreNode") Object.assign(flow.nodes[0].coverage, { state: "no-cards", base: "no-cards", selectable: true, uncarded: true, canDismiss: true, dismissed: false });
+    return structuredClone(flow);
+  });
+  try {
+    const requests = new SessionRequests(); requests.request("s1");
+    const container = f.window.document.createElement("div") as unknown as HTMLElement;
+    const dispose = mountSessionFlow(f.ctx, container, new AbortController().signal, { requests,
+      onInvalidateEstimate: () => { invalidated++; }, onCoverageChanged: async () => { refreshed++; }, onDraft: () => {} });
+    await tick(); const before = invalidated, beforeRefresh = refreshed;
+    f.buttonIn(container, "Don't card this").click(); assert.ok(invalidated > before); await tick();
+    assert.deepEqual(f.calls.find(c => c.name === "dismissNode")!.input, { nodeId: "n-pauli", statementHash: "a".repeat(64) });
+    assert.equal(refreshed, beforeRefresh + 1); assert.equal(container.querySelector<HTMLInputElement>('li input[type=checkbox]')!.disabled, true);
+    f.buttonIn(container, "Restore").click(); await tick();
+    assert.deepEqual(f.calls.find(c => c.name === "restoreNode")!.input, { nodeId: "n-pauli", statementHash: "a".repeat(64) });
+    assert.equal(refreshed, beforeRefresh + 2); assert.equal(container.querySelector<HTMLInputElement>('li input[type=checkbox]')!.checked, false);
+    dispose();
+  } finally { await f.close(); }
+});
+
+test("session graph failure retains coverage marked stale and disables drafting until a successful refresh", async () => {
+  const flow = flowFixture(); let fail = false;
+  const f = setup(name => {
+    if (name === "sessions") return { sessions: [], unresolved: [] };
+    if (fail) throw new Error("Graph read failed");
+    return structuredClone(flow);
+  });
+  try {
+    const requests = new SessionRequests(); requests.request("s1");
+    const container = f.window.document.createElement("div") as unknown as HTMLElement;
+    const panel = mountSessionFlow(f.ctx, container, new AbortController().signal, { requests, onDraft: () => {} });
+    await tick(); fail = true; await panel.refresh();
+    assert.match(container.textContent!, /Coverage is stale/); assert.match(container.textContent!, /Spin is intrinsic/);
+    assert.equal(f.buttonIn(container, "Draft cards for selected").disabled, true);
+    assert.equal(container.querySelector<HTMLInputElement>('li input[type=checkbox]')!.disabled, true);
+    fail = false; await panel.refresh();
+    assert.equal(f.buttonIn(container, "Draft cards for selected").disabled, false);
+    panel();
+  } finally { await f.close(); }
+});
+
+test("session missing-source history remains visible without current nodes and has no generation checkbox", async () => {
+  const flow: any = flowFixture(); flow.nodes = [];
+  flow.missing = [{ id: "gone", name: "Historical source", statement: "Previously extracted.", statementHash: "a".repeat(64),
+    cards: { waiting: 1, sent: 0, sentElsewhere: 0 }, coverage: { state: "source-missing", base: "drafts-waiting", selectable: false, uncarded: false,
+      canDismiss: false, dismissed: false, generating: false, unresolved: 0, olderSourceCards: 0, unknownSourceCards: 0, deletedNotes: 0 } }];
+  const f = setup(name => name === "sessions" ? { sessions: [], unresolved: [] } : flow);
+  try {
+    const requests = new SessionRequests(); requests.request("s1");
+    const container = f.window.document.createElement("div") as unknown as HTMLElement;
+    const panel = mountSessionFlow(f.ctx, container, new AbortController().signal, { requests, onDraft: () => {} });
+    await tick(); assert.match(container.textContent!, /Historical source/); assert.match(container.textContent!, /Source missing/);
+    assert.equal(container.querySelectorAll('li input[type=checkbox]').length, 0);
+    assert.equal(f.buttonIn(container, "Draft cards for selected").disabled, true); panel();
   } finally { await f.close(); }
 });

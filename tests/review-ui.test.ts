@@ -22,7 +22,7 @@ async function setup() {
       calls.push({ name, input });
       if (name === "edit") Object.assign(cards.find(c => c.id === input.id)!, input, { status: "draft" });
       if (name === "drop") cards.filter(c => input.ids.includes(c.id)).forEach(c => { c.status = "dropped"; });
-      if (name === "generationContext") return { nodes: [], catalog: {} };
+      if (name === "coverageContext") return { nodes: [], catalog: {} };
       if (name === "sessions") return { sessions: [], unresolved: [] };
       if (name === "approve") cards.filter(c => input.ids.includes(c.id)).forEach(c => { c.status = "approved"; });
       return structuredClone(state);

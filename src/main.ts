@@ -148,7 +148,7 @@ function mount(ctx: PluginFrontendContext, container: HTMLElement, signal: Abort
       const kept = captureForm();
       render();
       restoreForm(kept);
-      await sessionPanel?.refresh();
+      await sessionPanel?.refresh(); await draftingPanel?.refresh();
     } catch { refreshPending = true; }
   }
   interface Kept { values: Map<string, { value: string; checked: boolean }>; open: Set<string>; focus?: { key: string; start: number | null; end: number | null } }
@@ -188,11 +188,11 @@ function mount(ctx: PluginFrontendContext, container: HTMLElement, signal: Abort
   async function snapshotAction(name: string, input?: unknown): Promise<void> {
     try {
       const next = await ctx.call<Snapshot>(name, input);
-      if (alive()) { state = next; await sessionPanel?.refresh(); }
+      if (alive()) { state = next; await sessionPanel?.refresh(); await draftingPanel?.refresh(); }
     } catch (error) {
       if (name === "send" && alive()) {
         // A failed send may still have persisted per-card results.
-        try { const fresh = await ctx.call<Snapshot>("snapshot"); if (alive()) { state = fresh; render(); await sessionPanel?.refresh(); } } catch { /* Preserve the send error. */ }
+        try { const fresh = await ctx.call<Snapshot>("snapshot"); if (alive()) { state = fresh; render(); await sessionPanel?.refresh(); await draftingPanel?.refresh(); } } catch { /* Preserve the send error. */ }
       }
       throw error;
     }
@@ -385,6 +385,8 @@ function mount(ctx: PluginFrontendContext, container: HTMLElement, signal: Abort
   const draftingPanel = settingsOnly ? undefined : mountDrafting(ctx, drafting, signal, backgroundRefresh);
   sessionPanel = !settingsOnly && requests && draftingPanel ? mountSessionFlow(ctx, sessionHost, signal, {
     requests,
+    onInvalidateEstimate: () => draftingPanel.invalidateEstimate(),
+    onCoverageChanged: () => draftingPanel.refresh(),
     // Replaces the draft selection and clears any estimate; the learner still estimates and confirms.
     onDraft: async ({ nodeIds }) => {
       await draftingPanel.select(nodeIds);

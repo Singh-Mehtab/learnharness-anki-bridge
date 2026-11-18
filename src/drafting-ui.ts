@@ -1,7 +1,8 @@
 import type { PluginFrontendContext } from "../sdk/index.d.ts";
 import type { Generation, GenerationSettings } from "./generation/types.ts";
 
-interface Node { id: string; name: string; statement: string }
+import { CoveragePicker } from "./coverage-ui.ts";
+import type { CoverageView } from "./coverage-ui.ts";
 interface DraftingSnapshot { generationSettings: GenerationSettings; generations: Generation[] }
 interface Preflight {
   preflightId: string; nodeCount: number; maximumCards: number; inputTokens: number; outputTokens: number;
@@ -19,6 +20,8 @@ function label(text: string, input: HTMLElement): HTMLElement { const node = el(
 export interface DraftingHandle {
   /** Replace the node selection, e.g. from a session panel. Discards any visible estimate; never starts generation. */
   select(nodeIds: readonly string[]): Promise<void>;
+  refresh(): Promise<void>;
+  invalidateEstimate(): void;
   dispose(): void;
 }
 /** Each view owns only its widgets/timer. Closing a view does not cancel backend generation. */
@@ -27,11 +30,13 @@ export function mountDrafting(ctx: PluginFrontendContext, container: HTMLElement
   root.append(el("h3", "Draft from graph nodes"));
   const feedback = el("p"); feedback.setAttribute("role", "status"); feedback.setAttribute("aria-live", "polite");
   const controls = el("fieldset");
-  // Polling re-renders only this list, so pickers and unsaved inputs above it are never rebuilt.
+  // Polling updates coverage and activity without rebuilding model pickers or unsaved inputs.
   const activity = el("div");
   root.append(feedback, controls, activity); container.append(root);
   let disposed = false, state: DraftingSnapshot | undefined;
-  let nodes: Node[] = [], selection: string[] = [], preflight: Preflight | undefined;
+  let nodes: CoverageView["nodes"] = [], preflight: Preflight | undefined;
+  let coverageRequest = 0, choiceRevision = 0;
+  let estimateButton: HTMLButtonElement | undefined;
   // Unsaved cap/kind edits survive re-renders until saved or used for an estimate.
   let unsaved: { cardsPerNode: number; enabledKinds: Kind[] } | undefined;
   let widgets: Array<{ dispose(): void }> = [];
@@ -41,6 +46,34 @@ export function mountDrafting(ctx: PluginFrontendContext, container: HTMLElement
   let revision = 0;
   const invalidate = () => { revision++; preflight = undefined; };
   const alive = () => !disposed && !signal.aborted && !ctx.signal.aborted;
+  const picker = new CoveragePicker({
+    changed: source => { if (source === "user") choiceRevision++; invalidate(); renderPreflight(); if (estimateButton) estimateButton.disabled = picker.isStale; },
+    mutate: (name, node) => { invalidate(); renderPreflight(); void run(async () => {
+      await ctx.call(name, { nodeId: node.id, statementHash: node.statementHash });
+      await refresh(); await onCardsChanged();
+    }); },
+  });
+  root.insertBefore(picker.root, controls);
+  const refreshGraph = el("button", "Refresh graph"); refreshGraph.type = "button";
+  refreshGraph.onclick = () => { invalidate(); renderPreflight(); void run(load); };
+  root.insertBefore(refreshGraph, controls);
+  async function refreshCoverage(): Promise<void> {
+    const request = ++coverageRequest;
+    try {
+      const context = await ctx.call<CoverageView>("coverageContext");
+      if (!alive() || request !== coverageRequest) return;
+      nodes = (context.nodes ?? []).map(n => ({ ...n, cards: n.cards ?? { waiting: 0, sent: 0, sentElsewhere: 0 } }));
+      picker.update({ ...context, nodes, cardsPerNode: unsaved?.cardsPerNode ?? context.cardsPerNode ?? state?.generationSettings?.cardsPerNode ?? 2 });
+    } catch (error) {
+      if (alive() && request === coverageRequest) picker.markStale();
+      throw error;
+    }
+  }
+
+  async function refresh(): Promise<void> {
+    try { await refreshCoverage(); }
+    catch (error) { if (alive()) feedback.textContent = error instanceof Error ? error.message : String(error); }
+  }
   const disposeWidgets = () => { widgets.forEach(w => w.dispose()); widgets = []; };
   /** Actions run one at a time in click order; none are silently dropped. */
   function run(action: () => Promise<void>, rerender = true): Promise<void> {
@@ -63,6 +96,7 @@ export function mountDrafting(ctx: PluginFrontendContext, container: HTMLElement
     const next = await ctx.call<DraftingSnapshot>(name, input);
     if (alive()) {
       state = next;
+      picker.setCardsPerNode(unsaved?.cardsPerNode ?? next.generationSettings.cardsPerNode);
       // Saved caps and model defaults also affect the session panel's estimate.
       if (name === "generationSettings") await onCardsChanged();
     }
@@ -82,25 +116,13 @@ export function mountDrafting(ctx: PluginFrontendContext, container: HTMLElement
       if (pending) { schedule(); return; }
       const changed = JSON.stringify(next.generations) !== JSON.stringify(state?.generations);
       state = next;
-      if (changed) { renderActivity(); await onCardsChanged(); }
+      if (changed) { renderActivity(); await refresh(); await onCardsChanged(); }
     } catch { /* Transient read failure; try again on the next tick. */ }
     schedule();
   }
   async function load(): Promise<void> {
-    const context = await ctx.call<{ nodes: Node[] }>("generationContext");
-    if (!alive()) return;
-    nodes = context.nodes ?? [];
+    await refreshCoverage();
     await snapshot();
-  }
-  function renderSelection(target: HTMLElement): void {
-    target.replaceChildren();
-    target.append(el("p", `${count(selection.length, "node")} selected. Only selected nodes are drafted.`));
-    const list = el("ul"); list.className = "anki-bridge-node-list";
-    for (const id of selection) {
-      const source = nodes.find(n => n.id === id);
-      const item = el("li"); item.append(el("strong", source?.name ?? id), el("p", source?.statement ?? "Node no longer exists. Refresh the graph before drafting.")); list.append(item);
-    }
-    target.append(list);
   }
   const estimate = el("div");
   function renderPreflight(): void {
@@ -113,18 +135,18 @@ export function mountDrafting(ctx: PluginFrontendContext, container: HTMLElement
     for (const skip of p.skipped) estimate.append(el("p", `Skipped ${nodes.find(n => n.id === skip.nodeId)?.name ?? skip.nodeId}: ${skip.reason}`));
     const confirm = button("Confirm and generate", async () => {
       // A queued click must not revive an estimate invalidated by a new selection.
-      if (preflight !== p) throw new Error("Estimate changed. Estimate generation again before confirming.");
+      if (picker.isStale || preflight !== p) throw new Error("Estimate changed. Estimate generation again before confirming.");
       // Backend rejects stale, changed or replayed inputs independently of UI controls.
-      await snapshot("generate", { preflightId: p.preflightId }); preflight = undefined; await onCardsChanged();
+      await snapshot("generate", { preflightId: p.preflightId }); preflight = undefined; await refresh(); await onCardsChanged();
     }, false);
-    confirm.disabled = !p.batches.length;
+    confirm.disabled = picker.isStale || !p.batches.length;
     estimate.append(confirm);
   }
   function renderActivity(): void {
     renderPreflight();
     activity.replaceChildren();
     if (!state?.generationSettings) return;
-    activity.append(el("h4", "Generation activity"), button("Refresh generation", async () => { await snapshot(); await onCardsChanged(); }, false));
+    activity.append(el("h4", "Generation activity"), button("Refresh generation", async () => { await snapshot(); await refresh(); await onCardsChanged(); }, false));
     if (!state.generations.length) activity.append(el("p", "No generation started yet. Estimating does not call a model."));
     const name = (id: string) => nodes.find(n => n.id === id)?.name ?? id;
     for (const generation of [...state.generations].reverse()) {
@@ -136,9 +158,10 @@ export function mountDrafting(ctx: PluginFrontendContext, container: HTMLElement
         row.append(el("p", `${task.sources.map(s => s.name).join(", ")}: ${task.status}${task.error ? `. ${task.error}` : ""}`));
         for (const target of task.result?.targets ?? []) if (target.skipReason) row.append(el("p", `Writer skipped ${name(target.nodeId)}: ${target.skipReason}`));
       }
-      if (generation.status === "running") row.append(button("Cancel generation", async () => { await snapshot("cancelGeneration", { id: generation.id }); await onCardsChanged(); }, false));
+      if (generation.status === "running") row.append(button("Cancel generation", async () => { await snapshot("cancelGeneration", { id: generation.id }); await refresh(); await onCardsChanged(); }, false));
       else if (generation.tasks.some(t => t.status !== "applied")) row.append(button("Estimate retry", async () => {
-        invalidate(); const at = revision;
+        if (picker.isStale) throw new Error("Refresh stale coverage before drafting.");
+        invalidate(); renderPreflight(); const at = revision;
         const next = await ctx.call<Preflight>("retryGeneration", { id: generation.id }); if (alive() && at === revision) preflight = next;
       }, false));
       activity.append(row);
@@ -149,13 +172,6 @@ export function mountDrafting(ctx: PluginFrontendContext, container: HTMLElement
     disposeWidgets(); controls.replaceChildren();
     if (!state?.generationSettings) { controls.append(button("Load graph and models", load)); renderActivity(); return; }
     const settings = state.generationSettings;
-    const picker = el("div"), selected = el("div");
-    controls.append(picker, selected);
-    renderSelection(selected);
-    const knowledge = ctx.ui.mountKnowledgePicker(picker, { value: selection, onChange: ids => {
-      selection = [...ids]; invalidate(); knowledge.update({ value: selection }); renderSelection(selected); renderPreflight();
-    } }, { signal });
-    widgets.push(knowledge);
     if (!nodes.length) controls.append(el("p", "Your graph has no source nodes yet. Extract knowledge in LearnHarness, then refresh the graph."));
     const model = el("div"); controls.append(label("Drafting model", model));
     const modelPicker = ctx.ui.mountModelPicker(model, { value: settings.model ?? undefined, onChange: value => {
@@ -171,24 +187,35 @@ export function mountDrafting(ctx: PluginFrontendContext, container: HTMLElement
       toggles.append(label(kind, input)); return { kind, input };
     });
     const readSettings = () => ({ cardsPerNode: Number(cap.value), enabledKinds: checkboxes.filter(c => c.input.checked).map(c => c.kind) });
-    const edited = () => { unsaved = readSettings(); invalidate(); renderPreflight(); };
+    const edited = () => { unsaved = readSettings(); invalidate(); renderPreflight(); picker.setCardsPerNode(unsaved.cardsPerNode); };
     cap.oninput = edited; checkboxes.forEach(c => { c.input.onchange = edited; });
     controls.append(label("Maximum cards per node, 1 to 4", cap), el("p", "This is a maximum, not a quota. The writer can skip a node with a reason."), toggles,
-      button("Save drafting defaults", async () => { invalidate(); await snapshot("generationSettings", readSettings()); unsaved = undefined; }),
-      button("Refresh graph", async () => { invalidate(); await load(); }),
-      button("Estimate generation", async () => {
-        if (!selection.length) throw new Error("Select at least one graph node first.");
-        invalidate(); const at = revision;
-        await snapshot("generationSettings", readSettings()); unsaved = undefined;
-        const next = await ctx.call<Preflight>("preflight", { nodeIds: selection });
+      button("Save drafting defaults", async () => {
+        invalidate(); renderPreflight(); const at = revision; await snapshot("generationSettings", readSettings());
+        if (at === revision) unsaved = undefined;
+      }),
+      (estimateButton = button("Estimate generation", async () => {
+        if (picker.isStale) throw new Error("Refresh stale coverage before drafting.");
+        if (!picker.ids.length) throw new Error("Select at least one graph node first.");
+        invalidate(); renderPreflight(); const at = revision;
+        await snapshot("generationSettings", readSettings());
+        if (at !== revision) return;
+        unsaved = undefined;
+        const next = await ctx.call<Preflight>("preflight", { nodeIds: picker.ids });
         if (alive() && at === revision) preflight = next;
-      }), estimate);
+      })), estimate);
+    estimateButton.disabled = picker.isStale;
     renderActivity();
   }
-  const unsubscribe = ctx.onResync(() => { void run(async () => { await load(); await onCardsChanged(); }); });
+  const unsubscribe = ctx.onResync(() => { invalidate(); renderPreflight(); void run(async () => { await load(); await onCardsChanged(); }); });
   void run(load);
   return {
-    select: nodeIds => run(async () => { selection = [...new Set(nodeIds)]; invalidate(); render(); await load(); }),
+    select: nodeIds => {
+      invalidate(); renderPreflight(); picker.select(nodeIds, true); const at = ++choiceRevision;
+      return run(async () => { await load(); if (at === choiceRevision) picker.select(nodeIds); });
+    },
+    refresh,
+    invalidateEstimate: () => { invalidate(); renderPreflight(); },
     dispose: () => { disposed = true; if (timer) clearTimeout(timer); unsubscribe(); disposeWidgets(); root.remove(); },
   };
 }

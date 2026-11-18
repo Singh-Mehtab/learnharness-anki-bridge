@@ -40,6 +40,8 @@ async function setup(handler?: (name: string, input: unknown) => unknown | Promi
     onResync: (listener: () => void) => { resyncs.add(listener); return () => { resyncs.delete(listener); }; },
     app: { openView: (id: string) => { openedView = id; } },
     call: async (name: string, input: unknown) => {
+      if (name === "coverageContext") return { nodes: [], missing: [], cardsPerNode: 2, paired: false, pairingWarning: false };
+      if (name === "generationStatus") return { generationSettings: { cardsPerNode: 2, enabledKinds: ["recall"], model: null }, generations: [] };
       // This fixture checks delivery commands, not the session panel's background reads.
       if (name !== "sessions" && name !== "sessionFlow") calls.push({ name, input });
       if (handler) return handler(name, input);
@@ -47,7 +49,7 @@ async function setup(handler?: (name: string, input: unknown) => unknown | Promi
       if (name === "sessions") return { sessions: [], unresolved: [] };
       return structuredClone(state);
     },
-    ui: { mountMarkdown: (target: HTMLElement, props: { text: string }) => {
+    ui: { mountModelPicker: () => ({ update: () => {}, dispose: () => {} }), mountMarkdown: (target: HTMLElement, props: { text: string }) => {
       target.textContent = props.text;
       return { update: (next: { text: string }) => { target.textContent = next.text; }, dispose: () => {} };
     }, openDialog: (props: { content: HTMLElement; onClose: () => void }) => {
@@ -83,9 +85,9 @@ test("plugin UI registers sidebar/view/settings, saves password without exposing
   const f = await setup();
   try {
     assert.equal(f.openSidebar(), "bridge");
-    const url = f.container.querySelector("input")!;
+    const url = f.container.querySelector('input[data-keep="url"]') as unknown as HTMLInputElement;
     url.value = "http://localhost:8766";
-    url.dispatchEvent(new f.window.Event("input"));
+    url.dispatchEvent(new f.window.Event("input") as never);
     assert.match(f.container.textContent!, /IPv6/);
     assert.equal(f.container.querySelector('input[type=password]')!.getAttribute("value"), null);
     f.button("Save connection settings").click(); await tick();
@@ -95,7 +97,7 @@ test("plugin UI registers sidebar/view/settings, saves password without exposing
     f.button("Save connection settings").click(); await tick();
     assert.deepEqual(f.calls.at(-1), { name: "settings", input: { url: f.state.settings.url, apiKey: "test-only-key" } });
     assert.equal((f.container.querySelector('input[type=password]') as unknown as HTMLInputElement).value, "");
-    (f.container.querySelector('input[type=checkbox]') as unknown as HTMLInputElement).checked = true;
+    (f.container.querySelector('[data-keep="clear-key"]') as unknown as HTMLInputElement).checked = true;
     f.button("Save connection settings").click(); await tick();
     assert.deepEqual(f.calls.at(-1), { name: "settings", input: { url: f.state.settings.url, apiKey: "" } });
     const settingsContainer = f.window.document.createElement("div");
