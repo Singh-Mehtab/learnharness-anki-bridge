@@ -18,6 +18,9 @@ interface Card {
   destination?: Destination;
   lastError?: string;
   presence?: "present" | "deleted" | "unknown";
+  sourceStatement?: string;
+  sourceChanged?: boolean;
+  sourceMissing?: boolean;
 }
 interface Snapshot {
   settings: { url: string; lastDeck: string; hasApiKey: boolean };
@@ -91,14 +94,18 @@ function mount(ctx: PluginFrontendContext, container: HTMLElement, signal: Abort
   feedback.setAttribute("role", "status");
   feedback.setAttribute("aria-live", "polite");
   const controls = element("fieldset");
-  root.append(element("h2", settingsOnly ? "Anki Bridge settings" : "Anki Bridge 0.2.0"),
-    element("p", "Hand-written testing cards only. No graph access or AI generation. Use a throwaway Anki profile."), feedback, controls);
+  root.append(element("h2", settingsOnly ? "Anki Bridge settings" : "Anki Bridge 0.3.0"),
+    element("p", "Draft from your graph, check every answer, then approve and send to Anki. Nothing is sent automatically."), feedback, controls);
   container.append(root);
   let disposed = false;
   let busy = false;
   let state: Snapshot | undefined;
   let connection: Connection | undefined;
   let deckChoice: string | undefined;
+  const edits = new Map<string, { front: string; back: string; extra: string }>();
+  const editors = new Map<string, () => void>();
+  let previews: Array<{ dispose(): void }> = [];
+  function disposePreviews(): void { previews.forEach(handle => handle.dispose()); previews = []; }
   const alive = () => !disposed && !signal.aborted && !ctx.signal.aborted;
 
   async function run(action: () => Promise<void>): Promise<void> {
@@ -146,6 +153,8 @@ function mount(ctx: PluginFrontendContext, container: HTMLElement, signal: Abort
   }
   function render(): void {
     if (!alive()) return;
+    disposePreviews();
+    editors.clear();
     controls.replaceChildren();
     if (!state) {
       controls.append(button("Retry loading", refresh));
@@ -206,17 +215,19 @@ function mount(ctx: PluginFrontendContext, container: HTMLElement, signal: Abort
       }));
     if (settingsOnly) return;
 
-    controls.append(element("h3", "Hand-written draft"));
+    const manual = element("details");
+    manual.append(element("summary", "Write a card by hand"));
     const front = textArea(), back = textArea(), extra = textArea();
     const kind = element("select");
     for (const name of ["recall", "why", "compose", "discriminate"]) {
       const option = element("option", name); option.value = name; kind.append(option);
     }
-    controls.append(field("Front", front), field("Back", back), field("Extra, optional", extra), field("Kind", kind),
+    manual.append(field("Front", front), field("Back", back), field("Extra, optional", extra), field("Kind", kind),
       button("Create draft", async () => {
         await snapshotAction("draft", { front: front.value, back: back.value, extra: extra.value, kind: kind.value });
       }));
-    controls.append(element("h3", "Delivery"));
+    controls.append(manual);
+    controls.append(element("h3", "Review and send"));
     const deck = textInput(deckChoice ?? state.settings.lastDeck);
     const decks = element("datalist");
     decks.id = "anki-bridge-decks";
@@ -227,7 +238,27 @@ function mount(ctx: PluginFrontendContext, container: HTMLElement, signal: Abort
       button("Refresh cards", refresh), button("Reconcile uncertain sends", () => snapshotAction("reconcile")),
       button("Check presence in Anki", () => snapshotAction("presence")),
       element("p", "Approve each card explicitly, then send it. Sent or uncertain cards cannot be resent. Deleted notes stay deleted."));
-    for (const card of state.cards) {
+    const bulk = element("div");
+    bulk.className = "anki-bridge-toolbar";
+    const drafts = state.cards.filter(card => card.status === "draft");
+    const approved = state.cards.filter(card => (card.status === "approved" || card.status === "failed") && card.noteId === undefined);
+    const checkEditors = () => { editors.forEach(check => check()); };
+    if (drafts.length) bulk.append(button(`Approve all drafts, ${drafts.length}`, async () => {
+      checkEditors();
+      if (await confirmAction(ctx, signal, "Approve all drafts", `Approve ${drafts.length} saved drafts? Check their accuracy and assumptions first. Approval does not send them.`)) {
+        if (alive()) await snapshotAction("approve", { ids: drafts.map(card => card.id) });
+      }
+    }));
+    if (approved.length) bulk.append(button(`Send approved cards, ${approved.length}`, async () => {
+      checkEditors();
+      if (!deck.value.trim()) throw new Error("Choose a destination deck first.");
+      await snapshotAction("send", { ids: approved.map(card => card.id), deck: deck.value.trim() });
+    }));
+    const sent = state.cards.filter(card => card.status === "sent");
+    if (sent.length) bulk.append(button("Show sent cards in Anki", async () => { await ctx.call("show", { ids: sent.map(card => card.id) }); }));
+    controls.append(bulk);
+    if (!state.cards.some(card => card.status !== "dropped")) controls.append(element("p", "No cards to review yet. Select graph nodes above, or write a card by hand."));
+    for (const card of state.cards.filter(card => card.status !== "dropped")) {
       const row = element("article");
       row.append(element("h4", `${card.kind} · ${card.status}`));
       if (card.nodeName || card.sessionName) row.append(element("p", `${card.nodeName} / ${card.sessionName}`));
@@ -237,15 +268,53 @@ function mount(ctx: PluginFrontendContext, container: HTMLElement, signal: Abort
       if (card.presence) row.append(element("p", `Anki presence: ${card.presence}`));
       if (card.noteId !== undefined) row.append(element("p", `Anki note ID: ${card.noteId}`));
       const editable = ["draft", "approved", "failed"].includes(card.status) && card.noteId === undefined;
-      const cardFront = textArea(card.front), cardBack = textArea(card.back), cardExtra = textArea(card.extra);
+      const cached = edits.get(card.id) ?? card;
+      const cardFront = textArea(cached.front), cardBack = textArea(cached.back), cardExtra = textArea(cached.extra);
       cardFront.readOnly = cardBack.readOnly = cardExtra.readOnly = !editable;
-      row.append(field("Front", cardFront), field("Back", cardBack), field("Extra", cardExtra));
+      const columns = element("div");
+      columns.className = "anki-bridge-review-columns";
+      if (card.sourceStatement) {
+        const source = element("aside");
+        source.append(element("h5", "Source at drafting"), element("p", card.sourceStatement));
+        if (card.sourceMissing) source.append(element("p", "Source node is missing. Check this card before approving."));
+        else if (card.sourceChanged) source.append(element("p", "Source has changed since drafting. Check this card against the graph."));
+        columns.append(source);
+      }
+      const editor = element("div");
+      editor.append(field("Front", cardFront), field("Back", cardBack), field("Extra", cardExtra));
+      const preview = element("div");
+      preview.className = "anki-bridge-preview";
+      preview.append(element("h5", "Preview"));
+      const length = element("p");
+      const parts = [cardFront, cardBack, cardExtra].map(input => {
+        const target = element("div"); preview.append(target);
+        const handle = ctx.ui.mountMarkdown(target, { text: input.value }, { signal });
+        previews.push(handle);
+        return { input, handle };
+      });
+      const updatePreview = () => {
+        parts.forEach(({ input, handle }) => handle.update({ text: input.value }));
+        const words = (text: string) => text.trim().split(/\s+/u).filter(Boolean).length;
+        const f = words(cardFront.value), b = words(cardBack.value);
+        length.textContent = f > 30 || b > 15 ? `Long card: ${f} front words, ${b} back words. Targets are about 30 and 15. Keep enough context for correctness.` : "";
+        if (editable) edits.set(card.id, { front: cardFront.value, back: cardBack.value, extra: cardExtra.value });
+      };
+      parts.forEach(({ input }) => { input.oninput = updatePreview; });
+      updatePreview();
+      editor.append(length, preview);
+      columns.append(editor);
+      row.append(columns);
       if (editable) {
-        row.append(button("Save edits", () => snapshotAction("edit", { id: card.id, front: cardFront.value, back: cardBack.value, extra: cardExtra.value })));
+        row.append(button("Save edits", async () => {
+          await snapshotAction("edit", { id: card.id, front: cardFront.value, back: cardBack.value, extra: cardExtra.value });
+          edits.delete(card.id);
+        }));
         // Never approve or send different content from the visible editor.
         const requireSaved = () => {
           if (cardFront.value !== card.front || cardBack.value !== card.back || cardExtra.value !== card.extra) throw new Error("Save edits before approving or sending this card.");
         };
+        editors.set(card.id, requireSaved);
+        row.append(button("Drop card", async () => { await snapshotAction("drop", { ids: [card.id] }); edits.delete(card.id); }));
         if (card.status === "draft") row.append(button("Approve card", async () => { requireSaved(); await snapshotAction("approve", { ids: [card.id] }); }));
         if (card.status === "approved" || card.status === "failed") row.append(button(card.status === "failed" ? "Retry approved card" : "Send approved card", async () => {
           requireSaved();
@@ -259,7 +328,7 @@ function mount(ctx: PluginFrontendContext, container: HTMLElement, signal: Abort
   }
   const unsubscribe = ctx.onResync(() => { void run(refresh); });
   void run(refresh);
-  return () => { disposed = true; unsubscribe(); root.remove(); };
+  return () => { disposed = true; unsubscribe(); disposePreviews(); root.remove(); };
 }
 
 export function activate(ctx: PluginFrontendContext): void {

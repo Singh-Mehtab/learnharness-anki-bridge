@@ -1,11 +1,35 @@
-.anki-bridge { max-width: 860px; margin: 0 auto; padding: 1rem; color: var(--text-primary, inherit); }
+.anki-bridge { max-width: 1080px; margin: 0 auto; padding: 1.25rem; color: var(--text-primary, inherit); font: inherit; }
+.anki-bridge h2 { font-size: 1.5rem; margin: 0 0 .5rem; }
+.anki-bridge h3 { font-size: 1.15rem; margin: 1.75rem 0 .6rem; }
+.anki-bridge h4 { font-size: 1rem; margin: 0 0 .6rem; }
+.anki-bridge h5 { font-size: .9rem; margin: 0 0 .5rem; }
 .anki-bridge fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
 .anki-bridge label { display: flex; flex-direction: column; gap: .3rem; margin: .65rem 0; }
 .anki-bridge input, .anki-bridge textarea, .anki-bridge select { font: inherit; color: inherit; background: var(--bg-secondary, transparent); border: 1px solid var(--border-color, #888); border-radius: .25rem; padding: .5rem; max-width: 100%; }
-.anki-bridge textarea { width: 100%; box-sizing: border-box; resize: vertical; }
+.anki-bridge textarea { width: 100%; box-sizing: border-box; resize: vertical; line-height: 1.5; }
 .anki-bridge input[type=checkbox] { align-self: flex-start; }
 .anki-bridge button { font: inherit; cursor: pointer; padding: .45rem .7rem; margin: .25rem .4rem .25rem 0; }
 .anki-bridge button:disabled, .anki-bridge fieldset:disabled button { cursor: default; opacity: .55; }
+.anki-bridge :is(button, input, textarea, select, summary):focus-visible { outline: 2px solid var(--text-primary, #3970b5); outline-offset: 3px; }
 .anki-bridge article { border: 1px solid var(--border-color, #888); border-radius: .4rem; padding: 1rem; margin: 1rem 0; }
-.anki-bridge p { overflow-wrap: anywhere; }
+.anki-bridge p { overflow-wrap: anywhere; max-width: 80ch; line-height: 1.5; }
 .anki-bridge [role=status] { min-height: 1.5em; white-space: pre-wrap; }
+.anki-bridge details { margin: 1rem 0; padding: .75rem 0; border-block: 1px solid var(--border-color, #888); }
+.anki-bridge summary { cursor: pointer; }
+.anki-bridge-review-columns { display: grid; grid-template-columns: minmax(180px, 1fr) minmax(280px, 2fr); gap: 1.5rem; }
+.anki-bridge-review-columns > :only-child { grid-column: 1 / -1; }
+.anki-bridge-review-columns aside { border-right: 1px solid var(--border-color, #888); padding-right: 1rem; }
+.anki-bridge-preview { padding: .8rem; background: var(--bg-secondary, transparent); border-left: 3px solid var(--border-color, #888); margin: .8rem 0; }
+.anki-bridge-preview > div { margin-block: .5rem; overflow-wrap: anywhere; }
+.anki-bridge pre { overflow-x: auto; white-space: pre; }
+.anki-bridge-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: .25rem; }
+.anki-bridge-node-list { max-height: 18rem; overflow-y: auto; padding-left: 1.25rem; }
+.anki-bridge-node-list li { padding: .5rem 0; }
+.anki-bridge-kind-toggles { display: flex; flex-wrap: wrap; gap: 1rem; }
+.anki-bridge-kind-toggles label { flex-direction: row; align-items: center; }
+.anki-bridge-batch { border-left: 2px solid var(--border-color, #888); margin: .8rem 0; padding-left: .8rem; }
+@media (max-width: 680px) {
+  .anki-bridge { padding: .75rem; }
+  .anki-bridge-review-columns { grid-template-columns: minmax(0, 1fr); gap: .75rem; }
+  .anki-bridge-review-columns aside { border-right: 0; border-bottom: 1px solid var(--border-color, #888); padding: 0 0 .75rem; }
+}
