@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { Window } from "happy-dom";
 import type { PluginFrontendContext } from "../sdk/index.d.ts";
+import { mountDrafting } from "../src/drafting-ui.ts";
 import { FLAG_SHORTCUT, mountSessionFlow, registerSessionActions, SessionRequests } from "../src/session-ui.ts";
 
 const tick = (ms = 0) => new Promise<void>((resolve) => setTimeout(resolve, ms));
@@ -35,7 +36,7 @@ function setup(handler: (name: string, input: unknown) => unknown) {
     onAppEvent: (listener: (e: { type: string }) => void) => { events.push(listener); return () => {}; },
     app: { openView: (id: string) => { opened = id; } },
     call: async (name: string, input: unknown) => { calls.push({ name, input }); return structuredClone(await handler(name, input)); },
-    ui: { openDialog: (props: { content: HTMLElement }, options: { signal: AbortSignal }) => {
+    ui: { mountModelPicker: () => ({ dispose() {} }), openDialog: (props: { content: HTMLElement }, options: { signal: AbortSignal }) => {
       const content = props.content;
       window.document.body.append(content as never);
       const dispose = () => { content.remove(); if (dialog?.content === content) dialog = undefined; };
@@ -206,7 +207,7 @@ test("make cards opens the view on that session with flagged nodes ticked and ca
     await tick();
     f.buttonIn(container, "Draft cards for selected").click();
     await tick();
-    assert.deepEqual(drafts, [{ sessionId: "s1", nodeIds: ["n-pauli", "n-else"] }]);
+    assert.deepEqual(drafts, [{ sessionId: "s1", nodeIds: ["n-pauli", "n-else"], backfillNodeIds: ["n-pauli", "n-else"] }]);
     dispose();
   } finally { await f.close(); }
 });
@@ -231,7 +232,7 @@ test("removing a flag clears automatic ticks but preserves explicit checkbox cho
     f.buttonIn(container, "Remove flag").click(); await tick();
     assert.deepEqual(Array.from(container.querySelectorAll<HTMLInputElement>("li input[type=checkbox]")).map(b => b.checked), [false, true, false, false]);
     f.buttonIn(container, "Draft cards for selected").click(); await tick();
-    assert.deepEqual(drafts, [{ sessionId: "s1", nodeIds: ["n-pauli"] }]);
+    assert.deepEqual(drafts, [{ sessionId: "s1", nodeIds: ["n-pauli"], backfillNodeIds: [] }]);
   } finally { await f.close(); }
 });
 
@@ -293,7 +294,7 @@ test("a Make cards request during a load discards the superseded flow and loads 
     assert.match(container.querySelector(".anki-bridge-nodes")?.textContent ?? "", /Lens/);
     assert.doesNotMatch(container.textContent!, /Spin is intrinsic/);
     f.buttonIn(container, "Draft cards for selected").click(); await tick();
-    assert.deepEqual(drafts, [{ sessionId: "s2", nodeIds: ["n-optics"] }]);
+    assert.deepEqual(drafts, [{ sessionId: "s2", nodeIds: ["n-optics"], backfillNodeIds: [] }]);
   } finally { release(flowFixture()); await f.close(); }
 });
 
@@ -443,4 +444,36 @@ test("session missing-source history remains visible without current nodes and h
     assert.equal(container.querySelectorAll('li input[type=checkbox]').length, 0);
     assert.equal(f.buttonIn(container, "Draft cards for selected").disabled, true); panel();
   } finally { await f.close(); }
+});
+
+test("session to drafting handoff preserves flagged, bulk and mixed per-target intent into preflight", async () => {
+  const flow = flowFixture();
+  const state = { generationSettings: { cardsPerNode: 2, enabledKinds: ["recall"], model: { provider: "scratch", id: "writer" } }, generations: [] };
+  const f = setup(name => {
+    if (name === "sessions") return { sessions: [], unresolved: [] };
+    if (name === "sessionFlow" || name === "coverageContext") return flow;
+    if (name === "preflight") return { preflightId: "p1", nodeCount: 1, maximumCards: 2, inputTokens: 1, outputTokens: 1, estimatedCost: null, model: state.generationSettings.model, batches: [], skipped: [] };
+    return state;
+  });
+  const sessionHost = f.window.document.createElement("div") as unknown as HTMLElement;
+  const draftHost = f.window.document.createElement("div") as unknown as HTMLElement;
+  const scope = new AbortController();
+  const drafting = mountDrafting(f.ctx, draftHost, scope.signal, async () => {});
+  const requests = new SessionRequests(); requests.request("s1");
+  const panel = mountSessionFlow(f.ctx, sessionHost, scope.signal, { requests,
+    onDraft: ({ nodeIds, backfillNodeIds }) => drafting.select(nodeIds, backfillNodeIds) });
+  const estimate = async () => {
+    f.buttonIn(sessionHost, "Draft cards for selected").click(); await tick();
+    f.buttonIn(draftHost, "Estimate generation").click(); await tick();
+    return f.calls.filter(c => c.name === "preflight").at(-1)?.input;
+  };
+  try {
+    await tick();
+    assert.deepEqual(await estimate(), { nodeIds: ["n-spin"], backfillNodeIds: [] }, "flagged defaults stay explicit");
+    f.buttonIn(sessionHost, /^Select all uncarded/).click();
+    assert.deepEqual(await estimate(), { nodeIds: ["n-pauli", "n-else"], backfillNodeIds: ["n-pauli", "n-else"] });
+    const spin = sessionHost.querySelector<HTMLInputElement>('[aria-label="Select Spin"]')!;
+    spin.checked = true; spin.dispatchEvent(new f.window.Event("change") as never);
+    assert.deepEqual(await estimate(), { nodeIds: ["n-pauli", "n-else", "n-spin"], backfillNodeIds: ["n-pauli", "n-else"] }, "manual additions do not promote other bulk choices");
+  } finally { panel(); drafting.dispose(); scope.abort(); await f.close(); }
 });

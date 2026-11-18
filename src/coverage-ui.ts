@@ -1,4 +1,4 @@
-import { canSelectNode, coverageLabel, hasCards, isUncardedNode } from "./coverage/flow.ts";
+import { canSelectNode, coverageLabel, hasCards, isUncardedNode, MAX_SELECTED_NODES } from "./coverage/flow.ts";
 import type { Coverage, CoverageContext, CardCounts } from "./coverage/flow.ts";
 
 export interface CoverageRow {
@@ -18,6 +18,7 @@ export class CoveragePicker {
   private readonly historicalRows = el("ul");
   private readonly summary = el("p");
   private readonly warning = el("p");
+  private readonly selectionWarning = el("p");
   private readonly bulk = el("button");
   private readonly flagged = el("button");
   private readonly clear = el("button", "Clear selection");
@@ -25,6 +26,7 @@ export class CoveragePicker {
   private readonly scope = el("select");
   private view: CoverageView = { nodes: [], missing: [], cardsPerNode: 2, paired: false, pairingWarning: false };
   private selected = new Set<string>();
+  private backfill = new Set<string>();
   private touched = new Set<string>();
   private stale = false;
   private readonly options: { changed(source: "read" | "user"): void; defaults?: boolean; mutate(name: "dismissNode" | "restoreNode", node: CoverageRow): void };
@@ -32,19 +34,23 @@ export class CoveragePicker {
     this.options = options;
     this.root.className = "anki-bridge-coverage";
     this.rows.className = this.historicalRows.className = "anki-bridge-nodes";
-    this.history.append(el("h4", "Historical sources (source missing)"), this.historicalRows);
+    this.history.append(el("h4", "Historical sources (absent from returned snapshot, not proven deleted; the host may silently omit partial data)"), this.historicalRows);
     this.warning.setAttribute("role", "status");
+    this.selectionWarning.setAttribute("role", "status");
     for (const [value, text] of [["all", "All nodes"], ["uncarded", "No cards"]]) {
       const option = el("option", text); option.value = value; this.scope.append(option);
     }
     this.scope.setAttribute("aria-label", "Coverage view");
     this.search.type = "search"; this.search.placeholder = "Search nodes"; this.search.setAttribute("aria-label", "Search nodes");
-    const filter = () => { this.prune(); this.options.changed("user"); this.render(); };
+    const filter = () => { this.selectionWarning.textContent = ""; this.prune(); this.options.changed("user"); this.render(); };
     this.search.oninput = filter; this.scope.onchange = filter;
     this.bulk.type = this.clear.type = "button";
-    this.bulk.onclick = () => this.select(this.visible().filter(isUncardedNode).map(n => n.id));
+    this.bulk.onclick = () => {
+      const ids = this.visible().filter(n => this.eligible(n) && isUncardedNode(n)).map(n => n.id);
+      this.select(ids, ids);
+    };
     this.clear.onclick = () => this.select([]);
-    this.root.append(this.scope, this.search, this.warning);
+    this.root.append(this.scope, this.search, this.warning, this.selectionWarning);
     if (options.defaults) {
       this.flagged.type = "button";
       this.flagged.onclick = () => this.select(this.visible().filter(n => n.flagged && this.eligible(n)).map(n => n.id));
@@ -54,6 +60,7 @@ export class CoveragePicker {
     this.render();
   }
   get ids(): string[] { return [...this.selected]; }
+  get backfillNodeIds(): string[] { return this.ids.filter(id => this.backfill.has(id)); }
   get isStale(): boolean { return this.stale; }
   private visible(): CoverageRow[] {
     const query = this.search.value.trim().toLocaleLowerCase();
@@ -64,25 +71,40 @@ export class CoveragePicker {
   private eligible(n: CoverageRow): boolean { return !this.historical(n) && canSelectNode(n); }
   private prune(): void {
     const allowed = new Set(this.visible().filter(n => this.eligible(n)).map(n => n.id));
-    for (const id of this.selected) if (!allowed.has(id)) { this.selected.delete(id); this.touched.add(id); }
+    for (const id of this.selected) if (!allowed.has(id)) { this.selected.delete(id); this.backfill.delete(id); this.touched.add(id); }
   }
   update(view: CoverageView, reset = false): void {
-    if (reset) { this.selected.clear(); this.touched.clear(); this.search.value = ""; this.scope.value = "all"; }
+    if (reset) { this.selected.clear(); this.backfill.clear(); this.touched.clear(); this.search.value = ""; this.scope.value = "all"; }
     const changed = JSON.stringify(this.view) !== JSON.stringify(view) || this.stale;
     this.view = view; this.stale = false;
-    if (this.options.defaults) for (const n of this.visible()) {
-      if (!this.touched.has(n.id)) { if (n.flagged && this.eligible(n)) this.selected.add(n.id); else this.selected.delete(n.id); }
+    this.selectionWarning.textContent = "";
+    this.prune();
+    if (this.options.defaults) {
+      const defaults = new Set(this.selected);
+      for (const n of this.visible()) {
+        if (!this.touched.has(n.id)) { if (n.flagged && this.eligible(n)) defaults.add(n.id); else defaults.delete(n.id); }
+      }
+      if (this.withinLimit(defaults.size)) this.selected = defaults;
     }
-    this.prune(); if (changed) this.options.changed("read"); this.render();
+    if (changed) this.options.changed("read"); this.render();
   }
   setCardsPerNode(cap: number): void { this.view = { ...this.view, cardsPerNode: cap }; this.render(); }
   markStale(): void { this.stale = true; this.options.changed("read"); this.render(); }
-  select(ids: readonly string[], resetFilters = false): void {
-    if (resetFilters) { this.search.value = ""; this.scope.value = "all"; }
+  private withinLimit(count: number): boolean {
+    this.selectionWarning.textContent = count > MAX_SELECTED_NODES
+      ? `${count} eligible nodes would be selected. The limit is ${MAX_SELECTED_NODES} nodes. Narrow the search or scope before selecting.` : "";
+    return count <= MAX_SELECTED_NODES;
+  }
+  select(ids: readonly string[], backfillNodeIds: readonly string[] = [], resetFilters = false): void {
     if (this.stale) return;
-    this.selected = new Set(ids);
+    const allowed = new Set((resetFilters ? this.view.nodes : this.visible()).filter(n => this.eligible(n)).map(n => n.id));
+    const selected = new Set(ids.filter(id => allowed.has(id)));
+    if (!this.withinLimit(selected.size)) { this.render(); return; }
+    if (resetFilters) { this.search.value = ""; this.scope.value = "all"; }
+    this.selected = selected;
+    this.backfill = new Set(backfillNodeIds.filter(id => selected.has(id)));
     for (const n of this.view.nodes) this.touched.add(n.id);
-    this.prune(); this.options.changed("user"); this.render();
+    this.options.changed("user"); this.render();
   }
   private render(): void {
     this.rows.replaceChildren(); this.historicalRows.replaceChildren();
@@ -103,13 +125,20 @@ export class CoveragePicker {
       if (!this.historical(n)) {
         const box = el("input"); box.type = "checkbox"; box.checked = this.selected.has(n.id); box.disabled = this.stale || !this.eligible(n);
         box.setAttribute("aria-label", `Select ${n.name}`);
-        box.onchange = () => { this.touched.add(n.id); if (box.checked) this.selected.add(n.id); else this.selected.delete(n.id); this.options.changed("user"); this.render(); };
+        box.onchange = () => {
+          if (box.checked && !this.withinLimit(this.selected.size + (this.selected.has(n.id) ? 0 : 1))) { this.render(); return; }
+          this.selectionWarning.textContent = "";
+          this.touched.add(n.id); this.backfill.delete(n.id);
+          if (box.checked) this.selected.add(n.id); else this.selected.delete(n.id);
+          this.options.changed("user"); this.render();
+        };
         label.append(box);
       }
       body.append(el("strong", n.name), el("span", n.statement));
       const c = n.coverage, badges: string[] = [];
       if (n.flagged) badges.push("Flagged");
       if (c) { badges.push(coverageLabel(c.state)); if (c.state !== c.base) badges.push(`Base: ${coverageLabel(c.base)}`); }
+      if (c?.dismissed) badges.push("Dismissed for current statement");
       if (n.cards.sent) badges.push(`${n.cards.sent} sent`);
       if (n.cards.waiting) badges.push(`${n.cards.waiting} not yet sent`);
       if (n.cards.sentElsewhere) badges.push(`${n.cards.sentElsewhere} sent to another profile`);

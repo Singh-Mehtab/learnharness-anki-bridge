@@ -58,7 +58,7 @@ test('session selection reaches drafting, clears estimates, and stays current wi
     assert.match(container.textContent!, /1 node selected/);
     button('Estimate generation').click();
     await until(() => [...container.querySelectorAll('button')].some(b => b.textContent === 'Confirm and generate'), 'first estimate');
-    assert.deepEqual(calls.filter(c => c.name === 'preflight').at(-1)?.input, { nodeIds: ['n_b'] });
+    assert.deepEqual(calls.filter(c => c.name === 'preflight').at(-1)?.input, { nodeIds: ['n_b'], backfillNodeIds: [] });
     assert.ok(button('Confirm and generate'));
     button('Select all uncarded: 2 ideas, up to 4 cards').click(); await settle();
     button('Draft cards for selected').click(); await settle();
@@ -66,7 +66,7 @@ test('session selection reaches drafting, clears estimates, and stays current wi
     assert.equal([...container.querySelectorAll('button')].some(b => b.textContent === 'Confirm and generate'), false);
     button('Estimate generation').click();
     await until(() => calls.filter(c => c.name === 'preflight').length === 2, 'second estimate');
-    assert.deepEqual(calls.filter(c => c.name === 'preflight').at(-1)?.input, { nodeIds: ['n_a', 'n_b'] });
+    assert.deepEqual(calls.filter(c => c.name === 'preflight').at(-1)?.input, { nodeIds: ['n_a', 'n_b'], backfillNodeIds: ['n_a', 'n_b'] });
     assert.equal(calls.some(c => c.name === 'generate'), false);
     assert.equal(f.host.workers.starts.length, 0);
     assert.doesNotMatch(container.textContent!, /connects to the 0\.3\.0/);

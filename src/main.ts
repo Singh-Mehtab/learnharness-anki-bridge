@@ -388,8 +388,8 @@ function mount(ctx: PluginFrontendContext, container: HTMLElement, signal: Abort
     onInvalidateEstimate: () => draftingPanel.invalidateEstimate(),
     onCoverageChanged: () => draftingPanel.refresh(),
     // Replaces the draft selection and clears any estimate; the learner still estimates and confirms.
-    onDraft: async ({ nodeIds }) => {
-      await draftingPanel.select(nodeIds);
+    onDraft: async ({ nodeIds, backfillNodeIds }) => {
+      await draftingPanel.select(nodeIds, backfillNodeIds);
       if (alive()) { drafting.scrollIntoView?.({ block: "start" }); drafting.querySelector<HTMLElement>("button, input")?.focus(); }
     },
   }) : undefined;

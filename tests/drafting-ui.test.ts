@@ -358,3 +358,44 @@ test("Refresh graph clears an estimate synchronously before waiting for its grap
     assert.equal(f.calls.some(c => c.name === "generate"), false);
   } finally { gate?.resolve(); await f.close(); }
 });
+
+test("drafting carries backfill intent through handoff, graph refresh and first preflight; legacy selection is explicit", async () => {
+  const f = setup();
+  try {
+    await tick();
+    await f.panel.select(["n_a"], ["n_a"]);
+    Object.assign(f.graph.nodes[0].coverage, { state: "sent", base: "sent", uncarded: false });
+    await f.panel.refresh();
+    f.button("Estimate generation").click(); await tick();
+    assert.deepEqual(f.calls.filter(c => c.name === "preflight").at(-1)!.input, { nodeIds: ["n_a"], backfillNodeIds: ["n_a"] }, "stale backfill remains backfill for backend rejection");
+    await f.panel.select(["n_a"]);
+    f.button("Estimate generation").click(); await tick();
+    assert.deepEqual(f.calls.filter(c => c.name === "preflight").at(-1)!.input, { nodeIds: ["n_a"], backfillNodeIds: [] });
+    Object.assign(f.graph.nodes[0].coverage, { state: "no-cards", base: "no-cards", uncarded: true });
+    await f.panel.refresh();
+    [...f.container.querySelectorAll("button")].find(b => b.textContent?.startsWith("Select all uncarded"))!.click();
+    f.button("Estimate generation").click(); await tick();
+    assert.deepEqual(f.calls.filter(c => c.name === "preflight").at(-1)!.input, { nodeIds: ["n_a"], backfillNodeIds: ["n_a"] });
+    f.select([]); f.select(["n_a"]);
+    f.button("Estimate generation").click(); await tick();
+    assert.deepEqual(f.calls.filter(c => c.name === "preflight").at(-1)!.input, { nodeIds: ["n_a"], backfillNodeIds: [] });
+  } finally { await f.close(); }
+});
+
+test("programmatic drafting handoff accepts 1000 targets and refuses 1001 without replacing selection", async () => {
+  const f = setup();
+  try {
+    await tick();
+    const template = f.graph.nodes[0];
+    f.graph.nodes = Array.from({ length: 1001 }, (_, i) => ({ ...template, id: `node-${i}`, name: `Node ${i}` }));
+    await f.panel.refresh();
+    const ids = f.graph.nodes.map((n: { id: string }) => n.id);
+    await f.panel.select(ids.slice(0, 1000), ids.slice(0, 1000));
+    assert.equal(f.container.querySelectorAll("li input:checked").length, 1000);
+    await f.panel.select(ids);
+    assert.equal(f.container.querySelectorAll("li input:checked").length, 1000);
+    assert.match(f.container.textContent!, /1001 eligible nodes.*limit is 1000 nodes.*Narrow the search or scope/);
+    f.button("Estimate generation").click(); await tick();
+    assert.deepEqual(f.calls.filter(c => c.name === "preflight").at(-1)!.input, { nodeIds: ids.slice(0, 1000), backfillNodeIds: ids.slice(0, 1000) }, "rejected overflow also preserves the previous intent");
+  } finally { await f.close(); }
+});

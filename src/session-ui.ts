@@ -14,9 +14,9 @@ interface SessionFlow { session: { id: string; title: string; exists: boolean };
 interface SessionSummary { id: string; title: string; updatedAt: string; nodeCount: number; flagCount: number; waitingCount: number }
 interface SessionList { sessions: SessionSummary[]; unresolved: FlagView[] }
 
-/** What "Make cards" hands to drafting: one session and the ticked node IDs.
+/** What "Make cards" hands to drafting: one session, ticked node IDs and their backfill subset.
  * The draft panel owns preflight, generation and review from here. */
-export interface DraftRequest { sessionId: string; nodeIds: string[] }
+export interface DraftRequest { sessionId: string; nodeIds: string[]; backfillNodeIds: string[] }
 
 export const FLAG_SHORTCUT = "mod+shift+a";
 
@@ -265,7 +265,7 @@ export function mountSessionFlow(ctx: PluginFrontendContext, container: HTMLElem
     controls.append(el("h4", `Ideas from this session (${nodes.length})`), coverage.root);
     draft = button("Draft cards for selected", async () => {
       if (!options.onDraft || !flow || coverage.isStale) return;
-      await options.onDraft({ sessionId: flow.session.id, nodeIds: coverage.ids });
+      await options.onDraft({ sessionId: flow.session.id, nodeIds: coverage.ids, backfillNodeIds: coverage.backfillNodeIds });
     }, !options.onDraft || !coverage.ids.length || coverage.isStale);
     controls.append(draft);
   }

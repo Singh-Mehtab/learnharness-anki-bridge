@@ -18,8 +18,9 @@ const count = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? on
 function label(text: string, input: HTMLElement): HTMLElement { const node = el("label"); node.append(el("span", text), input); return node; }
 
 export interface DraftingHandle {
-  /** Replace the node selection, e.g. from a session panel. Discards any visible estimate; never starts generation. */
-  select(nodeIds: readonly string[]): Promise<void>;
+  /** Replace selection and intent, e.g. from a session panel; omitted backfill IDs mean explicit requests.
+   * Discards any visible estimate; never starts generation. */
+  select(nodeIds: readonly string[], backfillNodeIds?: readonly string[]): Promise<void>;
   refresh(): Promise<void>;
   invalidateEstimate(): void;
   dispose(): void;
@@ -201,7 +202,7 @@ export function mountDrafting(ctx: PluginFrontendContext, container: HTMLElement
         await snapshot("generationSettings", readSettings());
         if (at !== revision) return;
         unsaved = undefined;
-        const next = await ctx.call<Preflight>("preflight", { nodeIds: picker.ids });
+        const next = await ctx.call<Preflight>("preflight", { nodeIds: picker.ids, backfillNodeIds: picker.backfillNodeIds });
         if (alive() && at === revision) preflight = next;
       })), estimate);
     estimateButton.disabled = picker.isStale;
@@ -210,9 +211,9 @@ export function mountDrafting(ctx: PluginFrontendContext, container: HTMLElement
   const unsubscribe = ctx.onResync(() => { invalidate(); renderPreflight(); void run(async () => { await load(); await onCardsChanged(); }); });
   void run(load);
   return {
-    select: nodeIds => {
-      invalidate(); renderPreflight(); picker.select(nodeIds, true); const at = ++choiceRevision;
-      return run(async () => { await load(); if (at === choiceRevision) picker.select(nodeIds); });
+    select: (nodeIds, backfillNodeIds = []) => {
+      invalidate(); renderPreflight(); picker.select(nodeIds, backfillNodeIds, true); const at = ++choiceRevision;
+      return run(async () => { await load(); if (at === choiceRevision) picker.select(nodeIds, backfillNodeIds); });
     },
     refresh,
     invalidateEstimate: () => { invalidate(); renderPreflight(); },
