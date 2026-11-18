@@ -216,3 +216,58 @@ test('disable unregisters the worker definition and operations', () => withHost(
   await close();
   assert.equal(host.workers.registered, 0); assert.equal(c.handlers.size, 0);
 }));
+
+test('a crash between cancelled task saves and the batch save still recovers as cancelled', () => withHost(async (host, directory) => {
+  let c = host.context(directory); let close = await activate(c.ctx);
+  await c.call('generationSettings', { model: { provider: 'scratch', id: 'writer' }, cardsPerNode: 1 });
+  const p = await c.call('preflight', { nodeIds: ['n_a'] });
+  await c.call('generate', { preflightId: p.preflightId });
+  await until(() => host.workers.starts.length === 1);
+  await close();
+  const state = JSON.parse(await readFile(statePath(directory), 'utf8'));
+  state.generations[0].tasks[0].status = 'cancelled';
+  await writeFile(statePath(directory), JSON.stringify(state));
+  c = host.context(directory); close = await activate(c.ctx);
+  try { assert.equal((await c.call('generationStatus')).generations[0].status, 'cancelled'); }
+  finally { await close(); }
+}));
+
+test('persisted applied results are shape-checked only, so stricter writer rules never lock old state', () => withHost(async (host, directory) => {
+  let c = host.context(directory); let close = await activate(c.ctx);
+  await c.call('generationSettings', { model: { provider: 'scratch', id: 'writer' }, cardsPerNode: 1 });
+  const p = await c.call('preflight', { nodeIds: ['n_a'] });
+  await c.call('generate', { preflightId: p.preflightId });
+  await until(() => host.workers.starts.length === 1);
+  host.workers.succeed('task-1', result(['n_a']));
+  await until(async () => (await c.call('generationStatus')).generations[0].status === 'completed');
+  await close();
+  const state = JSON.parse(await readFile(statePath(directory), 'utf8'));
+  // Content a current writer check would reject (names the idea on the front).
+  state.generations[0].tasks[0].result.targets[0].cards[0].front = 'What does Alpha say?';
+  await writeFile(statePath(directory), JSON.stringify(state));
+  c = host.context(directory); close = await activate(c.ctx);
+  await close();
+  state.generations[0].tasks[0].result.targets[0].nodeId = 'n_elsewhere';
+  const broken = JSON.stringify(state);
+  await writeFile(statePath(directory), broken);
+  await assert.rejects(activate(host.context(directory).ctx), /Invalid applied generation/);
+  assert.equal(await readFile(statePath(directory), 'utf8'), broken);
+}));
+
+test('an unexpected driver failure interrupts the batch instead of leaving it running', () => withHost(async (host, directory) => {
+  const c = host.context(directory); const close = await activate(c.ctx);
+  try {
+    host.workers.wait = () => Promise.reject(new Error('Host storage failed.'));
+    await c.call('generationSettings', { model: { provider: 'scratch', id: 'writer' }, cardsPerNode: 1 });
+    const p = await c.call('preflight', { nodeIds: ['n_a'] });
+    await c.call('generate', { preflightId: p.preflightId });
+    await until(async () => (await c.call('generationStatus')).generations[0].status === 'interrupted', 'interrupted');
+    const snap = await c.call('generationStatus');
+    assert.match(snap.generations[0].tasks[0].error, /Host storage failed/);
+    assert.match(snap.recoveryError, /Host storage failed/);
+    assert.deepEqual(host.workers.cancelled, ['task-1']);
+    // New work is not blocked.
+    const q = await c.call('preflight', { nodeIds: ['n_b'] });
+    await c.call('generate', { preflightId: q.preflightId });
+  } finally { await close(); }
+}));

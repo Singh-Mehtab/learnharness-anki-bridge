@@ -127,8 +127,54 @@ function mount(ctx: PluginFrontendContext, container: HTMLElement, signal: Abort
     } finally {
       busy = false;
       if (alive()) controls.disabled = false;
+      if (refreshPending && alive()) void backgroundRefresh();
     }
   }
+  /** Background drafts arrive while the user may be typing. Never skip a refresh, and never
+   * drop unsaved form input, open sections or the caret when re-rendering for one. */
+  let refreshPending = false;
+  async function backgroundRefresh(): Promise<void> {
+    if (!alive()) return;
+    if (busy) { refreshPending = true; return; }
+    refreshPending = false;
+    try {
+      const fresh = await ctx.call<Snapshot>("snapshot");
+      if (!alive()) return;
+      if (busy) { refreshPending = true; return; }
+      state = fresh;
+      const kept = captureForm();
+      render();
+      restoreForm(kept);
+    } catch { refreshPending = true; }
+  }
+  interface Kept { values: Map<string, { value: string; checked: boolean }>; open: Set<string>; focus?: { key: string; start: number | null; end: number | null } }
+  function captureForm(): Kept {
+    const values = new Map<string, { value: string; checked: boolean }>(), open = new Set<string>();
+    for (const node of controls.querySelectorAll<HTMLElement>("[data-keep]")) {
+      const key = node.dataset.keep!;
+      if (node.tagName === "DETAILS") { if ((node as HTMLDetailsElement).open) open.add(key); }
+      else { const input = node as HTMLInputElement; values.set(key, { value: input.value, checked: !!input.checked }); }
+    }
+    const active = document.activeElement as HTMLInputElement | null;
+    const focus = active?.dataset?.keep && controls.contains(active)
+      ? { key: active.dataset.keep, start: active.selectionStart ?? null, end: active.selectionEnd ?? null } : undefined;
+    return { values, open, focus };
+  }
+  function restoreForm(kept: Kept): void {
+    for (const node of controls.querySelectorAll<HTMLElement>("[data-keep]")) {
+      const key = node.dataset.keep!;
+      if (node.tagName === "DETAILS") { (node as HTMLDetailsElement).open = kept.open.has(key); continue; }
+      const saved = kept.values.get(key), input = node as HTMLInputElement;
+      if (!saved) continue;
+      if (input.type === "checkbox") input.checked = saved.checked;
+      else if (input.value !== saved.value) { input.value = saved.value; const view = input.ownerDocument.defaultView as (Window & typeof globalThis) | null; input.dispatchEvent(new (view?.Event ?? Event)("input")); }
+    }
+    if (kept.focus) {
+      const target = [...controls.querySelectorAll<HTMLInputElement>("[data-keep]")].find(node => node.dataset.keep === kept.focus!.key);
+      if (target) { target.focus(); if (kept.focus.start !== null) try { target.setSelectionRange(kept.focus.start, kept.focus.end); } catch { /* Not a text field. */ } }
+    }
+  }
+  const keep = <T extends HTMLElement>(node: T, key: string): T => { node.dataset.keep = key; return node; };
   function button(label: string, action: () => Promise<void>): HTMLButtonElement {
     const node = element("button", label);
     node.type = "button";
@@ -165,11 +211,12 @@ function mount(ctx: PluginFrontendContext, container: HTMLElement, signal: Abort
     }
     if (state.recoveryError) controls.append(element("p", `Recovery error: ${state.recoveryError}`));
     const url = textInput(state.settings.url || "http://127.0.0.1:8765");
-    const key = textInput();
+    keep(url, "url");
+    const key = keep(textInput(), "api-key");
     key.type = "password";
     key.autocomplete = "off";
     key.placeholder = state.settings.hasApiKey ? "Saved. Leave blank to keep it." : "Optional API key";
-    const clearKey = element("input");
+    const clearKey = keep(element("input"), "clear-key");
     clearKey.type = "checkbox";
     const urlWarning = element("p");
     const warn = () => { urlWarning.textContent = /localhost/i.test(url.value) ? "Use 127.0.0.1 instead of localhost to avoid IPv6 connection failures." : "Use the AnkiConnect root URL, not an API path."; };
@@ -218,10 +265,10 @@ function mount(ctx: PluginFrontendContext, container: HTMLElement, signal: Abort
       }));
     if (settingsOnly) return;
 
-    const manual = element("details");
+    const manual = keep(element("details"), "manual");
     manual.append(element("summary", "Write a card by hand"));
-    const front = textArea(), back = textArea(), extra = textArea();
-    const kind = element("select");
+    const front = keep(textArea(), "manual-front"), back = keep(textArea(), "manual-back"), extra = keep(textArea(), "manual-extra");
+    const kind = keep(element("select"), "manual-kind");
     for (const name of ["recall", "why", "compose", "discriminate"]) {
       const option = element("option", name); option.value = name; kind.append(option);
     }
@@ -231,7 +278,7 @@ function mount(ctx: PluginFrontendContext, container: HTMLElement, signal: Abort
       }));
     controls.append(manual);
     controls.append(element("h3", "Review and send"));
-    const deck = textInput(deckChoice ?? state.settings.lastDeck);
+    const deck = keep(textInput(deckChoice ?? state.settings.lastDeck), "deck");
     const decks = element("datalist");
     decks.id = "anki-bridge-decks";
     for (const name of connection?.decks ?? []) { const option = element("option"); option.value = name; decks.append(option); }
@@ -272,7 +319,7 @@ function mount(ctx: PluginFrontendContext, container: HTMLElement, signal: Abort
       if (card.noteId !== undefined) row.append(element("p", `Anki note ID: ${card.noteId}`));
       const editable = ["draft", "approved", "failed"].includes(card.status) && card.noteId === undefined;
       const cached = edits.get(card.id) ?? card;
-      const cardFront = textArea(cached.front), cardBack = textArea(cached.back), cardExtra = textArea(cached.extra);
+      const cardFront = keep(textArea(cached.front), `card-${card.id}-front`), cardBack = keep(textArea(cached.back), `card-${card.id}-back`), cardExtra = keep(textArea(cached.extra), `card-${card.id}-extra`);
       cardFront.readOnly = cardBack.readOnly = cardExtra.readOnly = !editable;
       const columns = element("div");
       columns.className = "anki-bridge-review-columns";
@@ -331,13 +378,7 @@ function mount(ctx: PluginFrontendContext, container: HTMLElement, signal: Abort
   }
   const unsubscribe = ctx.onResync(() => { void run(refresh); });
   void run(refresh);
-  // Generated drafts arrive in the background. Re-render without dropping unsaved edits (kept in `edits`).
-  const unmountDrafting = settingsOnly ? () => {} : mountDrafting(ctx, drafting, signal, async () => {
-    if (!alive()) return;
-    if (busy) return;
-    const fresh = await ctx.call<Snapshot>("snapshot");
-    if (alive() && !busy) { state = fresh; render(); }
-  });
+  const unmountDrafting = settingsOnly ? () => {} : mountDrafting(ctx, drafting, signal, backgroundRefresh);
   return () => { disposed = true; unsubscribe(); unmountDrafting(); disposePreviews(); root.remove(); };
 }
 

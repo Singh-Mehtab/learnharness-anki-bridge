@@ -11,7 +11,8 @@ async function setup() {
   const controller = new AbortController();
   const cards = ["one", "two"].map(id => ({ id, front: `Question ${id}`, back: "Answer", extra: "", kind: "recall", status: "draft", sourceStatement: "<script>Untrusted source</script>", sourceChanged: true }));
   const calls: Array<{ name: string; input: any }> = [];
-  const state = { settings: { url: "http://127.0.0.1:18766", lastDeck: "Scratch", hasApiKey: false }, destination: null, cards };
+  const state = { settings: { url: "http://127.0.0.1:18766", lastDeck: "Scratch", hasApiKey: false }, destination: null, cards,
+    generationSettings: { cardsPerNode: 2, enabledKinds: ["recall"], model: null }, generations: [] };
   let view!: PluginView, dialog: HTMLElement | undefined;
   let previewDisposals = 0;
   const ctx = {
@@ -21,10 +22,13 @@ async function setup() {
       calls.push({ name, input });
       if (name === "edit") Object.assign(cards.find(c => c.id === input.id)!, input, { status: "draft" });
       if (name === "drop") cards.filter(c => input.ids.includes(c.id)).forEach(c => { c.status = "dropped"; });
+      if (name === "generationContext") return { nodes: [], catalog: {} };
       if (name === "approve") cards.filter(c => input.ids.includes(c.id)).forEach(c => { c.status = "approved"; });
       return structuredClone(state);
     },
     ui: {
+      mountKnowledgePicker: () => ({ update: () => {}, dispose: () => {} }),
+      mountModelPicker: () => ({ update: () => {}, dispose: () => {} }),
       mountMarkdown: (target: HTMLElement, props: { text: string }) => {
         target.textContent = props.text;
         return { update: (next: { text: string }) => { target.textContent = next.text; }, dispose: () => { previewDisposals++; } };
@@ -79,5 +83,38 @@ test("review drops unsent cards and bulk send excludes dropped cards", async () 
     f.button("Approve card").click(); await tick();
     f.button("Send approved cards, 1").click(); await tick();
     assert.deepEqual(f.calls.find(c => c.name === "send")!.input, { ids: ["two"], deck: "Scratch" });
+  } finally { await f.close(); }
+});
+
+test("background draft refresh keeps unsaved hand-written text, open sections and review edits", async () => {
+  const f = await setup();
+  try {
+    const details = f.container.querySelector("details")! as unknown as HTMLDetailsElement;
+    details.open = true;
+    const manualFront = details.querySelector("textarea")! as unknown as HTMLTextAreaElement;
+    manualFront.value = "Half-typed question";
+    const reviewFront = f.container.querySelector("article textarea")! as unknown as HTMLTextAreaElement;
+    reviewFront.value = "Unsaved review edit";
+    reviewFront.dispatchEvent(new f.window.Event("input") as unknown as Event);
+    f.cards.push({ id: "three", front: "Question three", back: "Answer", extra: "", kind: "recall", status: "draft", sourceStatement: "S", sourceChanged: false });
+    f.button("Refresh generation").click(); await tick(); await tick();
+    assert.equal(f.container.querySelectorAll("article").length, 3);
+    const nextDetails = f.container.querySelector("details")! as unknown as HTMLDetailsElement;
+    assert.equal(nextDetails.open, true);
+    assert.equal((nextDetails.querySelector("textarea")! as unknown as HTMLTextAreaElement).value, "Half-typed question");
+    assert.equal((f.container.querySelector("article textarea")! as unknown as HTMLTextAreaElement).value, "Unsaved review edit");
+  } finally { await f.close(); }
+});
+
+test("a draft refresh that arrives while the view is busy runs afterwards instead of being skipped", async () => {
+  const f = await setup();
+  try {
+    f.button("Approve all drafts, 2").click(); await tick();
+    assert.ok(f.dialog(), "confirmation keeps the view busy");
+    f.cards.push({ id: "three", front: "Question three", back: "Answer", extra: "", kind: "recall", status: "draft", sourceStatement: "S", sourceChanged: false });
+    f.button("Refresh generation").click(); await tick();
+    assert.equal(f.container.querySelectorAll("article").length, 2);
+    f.dialog()!.querySelectorAll("button")[0]!.click(); await tick(); await tick();
+    assert.equal(f.container.querySelectorAll("article").length, 3);
   } finally { await f.close(); }
 });

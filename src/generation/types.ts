@@ -1,6 +1,5 @@
 import type { CardKind } from '../anki/state.ts';
 import type { WriterInput, WriterResult } from '../writer/types.ts';
-import { validateResult } from '../writer/validate.ts';
 
 export interface GenerationSettings {
   cardsPerNode: number;
@@ -60,6 +59,13 @@ function validWriterInput(v: unknown): v is WriterInput {
     ids.add(t.nodeId); return true;
   });
 }
+function validResultShape(result: unknown, input: WriterInput): boolean {
+  if (!object(result) || !Array.isArray(result.targets)) return false;
+  const ids = new Set(input.targets.map(t => t.nodeId));
+  return result.targets.every(t => object(t) && typeof t.nodeId === 'string' && ids.has(t.nodeId) && Array.isArray(t.cards)
+    && (t.skipReason === undefined || typeof t.skipReason === 'string')
+    && t.cards.every(c => object(c) && ['recall', 'why', 'compose', 'discriminate'].includes(String(c.kind)) && typeof c.front === 'string' && typeof c.back === 'string' && (c.extra === undefined || typeof c.extra === 'string')));
+}
 export function validateGenerations(settings: unknown, generations: unknown): void {
   if (!validGenerationSettings(settings) || !Array.isArray(generations)) throw new Error('Invalid generation state. The file has not been reset.');
   const ids = new Set<string>(), requests = new Set<string>();
@@ -71,7 +77,9 @@ export function validateGenerations(settings: unknown, generations: unknown): vo
       requests.add(t.requestId);
       const input = t.input as WriterInput, sources = t.sources as SourceSnapshot[];
       if (sources.length !== input.targets.length || new Set(sources.map(s => s.nodeId)).size !== sources.length || input.targets.some(n => !sources.some(s => s.nodeId === n.nodeId && s.statement === n.statement))) throw new Error('Generation sources do not match accepted input.');
-      if (t.status === 'applied') validateResult(t.result, { input });
+      // Content rules are enforced once, at apply time. Persisted results get a shape check only,
+      // so a later, stricter writer check never makes an old state file unreadable.
+      if (t.status === 'applied' && !validResultShape(t.result, input)) throw new Error('Invalid applied generation result.');
     }
   }
 }

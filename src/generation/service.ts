@@ -96,7 +96,7 @@ export class GenerationService {
       const g = s.generations.find(g => g.id === id)!;
       if (g.tasks.some(t => ['pending', 'running'].includes(t.status))) return;
       if (g.status === 'cancelled') return;
-      g.status = g.tasks.some(t => t.status === 'interrupted') ? 'interrupted' : g.tasks.some(t => t.status === 'failed') ? 'failed' : 'completed';
+      g.status = g.tasks.some(t => t.status === 'cancelled') ? 'cancelled' : g.tasks.some(t => t.status === 'interrupted') ? 'interrupted' : g.tasks.some(t => t.status === 'failed') ? 'failed' : 'completed';
     });
   }
   private async apply(id: string, requestId: string, worker: PluginTaskSnapshot): Promise<void> {
@@ -219,7 +219,12 @@ export class GenerationService {
           settings: fresh.settings, skipped: fresh.skipped,
           tasks: fresh.batches.map(b => ({ requestId: randomUUID(), status: 'pending', input: b.input, outputAllowance: b.outputAllowance,
             sources: fresh.sources.filter(s => b.input.targets.some(t => t.nodeId === s.nodeId)) })) };
-        await this.delivery.save(s => { s.generations.push(g); });
+        try { await this.delivery.save(s => { s.generations.push(g); }); }
+        catch (error) {
+          // The snapshot can be committed even if a later fsync throws; drive it so it cannot stay stuck.
+          if (this.store.snapshot().generations.some(x => x.id === g.id)) { this.preflights.delete(p.id); this.drive(g.id); }
+          throw error;
+        }
         this.preflights.delete(p.id);
         this.drive(g.id);
       } else if (name === 'cancelGeneration') {
@@ -237,8 +242,21 @@ export class GenerationService {
     });
   }
   private drive(id: string): void {
-    const driver = this.run(id).catch(error => {
-      if (!this.closed && !this.lifetime.signal.aborted) this.delivery.reportRecoveryError(error);
+    const driver = this.run(id).catch(async error => {
+      if (this.closed || this.lifetime.signal.aborted) return;
+      this.delivery.reportRecoveryError(error);
+      // Never leave a batch 'running' without a driver: that would block new generations.
+      try {
+        await this.delivery.exclusive(async () => {
+          this.active();
+          for (const t of this.generation(id).tasks.filter(t => ['pending', 'running'].includes(t.status))) {
+            const w = this.findWorker(t);
+            if (w && ['queued', 'running'].includes(w.status)) this.ctx.workers.cancel(w.id);
+            await this.patch(id, t.requestId, { status: 'interrupted', error: `Generation stopped: ${errorText(error)} Retry requires a new preflight.` });
+          }
+          await this.finish(id);
+        }, true);
+      } catch { /* Activation recovery handles it next time. */ }
     });
     this.drivers.add(driver); void driver.finally(() => this.drivers.delete(driver));
   }
