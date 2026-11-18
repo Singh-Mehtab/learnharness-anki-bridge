@@ -43,7 +43,10 @@ async function setup(handler?: (name: string, input: unknown) => unknown | Promi
       if (name === "connection") return { profile: "Throwaway <test>", decks: ["Scratch", "New::Deck"] };
       return structuredClone(state);
     },
-    ui: { openDialog: (props: { content: HTMLElement; onClose: () => void }) => {
+    ui: { mountMarkdown: (target: HTMLElement, props: { text: string }) => {
+      target.textContent = props.text;
+      return { update: (next: { text: string }) => { target.textContent = next.text; }, dispose: () => {} };
+    }, openDialog: (props: { content: HTMLElement; onClose: () => void }) => {
       dialog = props.content;
       window.document.body.append(dialog as unknown as Parameters<typeof window.document.body.append>[0]);
       return { dispose: () => { dialog?.remove(); dialog = undefined; dialogDisposals++; } };
@@ -134,7 +137,7 @@ test("plugin UI hand-written draft, saved edits, explicit approval and deck send
     const card = { id: "test-id", front: "Question", back: "Answer", extra: "", kind: "recall", status: "draft" };
     f.state.cards.push(card);
     f.button("Refresh cards").click(); await tick();
-    assert.equal(f.container.querySelectorAll("article button").length, 2);
+    assert.equal(f.container.querySelectorAll("article button").length, 3);
     const editor = f.container.querySelector("article textarea")! as unknown as HTMLTextAreaElement;
     editor.value = "Edited";
     f.button("Approve card").click(); await tick();

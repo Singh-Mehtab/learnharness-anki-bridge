@@ -1,22 +1,22 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="296" viewBox="0 0 1200 296" role="img" aria-labelledby="title description">
-  <title id="title">Anki Bridge target workflow and development status</title>
-  <desc id="description">LearnHarness graph selection is planned for 0.3.0. The shared card writer is merged in 0.1.1. In-app draft review and approval are planned for 0.3.0. Anki delivery through AnkiConnect is implemented in 0.2.0 for hand-written cards.</desc>
+  <title id="title">Anki Bridge workflow and development status</title>
+  <desc id="description">LearnHarness graph selection and in-app draft review and approval are implemented in 0.3.0, pending review. The shared card writer was merged in 0.1.1. Anki delivery through AnkiConnect was merged in 0.2.0.</desc>
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#64748b"/></marker>
   </defs>
   <rect width="1200" height="296" rx="20" fill="#f6f7f9"/>
   <g font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">
-    <text x="32" y="39" font-size="15" font-weight="700" letter-spacing="2" fill="#475569">TARGET WORKFLOW</text>
+    <text x="32" y="39" font-size="15" font-weight="700" letter-spacing="2" fill="#475569">WORKFLOW</text>
     <text x="32" y="67" font-size="16" fill="#475569">Draft from a graph. Approve before sending. Review in Anki.</text>
     <g fill="none" stroke="#64748b" stroke-width="2" marker-end="url(#arrow)">
       <path d="M 273 164 H 310"/>
       <path d="M 563 164 H 600"/>
       <path d="M 853 164 H 890"/>
     </g>
-    <rect x="32" y="96" width="240" height="139" rx="12" fill="#fff" stroke="#cbd5e1" stroke-dasharray="5 4"/>
+    <rect x="32" y="96" width="240" height="139" rx="12" fill="#eff6ff" stroke="#2563eb"/>
     <rect x="322" y="96" width="240" height="139" rx="12" fill="#ecfdf5" stroke="#15803d"/>
-    <rect x="612" y="96" width="240" height="139" rx="12" fill="#fff" stroke="#cbd5e1" stroke-dasharray="5 4"/>
-    <rect x="902" y="96" width="266" height="139" rx="12" fill="#eff6ff" stroke="#2563eb"/>
+    <rect x="612" y="96" width="240" height="139" rx="12" fill="#eff6ff" stroke="#2563eb"/>
+    <rect x="902" y="96" width="266" height="139" rx="12" fill="#ecfdf5" stroke="#15803d"/>
     <g font-size="21" font-weight="650" fill="#0f172a">
       <text x="52" y="133">LearnHarness graph</text>
       <text x="342" y="133">Card writer</text>
@@ -26,14 +26,14 @@
     <g font-size="16" fill="#334155">
       <text x="52" y="166">Select source nodes</text>
       <text x="342" y="166">Draft with graph context</text>
-      <text x="632" y="166">Edit, keep or discard</text>
+      <text x="632" y="166">Edit, approve or drop</text>
       <text x="922" y="166">Delivery via AnkiConnect</text>
     </g>
     <g font-size="14" font-weight="600">
-      <text x="52" y="209" fill="#475569">0.3.0 · PLANNED</text>
+      <text x="52" y="209" fill="#1e40af">0.3.0 · IN REVIEW</text>
       <text x="342" y="209" fill="#166534">0.1.1 · MERGED</text>
-      <text x="632" y="209" fill="#475569">0.3.0 · PLANNED</text>
-      <text x="922" y="209" fill="#1e40af">0.2.0 · IMPLEMENTED</text>
+      <text x="632" y="209" fill="#1e40af">0.3.0 · IN REVIEW</text>
+      <text x="922" y="209" fill="#166534">0.2.0 · MERGED</text>
     </g>
     <text x="32" y="271" font-size="15" fill="#475569">One-way delivery. Existing Anki notes and scheduling stay untouched.</text>
   </g>

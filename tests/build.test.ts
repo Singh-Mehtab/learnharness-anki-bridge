@@ -17,7 +17,7 @@ function fixture() {
   for (const file of ["manifest.json", "LICENSE", "THIRD_PARTY_NOTICES.md"]) fs.copyFileSync(path.join(source, file), path.join(project, file));
   fs.copyFileSync(path.join(source, "src/styles.css"), path.join(project, "src/styles.css"));
   // Real frontend source, synthetic backend only. Never write the parent's backend file.
-  fs.copyFileSync(path.join(source, "src/main.ts"), path.join(project, "src/main.ts"));
+  for (const file of ["src/main.ts", "src/drafting-ui.ts"]) fs.copyFileSync(path.join(source, file), path.join(project, file));
   fs.writeFileSync(path.join(project, "src/backend.ts"), 'import { basename } from "node:path"; export function activate() { return basename("/scratch/fixture"); }\n');
   fs.writeFileSync(path.join(project, "package.json"), '{"type":"module"}');
   fs.mkdirSync(path.join(project, "data"));
@@ -34,7 +34,7 @@ test("build emits the public API1 layout with real ESM frontend and CJS backend,
     assert.equal(manifest.id, "anki-bridge");
     assert.equal(manifest.apiVersion, 1);
     assert.equal(manifest.minAppVersion, "0.6.1");
-    assert.equal(manifest.version, "0.2.0");
+    assert.equal(manifest.version, "0.3.0");
     const frontend = await import(pathToFileURL(path.join(f.dist, "main.js")).href);
     assert.equal(typeof frontend.activate, "function");
     const backend = createRequire(import.meta.url)(path.join(f.dist, "backend.cjs"));

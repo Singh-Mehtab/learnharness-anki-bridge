@@ -1,9 +1,9 @@
 {
   "name": "learnharness-anki-bridge",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
-  "description": "Unofficial one-way LearnHarness AnkiConnect bridge; hand-written card testing shell.",
+  "description": "Unofficial graph-to-Anki drafting, review and one-way AnkiConnect delivery.",
   "license": "AGPL-3.0-only",
   "engines": {
     "node": ">=23.6"
