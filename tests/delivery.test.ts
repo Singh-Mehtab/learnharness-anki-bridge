@@ -189,7 +189,7 @@ test('note fields and ownership are checked on every send, never silently repair
     const b = await f.draft('New prompt'); await f.approve([b]);
     f.setFields(['Front', 'Back', 'Extra', 'Source', 'LH_Node']);
     await assert.rejects(f.send([b]), /LH_ID|field/i); assert.equal(f.notes.length, 1);
-    await f.service.command('repairFields'); await f.send([b]); assert.equal(f.notes.length, 2);
+    await f.service.command('repairFields', { expectedDestination: f.snap().destination }); await f.send([b]); assert.equal(f.notes.length, 2);
     const c = await f.draft('Third prompt'); await f.approve([c]); f.setCss('user model');
     await assert.rejects(f.send([c]), /own|marker|Anki Bridge|LearnHarness/i); assert.equal(f.notes.length, 2);
     await assert.rejects(f.service.command('updateStyling', {}), /Confirm/);
@@ -256,6 +256,24 @@ test('a saved API key stays with its URL and is never sent to a changed endpoint
     assert.equal(f.snap().settings.hasApiKey, false);
     await f.service.command('settings', { url: 'http://127.0.0.1:19999/', apiKey: 'new-endpoint-key' });
     assert.equal(f.snap().settings.hasApiKey, true);
+  } finally { await f.close(); }
+});
+
+test('note type maintenance rejects a view that shows an old or missing pairing before any Anki call', async () => {
+  const f = await fixture();
+  try {
+    // Sending once creates the owned note type in the fake collection.
+    await f.pair(); const id = await f.draft(); await f.approve([id]); await f.send([id]);
+    const shown = f.snap().destination;
+    f.setProfile('Different'); await f.pair();
+    const before = f.calls.length;
+    for (const [name, extra] of [['repairFields', {}], ['updateStyling', { confirmed: true }]] as const) {
+      await assert.rejects(f.service.command(name, { ...extra, expectedDestination: shown }), /destination changed/);
+      await assert.rejects(f.service.command(name, { ...extra }), /destination changed/);
+    }
+    assert.equal(f.calls.length, before);
+    await f.service.command('repairFields', { expectedDestination: f.snap().destination });
+    assert.ok(f.calls.length > before);
   } finally { await f.close(); }
 });
 

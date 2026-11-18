@@ -29,6 +29,7 @@ try {
   await service.command('settings', { url: url.origin });
   await service.command('pair', { confirmed: true });
   assert.equal(service.snapshot().destination?.profile, expectedProfile);
+  const expectedDestination = service.snapshot().destination;
   evidence.push('connection, active profile, deck listing and durable pairing');
   async function draft(front: string, back: string) {
     const state = await service.command('draft', { front, back, extra: 'Integration test only.', nodeId: `scratch-${run}`, nodeName: 'Scratch node', sessionName: 'Scratch session' }) as PublicSnapshot;
@@ -36,15 +37,15 @@ try {
   }
   const front = `Run ${run}: what is conserved in an isolated collision?`;
   const first = await draft(front, 'Momentum.');
-  await assert.rejects(service.command('send', { ids: [first], deck }), /Approve/);
+  await assert.rejects(service.command('send', { ids: [first], deck, expectedDestination }), /Approve/);
   await service.command('approve', { ids: [first] });
-  await service.command('send', { ids: [first], deck });
+  await service.command('send', { ids: [first], deck, expectedDestination });
   assert.equal(service.snapshot().cards[0].status, 'sent');
   evidence.push('owned note type creation/check, new deck and single-note delivery');
   const second = await draft(front, 'An intentionally duplicate front.');
   const third = await draft(`Run ${run}: evaluate $x_i^2$ for $x_i=3$.\n\n\`\`\`python\nif True:\n    print("<safe>")\n\`\`\``, '$9$');
   await service.command('approve', { ids: [second, third] });
-  await service.command('send', { ids: [second, third], deck });
+  await service.command('send', { ids: [second, third], deck, expectedDestination });
   assert.equal(service.snapshot().cards[1].status, 'failed');
   assert.equal(service.snapshot().cards[2].status, 'sent');
   evidence.push('real duplicate rejection reported per card while the next card succeeds');
@@ -57,9 +58,9 @@ try {
   await client.call('modelFieldRemove', { modelName: MODEL_NAME, fieldName: 'LH_ID' });
   const fourth = await draft(`Run ${run}: which metadata identifies a delivery?`, 'A UUID.');
   await service.command('approve', { ids: [fourth] });
-  await assert.rejects(service.command('send', { ids: [fourth], deck }), /LH_ID|field/i);
-  await service.command('repairFields');
-  await service.command('send', { ids: [fourth], deck });
+  await assert.rejects(service.command('send', { ids: [fourth], deck, expectedDestination }), /LH_ID|field/i);
+  await service.command('repairFields', { expectedDestination });
+  await service.command('send', { ids: [fourth], deck, expectedDestination });
   assert.equal(service.snapshot().cards[3].status, 'sent');
   evidence.push('real missing-field block and explicit add-only repair');
   // Kill a real bridge process at the write boundary after real Anki accepted addNote.
@@ -72,7 +73,7 @@ try {
     const store = await StateStore.open(${JSON.stringify(directory)});
     const replace = store.replace.bind(store);
     store.replace = async state => { if (state.cards.some(c => c.id === ${JSON.stringify(crashId)} && c.status === 'sent')) process.kill(process.pid,'SIGKILL'); return replace(state); };
-    await new DeliveryService(store).command('send', {ids:[${JSON.stringify(crashId)}],deck:${JSON.stringify(deck)}});
+    await new DeliveryService(store).command('send', {ids:[${JSON.stringify(crashId)}],deck:${JSON.stringify(deck)},expectedDestination:${JSON.stringify(expectedDestination)}});
     throw Error('Crash injection was not reached');
   `], { stdio: ['ignore', 'ignore', 'pipe'] });
   let childError = ''; child.stderr.on('data', chunk => { childError += chunk; });

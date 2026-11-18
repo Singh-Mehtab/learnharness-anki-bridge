@@ -292,6 +292,9 @@ export class DeliveryService {
         return;
       } else if (name === 'repairFields' || name === 'updateStyling') {
         if (name === 'updateStyling' && value.confirmed !== true) throw new Error('Confirm that Anki-side styling and template edits will be replaced.');
+        // Same guard as send: a stale view must not change another profile's note type.
+        const paired = this.store.snapshot().destination;
+        if (paired) expectDestination(value.expectedDestination, paired, 'The paired Anki destination changed. Check the destination shown and confirm again.');
         const client = this.client();
         await this.destination(client);
         if (name === 'repairFields') await repairFields(client); else await updateStyling(client);

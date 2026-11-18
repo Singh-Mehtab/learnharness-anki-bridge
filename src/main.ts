@@ -235,7 +235,8 @@ function mount(ctx: PluginFrontendContext, container: HTMLElement, signal: Abort
     const savedUrl = state.settings.url, hadKey = state.settings.hasApiKey;
     const warn = () => {
       const base = /localhost/i.test(url.value) ? "Use 127.0.0.1 instead of localhost to avoid IPv6 connection failures." : "Use the AnkiConnect root URL, not an API path.";
-      urlWarning.textContent = hadKey && url.value.trim() !== savedUrl ? `${base} Saving a different URL clears the saved API key. Enter it again if the new endpoint needs one.` : base;
+      const same = (a: string) => { try { return new URL(a.trim()).href === new URL(savedUrl).href; } catch { return a.trim() === savedUrl; } };
+      urlWarning.textContent = hadKey && !same(url.value) ? `${base} Saving a different URL clears the saved API key. Enter it again if the new endpoint needs one.` : base;
     };
     url.oninput = warn;
     warn();
@@ -268,15 +269,17 @@ function mount(ctx: PluginFrontendContext, container: HTMLElement, signal: Abort
     controls.append(element("h3", "Note type maintenance"),
       element("p", "Repairs apply only to the plugin-owned LearnHarness Basic note type. They do not edit note content."),
       button("Add missing fields", async () => {
-        if (await confirmAction(ctx, signal, "Add missing fields", "Add missing fields to LearnHarness Basic in the paired profile? Existing templates are not changed.")) {
+        const target = shown;
+        if (await confirmAction(ctx, signal, "Add missing fields", `Add missing fields to LearnHarness Basic in ${target ? `profile ${target.profile} at ${target.url}` : "the paired profile"}? Existing templates are not changed.`)) {
           if (!alive()) return;
-          await ctx.call("repairFields");
+          await ctx.call("repairFields", { expectedDestination: target });
           await refresh();
         }
       }), button("Update note type styling", async () => {
-        if (await confirmAction(ctx, signal, "Replace styling and templates", "This replaces LearnHarness Basic styling and templates. Your Anki-side template edits will be lost. Note content and review history are not changed.")) {
+        const target = shown;
+        if (await confirmAction(ctx, signal, "Replace styling and templates", `This replaces LearnHarness Basic styling and templates in ${target ? `profile ${target.profile} at ${target.url}` : "the paired profile"}. Your Anki-side template edits will be lost. Note content and review history are not changed.`)) {
           if (!alive()) return;
-          await ctx.call("updateStyling", { confirmed: true });
+          await ctx.call("updateStyling", { confirmed: true, expectedDestination: target });
           await refresh();
         }
       }));
