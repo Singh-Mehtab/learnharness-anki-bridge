@@ -126,12 +126,14 @@ test('dismissal rejects malformed, stale and missing sources and never drops wai
   c.ctx.learning.graph = original; assert.equal(host.workers.starts.length, 0);
 }));
 
-test('new dismissal blocks old confirmation; restore, pairing and coverage changes require fresh estimates', () => fixture(async (_host, c) => {
+test('dismiss/restore cannot revive old confirmation and changed coverage requires a fresh estimate', () => fixture(async (host, c) => {
   await c.call('generationSettings', { model: { provider: 'scratch', id: 'writer' } });
   const p = await c.call('preflight', { nodeIds: [node.id] });
   await c.call('dismissNode', { nodeId: node.id, statementHash: source.statementHash });
-  await assert.rejects(c.call('generate', { preflightId: p.preflightId }), /dismissed/);
+  await assert.rejects(c.call('generate', { preflightId: p.preflightId }), /expired/);
   await c.call('restoreNode', { nodeId: node.id, statementHash: source.statementHash });
+  await assert.rejects(c.call('generate', { preflightId: p.preflightId }), /expired/);
+  assert.equal(host.workers.starts.length, 0);
   const next = await c.call('preflight', { nodeIds: [node.id] });
   await c.call('draft', { nodeId: node.id, front: 'New prompt', back: 'New answer' });
   await assert.rejects(c.call('generate', { preflightId: next.preflightId }), /stale/);
@@ -148,6 +150,20 @@ test('pending generation is activity, blocks bulk selection/dismissal, and zero-
   await until(async () => (await c.call('generationStatus')).generations[0].status === 'completed');
   n = (await c.call<CoverageContext>('coverageContext')).nodes[0];
   assert.equal(n.coverage.state, 'no-cards'); assert.equal(n.coverage.uncarded, true); assert.equal(n.coverage.skipReason, 'Prior knowledge');
+  await c.call('dismissNode', { nodeId: node.id, statementHash: source.statementHash });
+  assert.equal((await c.call<CoverageContext>('coverageContext')).nodes[0].coverage.state, 'dismissed');
+}));
+
+test('dismissal racing a card-producing worker result preserves the draft and refuses dismissal', () => fixture(async (host, c) => {
+  await c.call('generationSettings', { model: { provider: 'scratch', id: 'writer' } });
+  const p = await c.call('preflight', { nodeIds: [node.id] }); await c.call('generate', { preflightId: p.preflightId });
+  await until(() => host.workers.starts.length === 1);
+  host.workers.succeed('task-1', { targets: [{ nodeId: node.id, cards: [{ kind: 'recall', front: 'Which condition makes this fixture result valid?', back: 'Assumption A.' }] }] });
+  await assert.rejects(c.call('dismissNode', { nodeId: node.id, statementHash: source.statementHash }), /waiting|settle generation/);
+  await until(async () => (await c.call('generationStatus')).generations[0].status === 'completed');
+  assert.equal((await c.call('snapshot')).cards.length, 1);
+  await assert.rejects(c.call('dismissNode', { nodeId: node.id, statementHash: source.statementHash }), /waiting/);
+  assert.equal((await c.call<CoverageContext>('coverageContext')).nodes[0].coverage.state, 'drafts-waiting');
 }));
 
 test('migrations from 1/2/3 retain supported data; corrupt and future dismissals never reset a file', async () => {

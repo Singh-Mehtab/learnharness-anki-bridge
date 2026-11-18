@@ -11,6 +11,7 @@ export async function activate(ctx: PluginBackendContext): Promise<() => Promise
   const coverage = new CoverageService(ctx, store, service);
   service.coverageContext = () => coverage.snapshot();
   const generation = new GenerationService(ctx, store, service);
+  coverage.onChanged = () => generation.invalidatePreflights();
   const session = new SessionService(ctx.learning, store, service, { signal: ctx.signal });
   // Flag notes are part of the writer prompt, so editing a note makes an open estimate stale.
   generation.flagNotes = () => session.flagNotes();
@@ -27,7 +28,10 @@ export async function activate(ctx: PluginBackendContext): Promise<() => Promise
     await service.activate();
     if (ctx.signal.aborted) throw new Error('Anki Bridge activation was cancelled.');
     for (const name of ['snapshot', 'settings', 'connection', 'pair', 'draft', 'edit', 'approve', 'send', 'reconcile', 'presence', 'show', 'repairFields', 'updateStyling', 'drop']) {
-      handlers.push(ctx.handle(name, input => service.command(name, input ?? {})));
+      handlers.push(ctx.handle(name, input => {
+        if (name === 'settings' || name === 'pair') generation.invalidatePreflights();
+        return service.command(name, input ?? {});
+      }));
     }
     for (const name of GENERATION_OPERATIONS) handlers.push(ctx.handle(name, input => generation.command(name, input ?? {})));
     for (const name of SESSION_OPERATIONS) handlers.push(ctx.handle(name, input => session.command(name, input ?? {})));

@@ -57,6 +57,8 @@ export class GenerationService {
     if (ctx.signal.aborted) this.abort(); else ctx.signal.addEventListener('abort', this.abort, { once: true });
     delivery.sourceStatements = () => new Map(ctx.learning.graph().propositions.map(n => [n.id, n.statement]));
   }
+  /** Reversible coverage/pairing edits must not revive an earlier confirmation. */
+  invalidatePreflights(): void { this.preflights.clear(); }
   private active(): void {
     if (this.closed || this.lifetime.signal.aborted) throw new Error('Anki Bridge is disabled.');
   }

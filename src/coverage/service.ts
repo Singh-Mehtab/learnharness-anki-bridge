@@ -14,6 +14,7 @@ export function graphCoverage(graph: { propositions: readonly { id: string; name
 /** Graph reads never catch failures as an empty graph. Mutations share delivery's writer fence. */
 export class CoverageService {
   private closed = false;
+  onChanged?: () => void;
   private readonly ctx: PluginBackendContext;
   private readonly store: StateStore;
   private readonly delivery: DeliveryService;
@@ -39,12 +40,14 @@ export class CoverageService {
       if (node.statementHash !== value.statementHash) throw new Error('Source changed. Refresh before changing its dismissal.');
       if (name === 'dismissNode') {
         if (!node.coverage.canDismiss) throw new Error('Review or drop waiting cards, settle generation or delivery, or restore the existing dismissal first. Current sent coverage cannot be dismissed.');
+        this.onChanged?.();
         await this.delivery.save(state => {
           state.dismissals = state.dismissals.filter(d => d.nodeId !== node.id);
           state.dismissals.push({ nodeId: node.id, statementHash: node.statementHash, dismissedAt: new Date().toISOString() });
         });
       } else {
         if (!node.coverage.dismissed) throw new Error('This statement has no current dismissal. Refresh the graph.');
+        this.onChanged?.();
         await this.delivery.save(state => { state.dismissals = state.dismissals.filter(d => d.nodeId !== node.id); });
       }
       return this.snapshot();
