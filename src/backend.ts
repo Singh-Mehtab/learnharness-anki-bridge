@@ -18,7 +18,8 @@ export async function activate(ctx: PluginBackendContext): Promise<() => Promise
   const close = async () => {
     for (const unregister of handlers.splice(0)) unregister();
     session.close();
-    try { await generation.close(); } finally { await service.close(); }
+    // Generation cleanup can still read delivery snapshots while it settles.
+    try { await generation.close(); } finally { coverage.close(); await service.close(); }
   };
   try {
     if (ctx.signal.aborted) throw new Error('Anki Bridge activation was cancelled.');

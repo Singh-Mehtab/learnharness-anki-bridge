@@ -13,14 +13,16 @@ export function graphCoverage(graph: { propositions: readonly { id: string; name
 
 /** Graph reads never catch failures as an empty graph. Mutations share delivery's writer fence. */
 export class CoverageService {
+  private closed = false;
   private readonly ctx: PluginBackendContext;
   private readonly store: StateStore;
   private readonly delivery: DeliveryService;
   constructor(ctx: PluginBackendContext, store: StateStore, delivery: DeliveryService) {
     this.ctx = ctx; this.store = store; this.delivery = delivery;
   }
+  close(): void { this.closed = true; }
   snapshot(): CoverageContext {
-    if (this.ctx.signal.aborted) throw new Error('Anki Bridge is disabled.');
+    if (this.closed || this.ctx.signal.aborted) throw new Error('Anki Bridge is disabled.');
     return graphCoverage(this.ctx.learning.graph(), this.store.snapshot());
   }
   async command(name: string, input: unknown = {}): Promise<CoverageContext> {
