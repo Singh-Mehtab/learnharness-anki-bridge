@@ -76,7 +76,7 @@ The 0.2.0 tests used LearnHarness 0.6.1, Anki 26.08.1 and AnkiConnect builds 26.
 
 ## Development setup
 
-Use Node.js 23.6 or newer, npm, and `zip` and `unzip` for the packaging tests:
+Use Node.js 23.6 or newer, npm, and Info-ZIP-compatible `zip` and `unzip` for the packaging tests. The tests need `unzip -Z1`, which BusyBox `unzip` does not support.
 
 ```sh
 npm ci

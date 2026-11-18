@@ -22,7 +22,9 @@ LearnHarness community plugins run local code with your app's permissions. Only 
 2. Extract the new zip separately. Move the old `anki-bridge/dist/` to a backup location outside the plugins directory, then put the extracted `dist/` in its place. **Replace only `dist/`.** Do not replace the `anki-bridge` folder, merge the two code folders or move `data/` into `dist/`.
 3. Restart LearnHarness. Check the version in Community plugins and open the sidebar view. Confirm existing drafts and settings are still there. Enable the plugin if it was disabled before the upgrade.
 
-If there is no `dist/` or you find `dist/data/`, stop before moving anything. If you roll back after the new build has run, keep a private copy of the new data first. Restore your pre-upgrade data backup with the old code if needed. Restoring plugin data does not undo anything already sent to Anki.
+If there is no `dist/` or you find `dist/data/`, stop before moving anything.
+
+To roll back from 0.6.0 to 0.5.0, quit LearnHarness and put back only the old `dist/`. Keep the current `data/`. Both versions use the same state format. Use the pre-upgrade data backup only if the current data is missing or damaged. If possible, keep a private copy of the current data first. Restoring the backup loses any newer drafts, settings and delivery records. It does not undo cards already sent to Anki.
 
 ## Connect and send a card
 

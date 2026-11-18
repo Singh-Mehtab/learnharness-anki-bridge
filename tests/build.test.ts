@@ -100,6 +100,34 @@ test("packaging rejects version skew before changing any existing build", async 
   } finally { f.cleanup(); }
 });
 
+test("packaging refuses symlinked inputs before replacing the build or writing a zip", async () => {
+  const f = fixture();
+  try {
+    fs.mkdirSync(f.dist);
+    fs.writeFileSync(path.join(f.dist, "keep"), "previous build");
+    const styles = path.join(f.project, "src/styles.css");
+    fs.renameSync(styles, `${styles}.original`);
+    fs.symlinkSync(path.join(f.project, "data/keep"), styles);
+    await assert.rejects(packagePlugin(f.project), /regular build input: src\/styles\.css/);
+    fs.unlinkSync(styles);
+    fs.renameSync(`${styles}.original`, styles);
+
+    const src = path.dirname(styles);
+    fs.renameSync(src, `${src}.original`);
+    fs.symlinkSync(`${src}.original`, src, "dir");
+    await assert.rejects(packagePlugin(f.project), /regular source directory: src/);
+    fs.unlinkSync(src);
+    fs.renameSync(`${src}.original`, src);
+
+    const manifest = path.join(f.project, "manifest.json");
+    fs.renameSync(manifest, `${manifest}.original`);
+    fs.symlinkSync(`${manifest}.original`, manifest);
+    await assert.rejects(packagePlugin(f.project), /regular package metadata file: manifest\.json/);
+    assert.equal(fs.readFileSync(path.join(f.dist, "keep"), "utf8"), "previous build");
+    assert.equal(fs.readdirSync(f.project).some(name => name.endsWith(".zip")), false);
+  } finally { f.cleanup(); }
+});
+
 test("build refuses symlink dist and misplaced dist/data, including dangling links, before removing anything", async () => {
   const f = fixture();
   try {

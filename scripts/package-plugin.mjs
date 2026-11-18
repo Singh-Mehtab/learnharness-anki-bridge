@@ -11,7 +11,11 @@ const projectRoot = path.resolve(import.meta.dirname, "..");
 
 export async function packagePlugin(project = projectRoot) {
   const root = path.resolve(project);
-  const json = (name) => JSON.parse(fs.readFileSync(path.join(root, name), "utf8"));
+  const json = (name) => {
+    const file = path.join(root, name);
+    if (!fs.lstatSync(file, { throwIfNoEntry: false })?.isFile()) throw Error(`Expected a regular package metadata file: ${name}`);
+    return JSON.parse(fs.readFileSync(file, "utf8"));
+  };
   const manifest = json("manifest.json");
   const lock = json("package-lock.json");
   const { version } = manifest;
