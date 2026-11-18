@@ -6,7 +6,7 @@ An unofficial LearnHarness community plugin in development. The goal is to draft
 
 ![Target workflow: graph selection, card writing, approval, then delivery to Anki. Each step shows its implementation status.](docs/images/workflow.svg)
 
-The diagram shows the manual drafting workflow implemented on this branch. Session flags and coverage filtering are planned for later versions.
+The diagram shows the manual drafting workflow implemented on this branch. Session flags are implemented separately in 0.4.0, which is in review and merges after this version. Coverage filtering is planned for 0.5.0.
 
 ## What's done
 
@@ -15,7 +15,8 @@ The diagram shows the manual drafting workflow implemented on this branch. Sessi
 | 0.1.0 | Merged | Shared writer input builder, graph context, batching, prompts, result schema and validation. Sonnet bench with real QM nodes and labelled synthetic fixtures. Local browser scoring, JSON results and per-run reports. |
 | 0.1.1 | Merged in [PR #1](https://github.com/Singh-Mehtab/learnharness-anki-bridge/pull/1) | Multiline code support, stronger accuracy and answer-leak guidance, soft word targets, a hard generation-call budget, and separate automated/human scoring. 22 tests, typecheck and browser checks passed. Sol approved the code. |
 | 0.2.0 | Merged in [PR #2](https://github.com/Singh-Mehtab/learnharness-anki-bridge/pull/2) | Connection/profile pairing, owned Basic note type, approval, durable delivery, interrupted-send recovery, presence checks and Show in Anki. Final merged head passed 77 tests, build and typecheck. Real AnkiConnect and scratch LearnHarness checks predate the final renderer fixes and main merge. |
-| 0.3.0 | Implemented on this branch, pending review | Native graph and model pickers, configurable card kinds and cap, confirmed preflight, worker generation, source-aware editable review with previews, bulk approval/send, dropping cards and generation recovery. See [verification and limits](docs/0.3.0-verification.md). |
+| 0.3.0 | In review in [PR #5](https://github.com/Singh-Mehtab/learnharness-anki-bridge/pull/5), not merged | Native graph and model pickers, configurable card kinds and cap, confirmed preflight, worker generation, source-aware editable review with previews, bulk approval/send, dropping cards and generation recovery. 99 tests, typecheck and build pass. A scratch LearnHarness run with a local stub model passed seven end-to-end checks and a restart-during-generation check. Not yet tested with a real model in the app, or by sending generated cards to Anki. See [verification and limits](docs/0.3.0-verification.md). |
+| 0.4.0 | In review in [PR #4](https://github.com/Singh-Mehtab/learnharness-anki-bridge/pull/4), not merged | Session flags, waiting-for-extraction status and session-based node selection. It merges after 0.3.0. This branch already provides the two hooks it needs: a starting node selection for the draft screen and flag notes for the writer. |
 
 ### Card writer
 
@@ -97,7 +98,7 @@ The opt-in [live integration test](docs/0.2.0-verification.md) requires an isola
 
 | Version | Planned scope |
 | --- | --- |
-| 0.4.0 | Session workflow and session-based card generation. |
+| 0.4.0 | Session workflow and session-based card generation. Implemented in PR #4, awaiting review. |
 | 0.5.0 | Card coverage and no-cards filtering. |
 | 0.6.0 | First public release, after validation and explicit publication approval. |
 
