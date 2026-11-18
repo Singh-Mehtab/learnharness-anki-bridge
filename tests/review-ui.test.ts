@@ -65,7 +65,13 @@ test("review shows source beside safe preview, live length warning, and preserve
     formatting.setAttribute("open", "");
     formatting.dispatchEvent(new f.window.Event("toggle"));
     assert.equal(frame.getAttribute("sandbox"), "");
-    assert.ok(frame.getAttribute("srcdoc")?.includes(renderMarkdown(editor.value.trim())));
+    assert.ok(frame.getAttribute("srcdoc")?.includes(renderMarkdown(editor.value)));
+    editor.value = "    # Indented front";
+    editor.dispatchEvent(new f.window.Event("input") as unknown as Event);
+    assert.ok(frame.getAttribute("srcdoc")?.includes(renderMarkdown(editor.value)));
+    assert.doesNotMatch(frame.getAttribute("srcdoc")!, /<h1>/);
+    editor.value = "word ".repeat(32);
+    editor.dispatchEvent(new f.window.Event("input") as unknown as Event);
     f.button("Refresh cards").click(); await tick();
     assert.equal((f.container.querySelector("article textarea")! as unknown as HTMLTextAreaElement).value, "word ".repeat(32));
     assert.ok(f.disposals() >= 6);

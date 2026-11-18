@@ -205,6 +205,44 @@ test("plugin UI registers sidebar/view/settings, saves password without exposing
   } finally { await f.dispose(); }
 });
 
+test("changing a URL in either mount clears a key typed for the previous endpoint", async (t) => {
+  for (const settingsOnly of [false, true]) await t.test(settingsOnly ? "settings dialog" : "review view", async () => {
+    const f = await setup();
+    const mount = settingsOnly ? f.window.document.createElement("div") : f.container;
+    let cleanup: Awaited<ReturnType<typeof f.settings>> | undefined;
+    try {
+      if (settingsOnly) {
+        cleanup = await f.settings(mount as unknown as HTMLElement, f.controller.signal);
+        await tick();
+      }
+      const input = (name: string) => mount.querySelector(`[data-keep="${name}"]`) as unknown as HTMLInputElement;
+      const type = (name: string, value: string) => {
+        const field = input(name);
+        field.value = value;
+        field.dispatchEvent(new f.window.Event("input") as never);
+      };
+      const a = input("url").value;
+      const b = "http://127.0.0.1:18766/";
+      type("api-key", "test-only-key-a");
+      type("url", a.endsWith("/") ? a.slice(0, -1) : `${a}/`);
+      assert.equal(input("api-key").value, "test-only-key-a", "same normalized endpoint retains pending input");
+      input("clear-key").checked = true;
+      type("url", b);
+      assert.equal(input("api-key").value, "");
+      assert.equal(input("clear-key").checked, false);
+      f.state.settings.url = b; // What the mocked backend returns after saving B.
+      f.button("Save connection settings", mount).click(); await tick();
+      assert.deepEqual(f.calls.filter(c => c.name === "settings").at(-1)?.input, { url: b });
+      type("api-key", "test-only-key-b");
+      f.button("Save connection settings", mount).click(); await tick();
+      assert.deepEqual(f.calls.filter(c => c.name === "settings").at(-1)?.input, { url: b, apiKey: "test-only-key-b" });
+    } finally {
+      if (typeof cleanup === "function") await cleanup();
+      await f.dispose();
+    }
+  });
+});
+
 test("plugin UI pairing and destructive styling changes require host dialog confirmation", async () => {
   const f = await setup();
   try {

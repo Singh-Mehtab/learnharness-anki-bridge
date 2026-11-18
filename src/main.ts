@@ -35,6 +35,11 @@ interface Snapshot {
 }
 interface Connection { profile: string | null; decks: string[] }
 
+function endpoint(value: string | undefined): string | undefined {
+  try { return value === undefined ? undefined : new URL(value.trim()).href; }
+  catch { return value?.trim(); }
+}
+
 function element<K extends keyof HTMLElementTagNameMap>(tag: K, text?: string): HTMLElementTagNameMap[K] {
   const node = document.createElement(tag);
   if (text !== undefined) node.textContent = text;
@@ -222,7 +227,7 @@ function mount(ctx: PluginFrontendContext, container: HTMLElement, signal: Abort
     // A typed key belongs to the URL shown beside it. If the URL this restore leaves in
     // the field differs (for example, an untouched field adopted a newly saved URL), drop it.
     const finalUrl = kept.values.get("url")?.value ?? urlField()?.value;
-    if (finalUrl?.trim() !== kept.url?.trim()) { kept.values.delete("api-key"); kept.values.delete("clear-key"); }
+    if (endpoint(finalUrl) !== endpoint(kept.url)) { kept.values.delete("api-key"); kept.values.delete("clear-key"); }
     for (const node of controls.querySelectorAll<HTMLElement>("[data-keep]")) {
       const key = node.dataset.keep!;
       if (node.tagName === "DETAILS") { (node as HTMLDetailsElement).open = kept.open.has(key); continue; }
@@ -292,18 +297,27 @@ function mount(ctx: PluginFrontendContext, container: HTMLElement, signal: Abort
     const clearKey = keep(element("input"), "clear-key");
     clearKey.type = "checkbox";
     const urlWarning = element("p");
-    const savedUrl = state.settings.url, hadKey = state.settings.hasApiKey;
+    const savedUrl = endpoint(state.settings.url), hadKey = state.settings.hasApiKey;
+    let previousEndpoint = endpoint(url.value);
     const warn = () => {
       const base = /localhost/i.test(url.value) ? "Use 127.0.0.1 instead of localhost to avoid IPv6 connection failures." : "Use the AnkiConnect root URL, not an API path.";
-      const same = (a: string) => { try { return new URL(a.trim()).href === new URL(savedUrl).href; } catch { return a.trim() === savedUrl; } };
-      urlWarning.textContent = hadKey && !same(url.value) ? `${base} Saving a different URL clears the saved API key. Enter it again if the new endpoint needs one.` : base;
+      urlWarning.textContent = hadKey && endpoint(url.value) !== savedUrl ? `${base} Saving a different URL clears the saved API key. Enter it again if the new endpoint needs one.` : base;
     };
-    url.oninput = warn;
+    function clearCredentialsOnEndpointChange(): void {
+      const current = endpoint(url.value);
+      if (current !== previousEndpoint) {
+        key.value = "";
+        clearKey.checked = false;
+        previousEndpoint = current;
+      }
+    }
+    url.oninput = () => { clearCredentialsOnEndpointChange(); warn(); };
     warn();
     controls.append(element("h3", "Connection"), field("AnkiConnect root URL", url), urlWarning,
       field("API key", key), field("Clear saved API key", clearKey),
       element("p", "The API key is stored in plain text in the plugin's data folder."),
       button("Save connection settings", async () => {
+        clearCredentialsOnEndpointChange();
         const input: { url: string; apiKey?: string } = { url: url.value };
         if (clearKey.checked) input.apiKey = "";
         else if (key.value) input.apiKey = key.value;
@@ -438,7 +452,7 @@ function mount(ctx: PluginFrontendContext, container: HTMLElement, signal: Abort
         if (!deliveryPreview.open) return;
         try {
           const fields = [cardFront, cardBack, cardExtra].map((input, index) =>
-            `<h2>${["Front", "Back", "Extra"][index]}</h2>${renderMarkdown(input.value.trim())}`);
+            `<h2>${["Front", "Back", "Extra"][index]}</h2>${renderMarkdown(input.value)}`);
           // No script, resources or interaction in this isolated view. The field HTML
           // comes from the same renderer as delivery, not from the host Markdown UI.
           frame.setAttribute("srcdoc", `<!doctype html><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'"><main inert>${fields.join("")}</main>`);

@@ -99,7 +99,7 @@ export function cardProblems(card: DraftCard, target: WriterTarget, input: Write
     for (const [pattern, label] of FORBIDDEN) {
       if (pattern.test(field)) problems.push(`${quote}: ${label} are not allowed`);
     }
-    try { renderMarkdown(field.trim(), { checkMath: true }); }
+    try { renderMarkdown(field, { checkMath: true }); }
     catch (error) { problems.push(`${quote}: ${error instanceof Error ? error.message : String(error)}`); }
   }
   return problems;
