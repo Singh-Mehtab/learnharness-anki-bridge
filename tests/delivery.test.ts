@@ -78,7 +78,7 @@ async function fixture() {
   };
   const pair = () => service.command('pair', { confirmed: true });
   const approve = (ids: string[]) => service.command('approve', { ids });
-  const send = (ids: string[], deck = 'Scratch::New') => service.command('send', { ids, deck });
+  const send = (ids: string[], deck = 'Scratch::New') => service.command('send', { ids, deck, expectedDestination: service.snapshot().destination });
   const reopen = async () => { await service.close(); store = await StateStore.open(directory); service = new DeliveryService(store); await service.activate(); };
   const close = async () => { await service.close(); server.closeAllConnections(); await new Promise<void>((resolve, reject) => server.close(e => e ? reject(e) : resolve())); await rm(directory, { recursive: true, force: true }); };
   return { directory, url, calls, notes, errors, snap, draft, pair, approve, send, reopen, close, addEntered, addCompleted, get service() { return service; }, get store() { return store; },
@@ -244,6 +244,52 @@ test('pairing rejects a profile or endpoint different from the confirmed dialog'
   } finally { await f.close(); }
 });
 
+test('a saved API key stays with its URL and is never sent to a changed endpoint', async () => {
+  const f = await fixture();
+  try {
+    await f.service.command('settings', { url: f.url, apiKey: 'endpoint-key' });
+    await f.service.command('settings', { url: f.url });
+    assert.equal(f.snap().settings.hasApiKey, true);
+    await f.service.command('settings', { url: 'http://127.0.0.1:19999/' });
+    assert.equal(f.snap().settings.hasApiKey, false);
+    await f.service.command('settings', { url: f.url });
+    assert.equal(f.snap().settings.hasApiKey, false);
+    await f.service.command('settings', { url: 'http://127.0.0.1:19999/', apiKey: 'new-endpoint-key' });
+    assert.equal(f.snap().settings.hasApiKey, true);
+  } finally { await f.close(); }
+});
+
+test('send rejects a view that shows an old or missing pairing before any Anki call', async () => {
+  const f = await fixture();
+  try {
+    await f.pair(); const id = await f.draft(); await f.approve([id]);
+    const shown = f.snap().destination;
+    f.setProfile('Different'); await f.pair();
+    const before = f.calls.length;
+    await assert.rejects(f.service.command('send', { ids: [id], deck: 'Scratch', expectedDestination: shown }), /destination changed/);
+    await assert.rejects(f.service.command('send', { ids: [id], deck: 'Scratch' }), /destination changed/);
+    assert.equal(f.calls.length, before);
+    assert.equal(f.snap().cards[0].status, 'approved');
+    f.setProfile('Throwaway'); await f.pair();
+    await f.send([id]);
+    assert.equal(f.notes[0].fields.LH_ID, id);
+  } finally { await f.close(); }
+});
+
+test('recovery finds an interrupted note by delivery ID even if the note type was renamed', async () => {
+  const f = await fixture();
+  try {
+    await f.pair(); const id = await f.draft(); await f.approve([id]);
+    f.dropAfterAdd();
+    await assert.rejects(f.send([id]));
+    f.notes[0].modelName = 'Renamed in Anki';
+    await f.send([id]);
+    assert.equal(f.notes.length, 1); assert.equal(f.snap().cards[0].status, 'sent');
+    const lookups = f.calls.filter(c => c.action === 'findNotes').map(c => c.params.query);
+    assert(lookups.length && lookups.every(q => q === `"LH_ID:${id}"`));
+  } finally { await f.close(); }
+});
+
 test('backend errors do not echo the saved API key into the frontend', async () => {
   const f = await fixture();
   try {
@@ -311,7 +357,7 @@ test('actual process death after addNote and before state write reconciles on re
       const replace = store.replace.bind(store);
       store.replace = async state => { if (state.cards.some(c => c.status === 'sent')) process.kill(process.pid, 'SIGKILL'); return replace(state); };
       const service = new DeliveryService(store);
-      await service.command('send', {ids:[${JSON.stringify(id)}],deck:'Crash deck'});
+      await service.command('send', {ids:[${JSON.stringify(id)}],deck:'Crash deck',expectedDestination:service.snapshot().destination});
       throw Error('Crash injection was not reached');
     `], { stdio: ['ignore', 'pipe', 'pipe'] });
     const exit = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => { child.on('error', reject); child.on('exit', (code, signal) => resolve({ code, signal })); });

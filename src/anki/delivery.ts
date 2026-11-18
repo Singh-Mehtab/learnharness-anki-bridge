@@ -26,6 +26,10 @@ function requiredText(value: unknown, name: string): string {
 function optionalText(value: unknown, name: string, fallback = ''): string {
   return value === undefined ? fallback : value === '' ? '' : requiredText(value, name);
 }
+function expectDestination(value: unknown, destination: Destination, message: string): void {
+  const expected = value === null || value === undefined ? undefined : data(value);
+  if (!expected || typeof expected.url !== 'string' || typeof expected.profile !== 'string' || normalizeUrl(expected.url) !== destination.url || expected.profile !== destination.profile) throw new Error(message);
+}
 function idsInput(value: unknown): string[] {
   if (!Array.isArray(value) || !value.length || value.some(id => typeof id !== 'string') || new Set(value).size !== value.length) throw new Error('Choose one or more distinct cards.');
   return value;
@@ -38,7 +42,8 @@ function data(value: unknown): Record<string, unknown> {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new Error('Expected an input object.');
   return value as Record<string, unknown>;
 }
-const query = (id: string) => `note:"${MODEL_NAME}" LH_ID:${id}`;
+// Not limited to the note type name, so a renamed note type cannot hide an earlier add.
+const query = (id: string) => `"LH_ID:${id}"`;
 const htmlText = (text: string) => text.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
 const kinds: CardKind[] = ['recall', 'why', 'compose', 'discriminate'];
 const slug = (text: string) => text.normalize('NFKC').replace(/[^\p{L}\p{N}_-]+/gu, '-').replace(/^-+|-+$/g, '').slice(0, 80) || 'manual';
@@ -157,8 +162,10 @@ export class DeliveryService {
       if (name === 'settings') {
         const allowed = new Set(['url', 'apiKey']);
         if (Object.keys(value).some(k => !allowed.has(k))) throw new Error('Unsupported setting.');
-        const url = value.url === undefined ? this.store.snapshot().settings.url : normalizeUrl(requiredText(value.url, 'URL'));
-        const apiKey = optionalText(value.apiKey, 'API key', this.store.snapshot().settings.apiKey);
+        const current = this.store.snapshot().settings;
+        const url = value.url === undefined ? current.url : normalizeUrl(requiredText(value.url, 'URL'));
+        // A saved key belongs to its endpoint. Never forward it to a changed URL.
+        const apiKey = optionalText(value.apiKey, 'API key', url === current.url ? current.apiKey : '');
         await this.save(s => { s.settings.url = url; s.settings.apiKey = apiKey; });
       } else if (name === 'connection') {
         return this.client().connection();
@@ -168,10 +175,7 @@ export class DeliveryService {
         this.active();
         if (!connection.profile) throw new Error('Open a profile in Anki before pairing.');
         const destination = { url: this.store.snapshot().settings.url, profile: connection.profile };
-        if (value.expectedDestination !== undefined) {
-          const expected = data(value.expectedDestination);
-          if (typeof expected.url !== 'string' || typeof expected.profile !== 'string' || normalizeUrl(expected.url) !== destination.url || expected.profile !== destination.profile) throw new Error('The destination changed while pairing was being confirmed. Test the connection and confirm again.');
-        }
+        if (value.expectedDestination !== undefined) expectDestination(value.expectedDestination, destination, 'The destination changed while pairing was being confirmed. Test the connection and confirm again.');
         const unresolved = this.store.snapshot().cards.filter(c => c.status === 'sending');
         if (unresolved.some(c => !sameDestination(c.destination, destination))) throw new Error('Resolve interrupted deliveries in their original Anki profile and URL before re-pairing.');
         await this.save(s => { s.destination = destination; });
@@ -211,6 +215,9 @@ export class DeliveryService {
         const deck = requiredText(value.deck, 'Deck').trim();
         if (deck.length > 250 || /[\r\n]/.test(deck)) throw new Error('Use a deck name shorter than 251 characters on one line.');
         for (const id of ids) this.card(id);
+        // The settings dialog can re-pair while a review view still shows the old destination.
+        const paired = this.store.snapshot().destination;
+        if (paired) expectDestination(value.expectedDestination, paired, 'The paired Anki destination changed. Check the destination shown and send again.');
         const client = this.client(), destination = await this.destination(client);
         // Reconcile all interrupted cards first, never against another collection.
         await this.recover(client, destination);

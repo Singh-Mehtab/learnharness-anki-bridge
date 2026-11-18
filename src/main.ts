@@ -100,7 +100,7 @@ function mount(ctx: PluginFrontendContext, container: HTMLElement, signal: Abort
   const controls = element("fieldset");
   const sessionHost = element("div");
   const drafting = element("div");
-  root.append(element("h2", settingsOnly ? "Anki Bridge settings" : "Anki Bridge 0.4.0"),
+  root.append(element("h2", settingsOnly ? "Anki Bridge settings" : "Anki Bridge"),
     element("p", settingsOnly ? "Connection, pairing and note type. Use a throwaway Anki profile while testing." : "Pick ideas from a session or your graph, check every answer, then approve and send to Anki. Nothing is sent automatically."),
     sessionHost, drafting, feedback, controls);
   container.append(root);
@@ -219,6 +219,9 @@ function mount(ctx: PluginFrontendContext, container: HTMLElement, signal: Abort
       controls.append(button("Retry loading", refresh));
       return;
     }
+    // Sends carry the destination this view shows, so the backend rejects a stale view.
+    const shown = state.destination;
+    const atShown = (card: Card) => !!shown && card.destination?.url === shown.url && card.destination.profile === shown.profile;
     if (state.recoveryError) controls.append(element("p", `Recovery error: ${state.recoveryError}`));
     const url = textInput(state.settings.url || "http://127.0.0.1:8765");
     keep(url, "url");
@@ -229,7 +232,11 @@ function mount(ctx: PluginFrontendContext, container: HTMLElement, signal: Abort
     const clearKey = keep(element("input"), "clear-key");
     clearKey.type = "checkbox";
     const urlWarning = element("p");
-    const warn = () => { urlWarning.textContent = /localhost/i.test(url.value) ? "Use 127.0.0.1 instead of localhost to avoid IPv6 connection failures." : "Use the AnkiConnect root URL, not an API path."; };
+    const savedUrl = state.settings.url, hadKey = state.settings.hasApiKey;
+    const warn = () => {
+      const base = /localhost/i.test(url.value) ? "Use 127.0.0.1 instead of localhost to avoid IPv6 connection failures." : "Use the AnkiConnect root URL, not an API path.";
+      urlWarning.textContent = hadKey && url.value.trim() !== savedUrl ? `${base} Saving a different URL clears the saved API key. Enter it again if the new endpoint needs one.` : base;
+    };
     url.oninput = warn;
     warn();
     controls.append(element("h3", "Connection"), field("AnkiConnect root URL", url), urlWarning,
@@ -312,9 +319,10 @@ function mount(ctx: PluginFrontendContext, container: HTMLElement, signal: Abort
     if (approved.length) bulk.append(button(`Send approved cards, ${approved.length}`, async () => {
       checkEditors();
       if (!deck.value.trim()) throw new Error("Choose a destination deck first.");
-      await snapshotAction("send", { ids: approved.map(card => card.id), deck: deck.value.trim() });
+      await snapshotAction("send", { ids: approved.map(card => card.id), deck: deck.value.trim(), expectedDestination: shown });
     }));
-    const sent = state.cards.filter(card => card.status === "sent");
+    // Only cards sent to the current pairing can be shown; older ones stay as history.
+    const sent = state.cards.filter(card => card.status === "sent" && atShown(card));
     if (sent.length) bulk.append(button("Show sent cards in Anki", async () => { await ctx.call("show", { ids: sent.map(card => card.id) }); }));
     controls.append(bulk);
     if (!state.cards.some(card => card.status !== "dropped")) controls.append(element("p", "No cards to review yet. Select graph nodes above, or write a card by hand."));
@@ -384,10 +392,10 @@ function mount(ctx: PluginFrontendContext, container: HTMLElement, signal: Abort
         if (card.status === "approved" || card.status === "failed") row.append(button(card.status === "failed" ? "Retry approved card" : "Send approved card", async () => {
           requireSaved();
           if (!deck.value.trim()) throw new Error("Choose a destination deck first.");
-          await snapshotAction("send", { ids: [card.id], deck: deck.value.trim() });
+          await snapshotAction("send", { ids: [card.id], deck: deck.value.trim(), expectedDestination: shown });
         }));
       }
-      if (card.status === "sent") row.append(button("Show in Anki", async () => { await ctx.call("show", { ids: [card.id] }); }));
+      if (card.status === "sent" && atShown(card)) row.append(button("Show in Anki", async () => { await ctx.call("show", { ids: [card.id] }); }));
       controls.append(row);
     }
   }

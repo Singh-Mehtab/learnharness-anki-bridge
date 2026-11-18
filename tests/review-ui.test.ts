@@ -83,7 +83,7 @@ test("review drops unsent cards and bulk send excludes dropped cards", async () 
     assert.deepEqual(f.calls.find(c => c.name === "drop")!.input, { ids: ["one"] });
     f.button("Approve card").click(); await tick();
     f.button("Send approved cards, 1").click(); await tick();
-    assert.deepEqual(f.calls.find(c => c.name === "send")!.input, { ids: ["two"], deck: "Scratch" });
+    assert.deepEqual(f.calls.find(c => c.name === "send")!.input, { ids: ["two"], deck: "Scratch", expectedDestination: null });
   } finally { await f.close(); }
 });
 

@@ -12,6 +12,7 @@ function fixture() {
     cards: [] as Array<Record<string, unknown>>,
   };
 }
+const paired = () => ({ url: "http://127.0.0.1:8765/", profile: "Throwaway" });
 const tick = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
 async function setup(handler?: (name: string, input: unknown) => unknown | Promise<unknown>) {
@@ -115,7 +116,8 @@ test("Review waiting cards fetches a newly visible draft without discarding unsa
 
 test("a background review refresh is retried when a card action finishes as its snapshot arrives", async () => {
   const state = fixture();
-  state.cards = [{ id: 'sent', nodeId: 'target:id', kind: 'recall', status: 'sent', front: 'Sent card', back: 'Answer', extra: '' }];
+  state.destination = paired();
+  state.cards = [{ id: 'sent', nodeId: 'target:id', kind: 'recall', status: 'sent', destination: paired(), front: 'Sent card', back: 'Answer', extra: '' }];
   let reads = 0, releaseSnapshot!: (value: typeof state) => void, finishShow!: () => void;
   const heldSnapshot = new Promise<typeof state>(resolve => { releaseSnapshot = resolve; });
   const shown = new Promise<void>(resolve => { finishShow = resolve; });
@@ -140,7 +142,8 @@ test("a background review refresh is retried when a card action finishes as its 
 
 test("a deferred graph refresh does not overwrite the saved dismissal acknowledgement", async () => {
   const state = fixture();
-  state.cards = [{ id: 'sent', nodeId: 'other:id', kind: 'recall', status: 'sent', front: 'Sent card', back: 'Answer', extra: '' }];
+  state.destination = paired();
+  state.cards = [{ id: 'sent', nodeId: 'other:id', kind: 'recall', status: 'sent', destination: paired(), front: 'Sent card', back: 'Answer', extra: '' }];
   let saved = false, failedReads = 0, finishShow!: () => void;
   const shown = new Promise<void>(resolve => { finishShow = resolve; });
   const f = await setup(name => {
@@ -248,7 +251,7 @@ test("plugin UI hand-written draft, saved edits, explicit approval and deck send
     const deck = f.container.querySelector('input[list]')! as unknown as HTMLInputElement;
     deck.value = "Brand new::Deck"; deck.dispatchEvent(new f.window.Event("input") as unknown as Event);
     f.button("Send approved card").click(); await tick();
-    assert.deepEqual(f.calls.at(-1), { name: "send", input: { ids: ["test-id"], deck: "Brand new::Deck" } });
+    assert.deepEqual(f.calls.at(-1), { name: "send", input: { ids: ["test-id"], deck: "Brand new::Deck", expectedDestination: null } });
     assert.equal(f.container.querySelector("img"), null);
   } finally { await f.dispose(); }
 });
@@ -256,14 +259,20 @@ test("plugin UI hand-written draft, saved edits, explicit approval and deck send
 test("plugin UI never offers resend for sent, deleted or uncertain cards and exposes recovery operations", async () => {
   const f = await setup();
   try {
+    f.state.destination = paired();
     f.state.cards.push(
-      { id: "sent", status: "sent", presence: "deleted", noteId: 123, front: "F", back: "B", extra: "", kind: "why" },
+      { id: "sent", status: "sent", presence: "deleted", noteId: 123, destination: paired(), front: "F", back: "B", extra: "", kind: "why" },
+      { id: "old", status: "sent", noteId: 99, destination: { url: "http://127.0.0.1:8765/", profile: "Previous" }, front: "F0", back: "B0", extra: "", kind: "why" },
       { id: "uncertain", status: "sending", front: "F2", back: "B2", extra: "", kind: "why" },
     );
     f.button("Refresh cards").click(); await tick();
+    // Only the card sent to the current pairing offers Show; older history stays read-only.
     assert.equal(f.container.querySelectorAll("article button").length, 1);
     assert.match(f.container.textContent!, /Anki presence: deleted/);
+    assert.match(f.container.textContent!, /Sent destination: Previous/);
     f.button("Show in Anki").click(); await tick();
+    assert.deepEqual(f.calls.at(-1), { name: "show", input: { ids: ["sent"] } });
+    f.button("Show sent cards in Anki").click(); await tick();
     assert.deepEqual(f.calls.at(-1), { name: "show", input: { ids: ["sent"] } });
     f.button("Reconcile uncertain sends").click(); await tick();
     assert.equal(f.calls.at(-1)!.name, "reconcile");
