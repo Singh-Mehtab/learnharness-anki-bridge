@@ -87,6 +87,19 @@ test('session selection reaches drafting, clears estimates, and stays current wi
     }, 'completed drafts update session counts');
     assert.match(container.querySelector('.anki-bridge-session')!.textContent!, /Select all uncarded: 0 ideas, about 0 cards/);
     assert.equal(container.querySelectorAll('.anki-bridge-session .anki-bridge-badges').length, 2);
+
+    // Extraction can add an idea after both panels have mounted.
+    f.host.nodes.push({ id: 'n_new', name: 'Newly extracted idea', statement: 'Fresh metadata after extraction.', provenance: [{ chatId: 'c1', messageId: 'm2' }] });
+    button('Refresh').click();
+    await until(() => container.querySelector('.anki-bridge-session')!.textContent!.includes('Newly extracted idea'), 'extracted session node');
+    const preflights = calls.filter(c => c.name === 'preflight').length;
+    button('Draft cards for selected').click();
+    const drafting = () => [...container.querySelectorAll('h3')].find(h => h.textContent === 'Draft from graph nodes')!.parentElement!;
+    await until(() => drafting().textContent!.includes('Newly extracted idea'), 'fresh drafting metadata');
+    assert.match(drafting().textContent!, /Fresh metadata after extraction/);
+    assert.doesNotMatch(container.textContent!, /Node no longer exists/);
+    assert.equal(calls.filter(c => c.name === 'preflight').length, preflights);
+    assert.equal(f.host.workers.starts.length, 1); // Selection alone does not estimate or generate.
   } finally {
     f.c.controller.abort();
     if (typeof dispose === 'function') await dispose();

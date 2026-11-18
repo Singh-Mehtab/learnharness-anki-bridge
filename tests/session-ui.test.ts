@@ -139,14 +139,27 @@ test("the top-bar button opens a note dialog before flagging", async () => {
   } finally { await f.close(); }
 });
 
-test("an empty note in the click dialog does not erase an existing note", async () => {
-  const f = setup(() => flagView({ note: "kept" }));
+test("an empty note in the click dialog preserves the saved note through repeated saves", async () => {
+  let saved = "kept";
+  const f = setup((_name, input) => {
+    const note = (input as { note?: string }).note;
+    if (note !== undefined) saved = note;
+    return flagView({ note: saved });
+  });
   try {
     registerSessionActions(f.ctx, new SessionRequests());
     await f.actions.get("flag-for-anki")!.run(sessionContext());
     f.buttonIn(f.dialog()!.content, "Flag").click();
     await tick();
     assert.deepEqual(f.calls[0].input, { sessionId: "s1", messageIds: ["a1"] });
+    const note = f.dialog()!.content.querySelector("input")!;
+    assert.equal(note.value, "kept");
+    f.buttonIn(f.dialog()!.content, "Save note").click(); await tick();
+    assert.equal(saved, "kept");
+    assert.deepEqual(f.calls.at(-1)?.input, { sessionId: "s1", messageIds: ["a1"], note: "kept" });
+    note.value = "";
+    f.buttonIn(f.dialog()!.content, "Save note").click(); await tick();
+    assert.equal(saved, ""); // Clearing a populated field is still an explicit erase.
   } finally { await f.close(); }
 });
 
@@ -195,6 +208,109 @@ test("make cards opens the view on that session with flagged nodes ticked and ca
     await tick();
     assert.deepEqual(drafts, [{ sessionId: "s1", nodeIds: ["n-pauli", "n-else"] }]);
     dispose();
+  } finally { await f.close(); }
+});
+
+test("removing a flag clears automatic ticks but preserves explicit checkbox choices", async () => {
+  const flow = flowFixture();
+  flow.nodes[1].flagged = true;
+  const f = setup((name) => {
+    if (name === "sessions") return { sessions: [], unresolved: [] };
+    if (name === "unflag") { flow.flags = []; flow.nodes.forEach(n => { n.flagged = false; }); return { removed: "f1" }; }
+    return flow;
+  });
+  try {
+    const requests = new SessionRequests(); requests.request("s1");
+    const container = f.window.document.createElement("div") as unknown as HTMLElement;
+    const drafts: unknown[] = [];
+    mountSessionFlow(f.ctx, container, new AbortController().signal, { requests, onDraft: r => { drafts.push(r); } });
+    await tick();
+    const boxes = Array.from(container.querySelectorAll<HTMLInputElement>("li input[type=checkbox]"));
+    boxes[1].checked = false; boxes[1].dispatchEvent(new f.window.Event("change") as never);
+    boxes[1].checked = true; boxes[1].dispatchEvent(new f.window.Event("change") as never);
+    f.buttonIn(container, "Remove flag").click(); await tick();
+    assert.deepEqual(Array.from(container.querySelectorAll<HTMLInputElement>("li input[type=checkbox]")).map(b => b.checked), [false, true, false, false]);
+    f.buttonIn(container, "Draft cards for selected").click(); await tick();
+    assert.deepEqual(drafts, [{ sessionId: "s1", nodeIds: ["n-pauli"] }]);
+  } finally { await f.close(); }
+});
+
+test("manual checkbox changes keep Clear selection and Draft enabled state current", async () => {
+  const flow = flowFixture(); flow.flags = []; flow.nodes.forEach(n => { n.flagged = false; });
+  const f = setup(name => name === "sessions" ? { sessions: [], unresolved: [] } : flow);
+  try {
+    const requests = new SessionRequests(); requests.request("s1");
+    const container = f.window.document.createElement("div") as unknown as HTMLElement;
+    mountSessionFlow(f.ctx, container, new AbortController().signal, { requests, onDraft: () => {} }); await tick();
+    const box = container.querySelectorAll<HTMLInputElement>("li input[type=checkbox]")[1];
+    assert.equal(f.buttonIn(container, "Clear selection").disabled, true);
+    box.checked = true; box.dispatchEvent(new f.window.Event("change") as never);
+    assert.equal(f.buttonIn(container, "Clear selection").disabled, false);
+    assert.equal(f.buttonIn(container, "Draft cards for selected").disabled, false);
+    box.checked = false; box.dispatchEvent(new f.window.Event("change") as never);
+    assert.equal(f.buttonIn(container, "Clear selection").disabled, true);
+    assert.equal(f.buttonIn(container, "Draft cards for selected").disabled, true);
+    box.checked = true; box.dispatchEvent(new f.window.Event("change") as never);
+    f.buttonIn(container, "Clear selection").click(); await tick();
+    assert.equal(container.querySelectorAll("li input:checked").length, 0);
+  } finally { await f.close(); }
+});
+
+test("a failed session switch hides the previous session's actionable flow", async () => {
+  const f = setup((name, input) => {
+    if (name === "sessions") return { sessions: [], unresolved: [] };
+    if ((input as { sessionId: string }).sessionId === "s2") throw new Error("Session load failed");
+    return flowFixture();
+  });
+  try {
+    const requests = new SessionRequests(); requests.request("s1");
+    const container = f.window.document.createElement("div") as unknown as HTMLElement;
+    mountSessionFlow(f.ctx, container, new AbortController().signal, { requests, onDraft: () => {} }); await tick();
+    assert.ok(container.querySelector(".anki-bridge-nodes"));
+    requests.request("s2"); await tick();
+    assert.equal(container.querySelector("select")!.value, "s2");
+    assert.match(container.textContent!, /Session load failed/);
+    assert.equal(container.querySelector(".anki-bridge-nodes") === null, true);
+    assert.equal(container.querySelector(".anki-bridge-flags") === null, true);
+    assert.equal([...container.querySelectorAll("button")].some(b => b.textContent === "Draft cards for selected"), false);
+  } finally { await f.close(); }
+});
+
+test("a Make cards request during a load discards the superseded flow and loads the requested session", async () => {
+  let release!: (value: unknown) => void;
+  const gate = new Promise(resolve => { release = resolve; });
+  const second = { ...flowFixture(), session: { id: "s2", title: "Optics", exists: true },
+    nodes: [{ ...flowFixture().nodes[0], id: "n-optics", name: "Lens", statement: "Lenses focus light." }], flags: [] };
+  const f = setup((name, input) => name === "sessions" ? { sessions: [], unresolved: [] }
+    : (input as { sessionId: string }).sessionId === "s1" ? gate : second);
+  try {
+    const requests = new SessionRequests(); requests.request("s1");
+    const container = f.window.document.createElement("div") as unknown as HTMLElement;
+    const drafts: unknown[] = [];
+    mountSessionFlow(f.ctx, container, new AbortController().signal, { requests, onDraft: r => { drafts.push(r); } }); await tick();
+    requests.request("s2"); release(flowFixture()); await tick(); await tick();
+    assert.equal(container.querySelector("select")!.value, "s2");
+    assert.match(container.querySelector(".anki-bridge-nodes")?.textContent ?? "", /Lens/);
+    assert.doesNotMatch(container.textContent!, /Spin is intrinsic/);
+    f.buttonIn(container, "Draft cards for selected").click(); await tick();
+    assert.deepEqual(drafts, [{ sessionId: "s2", nodeIds: ["n-optics"] }]);
+  } finally { release(flowFixture()); await f.close(); }
+});
+
+test("a superseded session load error does not remain above the new session", async () => {
+  let reject!: (error: Error) => void;
+  const gate = new Promise((_resolve, no) => { reject = no; });
+  const second = { ...flowFixture(), session: { id: "s2", title: "Optics", exists: true } };
+  const f = setup((name, input) => name === "sessions" ? { sessions: [], unresolved: [] }
+    : (input as { sessionId: string }).sessionId === "s1" ? gate : second);
+  try {
+    const requests = new SessionRequests(); requests.request("s1");
+    const container = f.window.document.createElement("div") as unknown as HTMLElement;
+    mountSessionFlow(f.ctx, container, new AbortController().signal, { requests }); await tick();
+    requests.request("s2"); reject(new Error("Superseded session load failed")); await tick(); await tick();
+    assert.equal(container.querySelector("select")!.value, "s2");
+    assert.ok(container.querySelector(".anki-bridge-nodes"));
+    assert.doesNotMatch(container.textContent!, /Superseded session load failed/);
   } finally { await f.close(); }
 });
 

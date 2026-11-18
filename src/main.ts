@@ -192,7 +192,7 @@ function mount(ctx: PluginFrontendContext, container: HTMLElement, signal: Abort
     } catch (error) {
       if (name === "send" && alive()) {
         // A failed send may still have persisted per-card results.
-        try { const fresh = await ctx.call<Snapshot>("snapshot"); if (alive()) { state = fresh; render(); } } catch { /* Preserve the send error. */ }
+        try { const fresh = await ctx.call<Snapshot>("snapshot"); if (alive()) { state = fresh; render(); await sessionPanel?.refresh(); } } catch { /* Preserve the send error. */ }
       }
       throw error;
     }

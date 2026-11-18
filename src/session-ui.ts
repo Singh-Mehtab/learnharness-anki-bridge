@@ -84,7 +84,7 @@ function openFlagDialog(ctx: PluginFrontendContext, target: { sessionId: string;
   let current = immediate;
   const describe = (view: FlagView) => `${flagStatusText(view)}${view.note ? `\nNote: ${view.note}` : ""}`;
   const show = (view: FlagView) => {
-    current = view; heading.textContent = "Flagged for Anki"; status.textContent = describe(view);
+    current = view; note.value = view.note; heading.textContent = "Flagged for Anki"; status.textContent = describe(view);
     primary.textContent = "Save note"; close.textContent = "Close";
   };
   const submit = async () => {
@@ -180,19 +180,21 @@ export function mountSessionFlow(ctx: PluginFrontendContext, container: HTMLElem
     return b;
   }
   async function load(): Promise<void> {
-    const nextList = await ctx.call<SessionList>("sessions");
-    let nextFlow: SessionFlow | undefined;
-    if (sessionId) nextFlow = await ctx.call<SessionFlow>("sessionFlow", { sessionId });
-    if (!alive()) return;
+    const requested = sessionId;
+    let nextList: SessionList, nextFlow: SessionFlow | undefined;
+    try {
+      nextList = await ctx.call<SessionList>("sessions");
+      if (requested) nextFlow = await ctx.call<SessionFlow>("sessionFlow", { sessionId: requested });
+    } catch (error) { if (requested !== sessionId) return; throw error; }
+    if (!alive() || requested !== sessionId) return;
+    feedback.textContent = "";
     const switched = nextFlow?.session.id !== flow?.session.id;
     list = nextList; flow = nextFlow;
     if (!flow) { selected = new Set(); touched.clear(); return; }
-    const present = new Set(flow.nodes.map(n => n.id));
     if (switched) { touched.clear(); selected = new Set(defaultSelection(flow.nodes)); }
     else {
-      // Keep the learner's choices; newly matched flagged nodes join the selection.
-      selected = new Set([...selected].filter(id => present.has(id)));
-      for (const id of defaultSelection(flow.nodes)) if (!touched.has(id)) selected.add(id);
+      // Untouched nodes follow current flags; preserve only explicit checkbox choices.
+      selected = new Set(flow.nodes.filter(n => touched.has(n.id) ? selected.has(n.id) : n.flagged).map(n => n.id));
     }
   }
   function scheduleRefresh(): void {
@@ -218,6 +220,7 @@ export function mountSessionFlow(ctx: PluginFrontendContext, container: HTMLElem
   }
 
   function render(): void {
+    if (flow?.session.id !== sessionId) { flow = undefined; selected.clear(); touched.clear(); }
     controls.replaceChildren();
     const picker = el("select");
     picker.append(option("Choose a teaching session", ""));
@@ -251,17 +254,18 @@ export function mountSessionFlow(ctx: PluginFrontendContext, container: HTMLElem
     const setSelection = (ids: string[]) => { selected = new Set(ids); for (const n of nodes) touched.add(n.id); };
     const bar = el("div");
     controls.append(el("h4", `Ideas from this session (${nodes.length})`), bar);
+    const clear = button("Clear selection", () => setSelection([]), !selected.size);
     bar.append(
       button(`Select flagged: ${plural(flagged.length, "idea")}`, () => setSelection(flagged), !flagged.length),
       button(`Select all uncarded: ${plural(uncarded.length, "idea")}, about ${plural(uncarded.length * flow.cardsPerNode, "card")}`, () => setSelection(uncarded), !uncarded.length),
-      button("Clear selection", () => setSelection([]), !selected.size),
+      clear,
     );
     const rows = el("ul", undefined, "anki-bridge-nodes");
     for (const node of nodes) {
       const carded = hasCards(node.cards);
       const row = el("li", undefined, carded ? "anki-bridge-carded" : undefined);
       const box = el("input"); box.type = "checkbox"; box.checked = selected.has(node.id);
-      box.onchange = () => { touched.add(node.id); if (box.checked) selected.add(node.id); else selected.delete(node.id); summary.textContent = summaryText(); draft.disabled = !canDraft(); };
+      box.onchange = () => { touched.add(node.id); if (box.checked) selected.add(node.id); else selected.delete(node.id); summary.textContent = summaryText(); draft.disabled = !canDraft(); clear.disabled = !selected.size; };
       const label = el("label", undefined, "anki-bridge-node");
       const body = el("span");
       body.append(el("strong", node.name), el("span", node.statement, "anki-bridge-muted"));
@@ -288,7 +292,10 @@ export function mountSessionFlow(ctx: PluginFrontendContext, container: HTMLElem
   }
 
   const unsubscribers = [
-    options.requests.subscribe(id => { options.requests.take(); sessionId = id; void run(load); }),
+    options.requests.subscribe(id => {
+      options.requests.take(); sessionId = id;
+      if (busy) refreshPending = true; else void run(load);
+    }),
     ctx.onResync(() => { void run(load, true); }),
     // Extraction has no completion event. Phase changes are a hint to re-check
     // waiting flags; Refresh remains the reliable path.

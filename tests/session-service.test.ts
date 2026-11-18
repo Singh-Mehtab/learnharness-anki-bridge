@@ -208,11 +208,13 @@ test('flags are refused for unsaved, non-teacher, practice, missing or malformed
   } finally { await delivery.close(); await store.close(); }
 }));
 
-test('flags whose session or message disappears stay visible as missing', async () => withDir(async dir => {
+test('flags whose session or message disappears stay visible as missing even with retained graph provenance', async () => withDir(async dir => {
   const h = host(), store = await StateStore.open(dir), delivery = new DeliveryService(store);
   const session = new SessionService(h.learning as never, store, delivery);
   try {
-    await session.command('flag', { sessionId: 's1', messageIds: ['a1'] });
+    h.addNode('n-spin', 'Spin', 'a1');
+    const flagged = await session.command('flag', { sessionId: 's1', messageIds: ['a1'] }) as FlagView;
+    assert.equal(flagged.status, 'matched');
     h.sessions.get('s1')!.messages = h.sessions.get('s1')!.messages.filter(m => m.id !== 'a1');
     let flow = await session.command('sessionFlow', { sessionId: 's1' }) as SessionFlow;
     assert.equal(flow.flags[0].status, 'missing');
@@ -223,6 +225,36 @@ test('flags whose session or message disappears stay visible as missing', async 
     assert.equal(flow.session.title, 'Spin');
     const list = await session.command('sessions', {}) as SessionList;
     assert.equal(list.unresolved.length, 1); // still listed although the session is gone
+    assert.deepEqual(flow.nodes.map(n => n.id), ['n-spin']); // Kept graph remains usable.
+    await session.command('unflag', { id: flagged.id });
+    assert.deepEqual((await session.command('sessions', {}) as SessionList).unresolved, []);
+  } finally { await delivery.close(); await store.close(); }
+}));
+
+test('session picker counts the same propositions as the flow, excluding derived node entries', async () => withDir(async dir => {
+  const h = host(), store = await StateStore.open(dir), delivery = new DeliveryService(store);
+  const session = new SessionService(h.learning as never, store, delivery);
+  try {
+    h.addNode('n-spin', 'Spin', 'a1'); h.addNode('n-provenance', 'Provenance only', 'a3');
+    delete h.graph.nodeSessions['n-provenance'];
+    h.graph.nodeSessions['derived-1'] = ['s1']; h.graph.nodeSessions['derived-2'] = ['s1'];
+    const list = await session.command('sessions') as SessionList;
+    const flow = await session.command('sessionFlow', { sessionId: 's1' }) as SessionFlow;
+    assert.equal(flow.nodes.length, 2);
+    assert.equal(list.sessions.find(s => s.id === 's1')!.nodeCount, flow.nodes.length);
+  } finally { await delivery.close(); await store.close(); }
+}));
+
+test('matched flags outside the capped session picker remain accessible', async () => withDir(async dir => {
+  const h = host(), store = await StateStore.open(dir), delivery = new DeliveryService(store);
+  const session = new SessionService(h.learning as never, store, delivery);
+  try {
+    h.addNode('n-spin', 'Spin', 'a1');
+    const flag = await session.command('flag', { sessionId: 's1', messageIds: ['a1'] }) as FlagView;
+    for (let i = 0; i < 200; i++) h.sessions.set(`new-${i}`, { id: `new-${i}`, title: 'Newer', kind: 'teach', updatedAt: '2026-11-19T10:00:00Z', messages: [] });
+    const list = await session.command('sessions') as SessionList;
+    assert.equal(list.sessions.some(s => s.id === 's1'), false);
+    assert.deepEqual(list.unresolved.map(f => [f.id, f.status]), [[flag.id, 'matched']]);
   } finally { await delivery.close(); await store.close(); }
 }));
 

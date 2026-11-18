@@ -86,10 +86,10 @@ export class SessionService {
     let ledger: ReadonlyArray<{ chatId: string; fp: string }> | undefined;
     return flags.map(flag => {
       const nodeIds = matchFlag(flag, graph);
-      if (nodeIds.length) return { ...flag, status: 'matched', nodeIds };
       if (!records.has(flag.sessionId)) records.set(flag.sessionId, this.session(flag.sessionId));
       const record = records.get(flag.sessionId);
       if (!record || flag.messageIds.some(id => !record.messages.some(m => m.id === id))) return { ...flag, status: 'missing', nodeIds };
+      if (nodeIds.length) return { ...flag, status: 'matched', nodeIds };
       ledger ??= this.covered();
       const covered = new Set(ledger.filter(e => e.chatId === flag.sessionId).map(e => e.fp));
       const extracted = extractedMessageIds(record.messages, covered, flag.messageIds);
@@ -163,7 +163,10 @@ export class SessionService {
   private sessions(): SessionList {
     const state = this.store.snapshot(), graph = this.graph();
     const nodeCount = new Map<string, number>();
-    for (const chats of Object.values(graph.nodeSessions)) for (const chat of new Set(chats)) nodeCount.set(chat, (nodeCount.get(chat) ?? 0) + 1);
+    for (const node of graph.propositions) {
+      const chats = new Set([...(graph.nodeSessions[node.id] ?? []), ...(node.provenance ?? []).map(p => p.chatId)]);
+      for (const chat of chats) nodeCount.set(chat, (nodeCount.get(chat) ?? 0) + 1);
+    }
     const views = this.views(state.flags, graph);
     const listed = this.learning.listSessions().filter(s => s.kind === 'teach')
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, MAX_SESSIONS);
@@ -171,7 +174,8 @@ export class SessionService {
       const own = views.filter(v => v.sessionId === s.id);
       return { id: s.id, title: s.title, updatedAt: s.updatedAt, nodeCount: nodeCount.get(s.id) ?? 0, flagCount: own.length, waitingCount: own.filter(v => v.status !== 'matched').length };
     });
-    return { sessions, unresolved: views.filter(v => v.status !== 'matched') };
+    const listedIds = new Set(sessions.map(s => s.id));
+    return { sessions, unresolved: views.filter(v => v.status !== 'matched' || !listedIds.has(v.sessionId)) };
   }
 
   private sessionFlow(input: Record<string, unknown>): SessionFlow {

@@ -228,10 +228,12 @@ test("plugin UI blocks pairing a null profile and removes stale connected status
   } finally { await f.dispose(); }
 });
 
-test("plugin UI refreshes persisted results after a send error without offering uncertain resend", async () => {
+test("plugin UI refreshes review and session counts after a send error without offering uncertain resend", async () => {
   const state = fixture();
+  let sessionReads = 0;
   state.cards.push({ id: "partial", kind: "recall", status: "approved", front: "Question", back: "Answer", extra: "" });
   const f = await setup((name) => {
+    if (name === "sessions") { sessionReads++; return { sessions: [], unresolved: [] }; }
     if (name === "send") {
       state.cards[0]!.status = "sending";
       throw new Error("Uncertain outcome; reconcile before retrying");
@@ -239,7 +241,9 @@ test("plugin UI refreshes persisted results after a send error without offering 
     return structuredClone(state);
   });
   try {
+    const before = sessionReads;
     f.button("Send approved card").click(); await tick();
+    assert.ok(sessionReads > before, "partial-send recovery refreshes session counts");
     assert.match(f.container.textContent!, /Uncertain outcome/);
     assert.match(f.container.textContent!, /recall · sending/);
     assert.equal(f.calls.at(-1)!.name, "snapshot");

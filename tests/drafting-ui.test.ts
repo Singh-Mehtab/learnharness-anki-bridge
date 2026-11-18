@@ -15,13 +15,13 @@ function setup() {
   const calls: Array<{ name: string; input: any }> = [];
   const state: any = { generationSettings: { cardsPerNode: 2, enabledKinds: ["recall", "why", "compose", "discriminate"], model: null }, generations: [] };
   let knowledge: ((ids: readonly string[]) => void) | undefined, model: ((v: { provider: string; id: string }) => void | Promise<void>) | undefined;
-  let refreshed = 0, knowledgeMounts = 0, hold: Promise<void> | undefined;
+  let refreshed = 0, knowledgeMounts = 0, hold: Promise<void> | undefined, graphHold: Promise<void> | undefined;
   const widget = () => ({ update: () => {}, dispose: () => {} });
   const ctx = {
     signal: controller.signal, onResync: () => () => {},
     call: async (name: string, input: any) => {
       calls.push({ name, input });
-      if (name === "generationContext") return { nodes: [{ id: "n_a", name: "Alpha", statement: "Alpha holds under A." }], catalog: {} };
+      if (name === "generationContext") { await graphHold; return { nodes: [{ id: "n_a", name: "Alpha", statement: "Alpha holds under A." }], catalog: {} }; }
       if (name === "generationSettings") Object.assign(state.generationSettings, input);
       if (name === "preflight" || name === "retryGeneration") { await hold; return structuredClone(preflight); }
       if (name === "generate") state.generations.push({ id: "p1", status: "running", nodeIds: ["n_a"], skipped: [], settings: {}, createdAt: "", tasks: [
@@ -42,6 +42,11 @@ function setup() {
     assert.ok(found, `button ${label}`); return found;
   };
   return { container, calls, state, button, select: (ids: string[]) => knowledge!(ids), pickModel: (v: { provider: string; id: string }) => model!(v),
+    holdGraphReload: () => {
+      let resolve!: () => void, reject!: (error: Error) => void;
+      graphHold = new Promise<void>((yes, no) => { resolve = yes; reject = no; });
+      return { resolve: () => { graphHold = undefined; resolve(); }, reject: () => { graphHold = undefined; reject(new Error("Graph reload failed")); } };
+    },
     refreshed: () => refreshed, knowledgeMounts: () => knowledgeMounts, panel, holdEstimates: () => { let release!: () => void; hold = new Promise(r => { release = r; }); return () => { hold = undefined; release(); }; }, close: async () => { panel.dispose(); controller.abort(); await window.happyDOM.close(); } };
 }
 
@@ -135,6 +140,27 @@ test("an outside selection (0.4.0 session panel) replaces the selection without 
     assert.match(f.container.textContent!, /Alpha holds under A/);
     assert.equal(f.calls.some(c => c.name === "preflight" || c.name === "generate"), false);
   } finally { await f.close(); }
+});
+
+test("session handoff clears old confirmation before graph reload and rejects its queued click", async () => {
+  for (const outcome of ["resolve", "reject"] as const) {
+    const f = setup();
+    let gate: ReturnType<typeof f.holdGraphReload> | undefined;
+    try {
+      await tick();
+      f.select(["n_a"]); await f.pickModel({ provider: "scratch", id: "writer" }); await tick();
+      f.button("Estimate generation").click(); await tick();
+      const oldConfirm = f.button("Confirm and generate");
+      gate = f.holdGraphReload();
+      const selecting = f.panel.select(["n_b"]);
+      oldConfirm.click(); // The click can queue before the selection action begins.
+      await tick();
+      assert.equal([...f.container.querySelectorAll("button")].some(b => b.textContent === "Confirm and generate"), false, outcome);
+      gate[outcome](); await selecting; await tick();
+      assert.equal(f.calls.some(c => c.name === "generate"), false, outcome);
+      assert.match(f.container.textContent!, /Estimate changed/);
+    } finally { gate?.resolve(); await f.close(); }
+  }
 });
 
 test("an estimate reply that arrives after the selection or settings changed is discarded", async () => {
