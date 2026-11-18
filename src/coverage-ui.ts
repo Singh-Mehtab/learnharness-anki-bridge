@@ -5,7 +5,7 @@ export interface CoverageRow {
   id: string; name: string; statement: string; statementHash?: string;
   cards: CardCounts; coverage?: Coverage; flagged?: boolean; flagNotes?: string[];
 }
-export type CoverageView = Omit<CoverageContext, "nodes" | "missing"> & { nodes: CoverageRow[]; missing?: CoverageRow[] };
+export type CoverageView = Omit<CoverageContext, "nodes" | "missing" | "pairingKey"> & { nodes: CoverageRow[]; missing?: CoverageRow[]; pairingKey?: string };
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, text?: string): HTMLElementTagNameMap[K] {
   const node = document.createElement(tag); if (text !== undefined) node.textContent = text; return node;
 }
@@ -29,7 +29,7 @@ export class CoveragePicker {
   private backfill = new Set<string>();
   private touched = new Set<string>();
   private stale = false;
-  private readonly options: { changed(source: "read" | "user"): void; defaults?: boolean; mutate(name: "dismissNode" | "restoreNode", node: CoverageRow): void };
+  private readonly options: { changed(source: "read" | "user"): void; defaults?: boolean; mutate(name: "dismissNode" | "restoreNode", node: CoverageRow): void; reviewWaiting?: (nodeId: string) => void };
   constructor(options: CoveragePicker["options"]) {
     this.options = options;
     this.root.className = "anki-bridge-coverage";
@@ -42,7 +42,7 @@ export class CoveragePicker {
     }
     this.scope.setAttribute("aria-label", "Coverage view");
     this.search.type = "search"; this.search.placeholder = "Search nodes"; this.search.setAttribute("aria-label", "Search nodes");
-    const filter = () => { this.selectionWarning.textContent = ""; this.prune(); this.options.changed("user"); this.render(); };
+    const filter = () => { if (this.stale) return; this.selectionWarning.textContent = ""; this.prune(); this.options.changed("user"); this.render(); };
     this.search.oninput = filter; this.scope.onchange = filter;
     this.bulk.type = this.clear.type = "button";
     this.bulk.onclick = () => {
@@ -110,6 +110,7 @@ export class CoveragePicker {
     this.rows.replaceChildren(); this.historicalRows.replaceChildren();
     this.warning.textContent = this.stale ? "Coverage is stale. Refresh the graph before selecting or drafting." : this.view.pairingWarning
       ? "Pairing warning: the configured Anki address differs from the paired destination." : !this.view.paired ? "Not paired with an Anki profile. Coverage does not require a live connection." : "";
+    this.search.disabled = this.scope.disabled = this.stale;
     const visible = this.visible(); this.history.hidden = !visible.some(n => this.historical(n));
     const uncarded = visible.filter(n => this.eligible(n) && isUncardedNode(n));
     this.bulk.textContent = `Select all uncarded: ${uncarded.length} ${uncarded.length === 1 ? "idea" : "ideas"}, up to ${uncarded.length * this.view.cardsPerNode} cards`;
@@ -126,6 +127,7 @@ export class CoveragePicker {
         const box = el("input"); box.type = "checkbox"; box.checked = this.selected.has(n.id); box.disabled = this.stale || !this.eligible(n);
         box.setAttribute("aria-label", `Select ${n.name}`);
         box.onchange = () => {
+          if (this.stale) return;
           if (box.checked && !this.withinLimit(this.selected.size + (this.selected.has(n.id) ? 0 : 1))) { this.render(); return; }
           this.selectionWarning.textContent = "";
           this.touched.add(n.id); this.backfill.delete(n.id);
@@ -139,6 +141,7 @@ export class CoveragePicker {
       if (n.flagged) badges.push("Flagged");
       if (c) { badges.push(coverageLabel(c.state)); if (c.state !== c.base) badges.push(`Base: ${coverageLabel(c.base)}`); }
       if (c?.dismissed) badges.push("Dismissed for current statement");
+      if (c?.historicalDismissal) badges.push("Historical dismissal");
       if (n.cards.sent) badges.push(`${n.cards.sent} sent`);
       if (n.cards.waiting) badges.push(`${n.cards.waiting} not yet sent`);
       if (n.cards.sentElsewhere) badges.push(`${n.cards.sentElsewhere} sent to another profile`);
@@ -154,6 +157,10 @@ export class CoveragePicker {
       if ((c?.dismissed || c?.canDismiss) && n.statementHash && !this.historical(n)) {
         const action = el("button", c.dismissed ? "Restore" : "Don't card this"); action.type = "button"; action.disabled = this.stale;
         action.onclick = () => { this.options.changed("user"); this.options.mutate(c.dismissed ? "restoreNode" : "dismissNode", n); }; row.append(action);
+      }
+      if (n.cards.sent && n.cards.waiting && this.options.reviewWaiting) {
+        const action = el("button", "Review waiting cards"); action.type = "button";
+        action.onclick = () => this.options.reviewWaiting?.(n.id); row.append(action);
       }
       (this.historical(n) ? this.historicalRows : this.rows).append(row);
     }

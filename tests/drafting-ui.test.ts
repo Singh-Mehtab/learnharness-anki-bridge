@@ -233,6 +233,18 @@ test("dismiss and restore send the current hash, invalidate confirmation, and re
   } finally { await f.close(); }
 });
 
+test("a profile change invalidates confirmation even when coverage rows are identical", async () => {
+  const f = setup();
+  try {
+    f.graph.paired = true; f.graph.pairingKey = 'profile A';
+    await tick(); f.select(["n_a"]); f.button("Estimate generation").click(); await tick();
+    f.button("Confirm and generate");
+    f.graph.pairingKey = 'profile B'; await f.panel.refresh();
+    assert.doesNotMatch(f.container.textContent!, /Confirm and generate/);
+    assert.match(f.container.textContent!, /1 node selected/);
+  } finally { await f.close(); }
+});
+
 test("source changes invalidate confirmation even when the selected node ID is unchanged", async () => {
   const f = setup();
   try {

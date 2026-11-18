@@ -230,7 +230,7 @@ export class GenerationService {
       } else if (name === 'generate') {
         keys(value, ['preflightId']);
         if (typeof value.preflightId !== 'string') throw new Error('Confirm a valid preflight ID.');
-        if (this.store.snapshot().generations.some(g => g.id === value.preflightId)) return this.delivery.snapshot();
+        if (this.store.snapshot().generations.some(g => g.id === value.preflightId)) return this.delivery.snapshot(false);
         if (this.store.snapshot().generations.some(g => g.status === 'running')) throw new Error('A generation is already running.');
         const p = this.preflights.get(value.preflightId);
         if (!p) throw new Error('Preflight expired. Run preflight again.');
@@ -251,7 +251,7 @@ export class GenerationService {
         this.drive(g.id);
       } else if (name === 'cancelGeneration') {
         keys(value, ['id']); const g = this.generation(value.id);
-        if (g.status !== 'running') return this.delivery.snapshot();
+        if (g.status !== 'running') return this.delivery.snapshot(false);
         for (const t of g.tasks.filter(t => ['pending', 'running'].includes(t.status))) {
           const w = this.findWorker(t);
           if (w?.status === 'succeeded') await this.apply(g.id, t.requestId, w);
@@ -260,7 +260,7 @@ export class GenerationService {
         }
         await this.delivery.save(s => { s.generations.find(x => x.id === g.id)!.status = 'cancelled'; });
       } else throw new Error('Unknown generation operation.');
-      return this.delivery.snapshot();
+      return this.delivery.snapshot(false);
     });
   }
   private drive(id: string): void {

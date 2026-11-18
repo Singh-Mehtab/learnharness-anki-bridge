@@ -1,5 +1,6 @@
 import type { PluginFrontendContext } from "../sdk/index.d.ts";
 import { mountDrafting } from "./drafting-ui.ts";
+import { isWaitingCard } from "./coverage/flow.ts";
 import { mountSessionFlow, registerSessionActions, SessionRequests } from "./session-ui.ts";
 
 interface Destination { url: string; profile: string }
@@ -23,6 +24,7 @@ interface Card {
   sourceStatement?: string;
   sourceChanged?: boolean;
   sourceMissing?: boolean;
+  sourceUnavailable?: boolean;
 }
 interface Snapshot {
   settings: { url: string; lastDeck: string; hasApiKey: boolean };
@@ -314,6 +316,10 @@ function mount(ctx: PluginFrontendContext, container: HTMLElement, signal: Abort
     if (!state.cards.some(card => card.status !== "dropped")) controls.append(element("p", "No cards to review yet. Select graph nodes above, or write a card by hand."));
     for (const card of state.cards.filter(card => card.status !== "dropped")) {
       const row = element("article");
+      if (card.nodeId && isWaitingCard(card)) {
+        row.dataset.waitingNode = card.nodeId;
+        row.tabIndex = -1;
+      }
       row.append(element("h4", `${card.kind} · ${card.status}`));
       if (card.nodeName || card.sessionName) row.append(element("p", [card.nodeName, card.sessionName].filter(Boolean).join(" / ")));
       if (card.lastError) row.append(element("p", `Error: ${card.lastError}`));
@@ -330,7 +336,8 @@ function mount(ctx: PluginFrontendContext, container: HTMLElement, signal: Abort
       if (card.sourceStatement) {
         const source = element("aside");
         source.append(element("h5", "Source at drafting"), element("p", card.sourceStatement));
-        if (card.sourceMissing) source.append(element("p", "Source node is missing. Check this card before approving."));
+        if (card.sourceUnavailable) source.append(element("p", "Current source is unavailable. Refresh cards to check it."));
+        else if (card.sourceMissing) source.append(element("p", "Source node is missing. Check this card before approving."));
         else if (card.sourceChanged) source.append(element("p", "Source has changed since drafting. Check this card against the graph."));
         columns.append(source);
       }
@@ -382,9 +389,14 @@ function mount(ctx: PluginFrontendContext, container: HTMLElement, signal: Abort
   }
   const unsubscribe = ctx.onResync(() => { void run(refresh); });
   void run(refresh);
-  const draftingPanel = settingsOnly ? undefined : mountDrafting(ctx, drafting, signal, backgroundRefresh);
+  const reviewWaiting = (nodeId: string) => {
+    const row = [...controls.querySelectorAll<HTMLElement>("[data-waiting-node]")].find(row => row.dataset.waitingNode === nodeId);
+    if (row) { row.scrollIntoView?.({ block: "start" }); row.focus(); }
+    else feedback.textContent = "No waiting cards for this node in the review list. Refresh cards to check again.";
+  };
+  const draftingPanel = settingsOnly ? undefined : mountDrafting(ctx, drafting, signal, backgroundRefresh, reviewWaiting);
   sessionPanel = !settingsOnly && requests && draftingPanel ? mountSessionFlow(ctx, sessionHost, signal, {
-    requests,
+    requests, reviewWaiting,
     onInvalidateEstimate: () => draftingPanel.invalidateEstimate(),
     onCoverageChanged: () => draftingPanel.refresh(),
     // Replaces the draft selection and clears any estimate; the learner still estimates and confirms.

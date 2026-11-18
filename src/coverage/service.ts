@@ -22,10 +22,11 @@ export class CoverageService {
     this.ctx = ctx; this.store = store; this.delivery = delivery;
   }
   close(): void { this.closed = true; }
-  snapshot(): CoverageContext {
+  private readGraph() {
     if (this.closed || this.ctx.signal.aborted) throw new Error('Anki Bridge is disabled.');
-    return graphCoverage(this.ctx.learning.graph(), this.store.snapshot());
+    return this.ctx.learning.graph();
   }
+  snapshot(): CoverageContext { return graphCoverage(this.readGraph(), this.store.snapshot()); }
   async command(name: string, input: unknown = {}): Promise<CoverageContext> {
     if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('Expected an input object.');
     const value = input as Record<string, unknown>;
@@ -35,7 +36,8 @@ export class CoverageService {
     if (name !== 'dismissNode' && name !== 'restoreNode') throw new Error('Unknown coverage operation.');
     if (typeof value.nodeId !== 'string' || !value.nodeId || value.nodeId.length > 500 || value.nodeId.includes('\0') || typeof value.statementHash !== 'string' || !/^[a-f0-9]{64}$/.test(value.statementHash)) throw new Error('Choose a current source node.');
     return this.delivery.exclusive(async () => {
-      const view = this.snapshot(), node = view.nodes.find(n => n.id === value.nodeId);
+      const graph = this.readGraph();
+      const node = graphCoverage(graph, this.store.snapshot()).nodes.find(n => n.id === value.nodeId);
       if (!node) throw new Error('Source node is missing from the returned snapshot. The host may have returned incomplete data. Refresh the graph.');
       if (node.statementHash !== value.statementHash) throw new Error('Source changed. Refresh before changing its dismissal.');
       if (name === 'dismissNode') {
@@ -50,7 +52,7 @@ export class CoverageService {
         this.onChanged?.();
         await this.delivery.save(state => { state.dismissals = state.dismissals.filter(d => d.nodeId !== node.id); });
       }
-      return this.snapshot();
+      return graphCoverage(graph, this.store.snapshot());
     });
   }
 }

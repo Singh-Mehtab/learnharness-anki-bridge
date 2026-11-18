@@ -40,7 +40,7 @@ async function setup(handler?: (name: string, input: unknown) => unknown | Promi
     onResync: (listener: () => void) => { resyncs.add(listener); return () => { resyncs.delete(listener); }; },
     app: { openView: (id: string) => { openedView = id; } },
     call: async (name: string, input: unknown) => {
-      if (name === "coverageContext") return { nodes: [], missing: [], cardsPerNode: 2, paired: false, pairingWarning: false };
+      if (name === "coverageContext") return handler?.(name, input) ?? { nodes: [], missing: [], cardsPerNode: 2, paired: false, pairingWarning: false };
       if (name === "generationStatus") return { generationSettings: { cardsPerNode: 2, enabledKinds: ["recall"], model: null }, generations: [] };
       // This fixture checks delivery commands, not the session panel's background reads.
       if (name !== "sessions" && name !== "sessionFlow") calls.push({ name, input });
@@ -80,6 +80,17 @@ async function setup(handler?: (name: string, input: unknown) => unknown | Promi
     dispose: async () => { controller.abort(); if (typeof cleanup === "function") await cleanup(); cleanups.forEach((fn) => fn()); await window.happyDOM.close(); },
   };
 }
+
+test("Review waiting cards focuses the exact node, not another card with the same node name", async () => {
+  const state = fixture();
+  state.cards = ['other:id', 'target:id'].map(nodeId => ({ id: nodeId, nodeId, nodeName: 'Same name', kind: 'recall', status: 'draft', front: nodeId, back: 'Answer', extra: '' }));
+  const f = await setup(name => name === 'coverageContext' ? { nodes: [{ id: 'target:id', name: 'Same name', statement: 'Shared text', cards: { waiting: 1, sent: 1, sentElsewhere: 0 } }], missing: [], paired: true, cardsPerNode: 2 }
+    : name === 'sessions' ? { sessions: [], unresolved: [] } : state);
+  try {
+    f.button('Review waiting cards').click();
+    assert.equal(f.window.document.activeElement?.getAttribute('data-waiting-node'), 'target:id');
+  } finally { await f.dispose(); }
+});
 
 test("plugin UI registers sidebar/view/settings, saves password without exposing stored key, and warns about localhost", async () => {
   const f = await setup();

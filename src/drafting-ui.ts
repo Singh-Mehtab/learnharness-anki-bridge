@@ -26,7 +26,7 @@ export interface DraftingHandle {
   dispose(): void;
 }
 /** Each view owns only its widgets/timer. Closing a view does not cancel backend generation. */
-export function mountDrafting(ctx: PluginFrontendContext, container: HTMLElement, signal: AbortSignal, onCardsChanged: () => Promise<void>): DraftingHandle {
+export function mountDrafting(ctx: PluginFrontendContext, container: HTMLElement, signal: AbortSignal, onCardsChanged: () => Promise<void>, reviewWaiting?: (nodeId: string) => void): DraftingHandle {
   const root = el("section");
   root.append(el("h3", "Draft from graph nodes"));
   const feedback = el("p"); feedback.setAttribute("role", "status"); feedback.setAttribute("aria-live", "polite");
@@ -48,9 +48,11 @@ export function mountDrafting(ctx: PluginFrontendContext, container: HTMLElement
   const invalidate = () => { revision++; preflight = undefined; };
   const alive = () => !disposed && !signal.aborted && !ctx.signal.aborted;
   const picker = new CoveragePicker({
+    reviewWaiting,
     changed: source => { if (source === "user") choiceRevision++; invalidate(); renderPreflight(); if (estimateButton) estimateButton.disabled = picker.isStale; },
     mutate: (name, node) => { invalidate(); renderPreflight(); void run(async () => {
-      await ctx.call(name, { nodeId: node.id, statementHash: node.statementHash });
+      try { await ctx.call(name, { nodeId: node.id, statementHash: node.statementHash }); }
+      catch (error) { if (alive()) { coverageRequest++; picker.markStale(); } throw error; }
       await refresh(); await onCardsChanged();
     }); },
   });

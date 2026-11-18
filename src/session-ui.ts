@@ -144,6 +144,7 @@ export interface SessionPanelOptions {
   requests: SessionRequests;
   onInvalidateEstimate?: () => void;
   onCoverageChanged?: () => Promise<void>;
+  reviewWaiting?: (nodeId: string) => void;
   /** Puts these nodes into the draft panel's selection. Without it the Draft button stays disabled. */
   onDraft?: (request: DraftRequest) => void | Promise<void>;
 }
@@ -165,6 +166,7 @@ export function mountSessionFlow(ctx: PluginFrontendContext, container: HTMLElem
   let sessionId = options.requests.take();
   const coverage = new CoveragePicker({
     defaults: true,
+    reviewWaiting: options.reviewWaiting,
     changed: source => {
       if (source === "user" || coverage.isStale) options.onInvalidateEstimate?.();
       // A session read can discover extraction or coverage changes before drafting does.
@@ -172,7 +174,9 @@ export function mountSessionFlow(ctx: PluginFrontendContext, container: HTMLElem
       if (draft) draft.disabled = !options.onDraft || !coverage.ids.length || coverage.isStale;
     },
     mutate: (name, node) => { void run(async () => {
-      await ctx.call(name, { nodeId: node.id, statementHash: node.statementHash }); await load();
+      try { await ctx.call(name, { nodeId: node.id, statementHash: node.statementHash }); }
+      catch (error) { if (alive()) coverage.markStale(); throw error; }
+      await load();
     }); },
   });
   let draft: HTMLButtonElement | undefined;

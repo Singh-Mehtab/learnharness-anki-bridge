@@ -101,6 +101,10 @@ test("coverage read failure retains rows marked stale, disables selection and mu
     assert.equal(f.button("Select all uncarded").disabled, true);
     assert.equal(f.button("Clear selection").disabled, true);
     assert.equal(f.button("Don't card this").disabled, true);
+    const search = f.picker.root.querySelector<HTMLInputElement>('input[type=search]')!;
+    const scope = f.picker.root.querySelector<HTMLSelectElement>('select')!;
+    assert.equal(search.disabled, true); assert.equal(scope.disabled, true);
+    search.value = "unrelated"; search.oninput?.(new Event("input")); search.value = "";
     f.picker.select([]); assert.deepEqual(f.picker.ids, ["alpha"], "stale reads cannot change explicit choices");
     f.picker.update(view); assert.equal(f.box("alpha").disabled, false); assert.deepEqual(f.picker.ids, ["alpha"]);
   } finally { await f.close(); }

@@ -9,7 +9,6 @@ export async function activate(ctx: PluginBackendContext): Promise<() => Promise
   const store = await StateStore.open(ctx.dataDirectory);
   const service = new DeliveryService(store, { signal: ctx.signal });
   const coverage = new CoverageService(ctx, store, service);
-  service.coverageContext = () => coverage.snapshot();
   const generation = new GenerationService(ctx, store, service);
   coverage.onChanged = () => generation.invalidatePreflights();
   const session = new SessionService(ctx.learning, store, service, { signal: ctx.signal });

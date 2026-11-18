@@ -14,6 +14,7 @@ export interface Coverage {
   uncarded: boolean;
   canDismiss: boolean;
   dismissed: boolean;
+  historicalDismissal?: boolean;
   generating: boolean;
   unresolved: number;
   olderSourceCards: number;
@@ -29,8 +30,11 @@ export interface CoverageContext {
   cardsPerNode: number;
   paired: boolean;
   pairingWarning: boolean;
+  pairingKey: string;
 }
 export interface CoverageSelectable { id: string; cards: CardCounts; coverage?: Coverage }
+export const isWaitingCard = (card: Pick<Card, 'status' | 'noteId'>): boolean =>
+  card.status === 'sending' || (['draft', 'approved', 'failed'].includes(card.status) && card.noteId === undefined);
 export const hasCards = (cards: CardCounts): boolean => cards.waiting > 0 || cards.sent > 0;
 export const canSelectNode = (node: CoverageSelectable): boolean => node.coverage?.selectable ?? true;
 export const isUncardedNode = (node: CoverageSelectable): boolean => node.coverage?.uncarded ?? !hasCards(node.cards);
@@ -77,21 +81,26 @@ export function projectCoverage(sources: readonly CoverageSource[], state: Pick<
       if (card.status === 'sent') {
         if (!same(card)) { cards.sentElsewhere++; continue; }
         cards.sent++; if (card.presence === 'deleted') deletedNotes++;
-      } else { cards.waiting++; if (card.status === 'sending') unresolved++; }
+      } else {
+        if (!isWaitingCard(card)) continue;
+        cards.waiting++; if (card.status === 'sending') unresolved++;
+      }
       const snapshot = card.sourceSnapshot;
       if (!snapshot || snapshot.nodeId !== source.id) { unknownSourceCards++; if (card.status === 'sent') currentOrUnknownSent++; }
+      else if (missing) continue;
       else if (snapshot.statementHash === source.statementHash) { current++; if (card.status === 'sent') currentOrUnknownSent++; }
       else olderSourceCards++;
     }
-    const dismissal = dismissals.get(source.id), dismissed = dismissal?.statementHash === source.statementHash;
+    const dismissal = dismissals.get(source.id), dismissed = !missing && dismissal?.statementHash === source.statementHash;
     const generating = active.has(source.id);
     const base: BaseCoverage = dismissed && !cards.waiting && !currentOrUnknownSent ? 'dismissed' : cards.sent ? 'sent' : cards.waiting ? 'drafts-waiting' : 'no-cards';
     const changed = (olderSourceCards > 0 || !!dismissal && !dismissed) && !current && !unknownSourceCards && !dismissed;
     const status: CoverageState = missing ? 'source-missing' : changed ? 'source-changed' : base;
     const selectable = !missing && !dismissed && !unresolved && !generating;
     return { ...source, cards, coverage: { state: status, base, selectable, uncarded: status === 'no-cards' && selectable,
-      canDismiss: !missing && !dismissed && !cards.waiting && !currentOrUnknownSent && !generating,
+      canDismiss: !missing && !dismissed && !currentOrUnknownSent && !generating && !byNode.get(source.id)?.some(c => c.status !== 'sent' && c.status !== 'dropped'),
       dismissed, generating, unresolved, olderSourceCards, unknownSourceCards, deletedNotes,
+      ...(missing && dismissal ? { historicalDismissal: true } : {}),
       ...(skips.has(source.id) ? { skipReason: skips.get(source.id) } : {}) } };
   }
   const present = new Set(sources.map(n => n.id)), missingSources = new Map<string, CoverageSource>();
@@ -101,5 +110,6 @@ export function projectCoverage(sources: readonly CoverageSource[], state: Pick<
   for (const d of state.dismissals) if (!present.has(d.nodeId) && !missingSources.has(d.nodeId)) missingSources.set(d.nodeId, { id: d.nodeId, name: d.nodeId, statement: '', statementHash: d.statementHash });
   return { nodes: sources.map(n => row(n)), missing: [...missingSources.values()].map(n => row(n, true)),
     cardsPerNode: state.generationSettings.cardsPerNode, paired: !!state.destination,
-    pairingWarning: !!state.destination && state.destination.url !== state.settings.url };
+    pairingWarning: !!state.destination && state.destination.url !== state.settings.url,
+    pairingKey: JSON.stringify([state.settings.url, state.destination?.url, state.destination?.profile]) };
 }

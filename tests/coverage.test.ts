@@ -34,6 +34,12 @@ test('coverage counts waiting, mixed sent/waiting and dropped-only cards without
     assert.equal(n.coverage.state, 'drafts-waiting'); assert.equal(n.cards.waiting, 1); assert.equal(n.coverage.uncarded, false);
     assert.equal(n.coverage.selectable, status !== 'sending');
   }
+  for (const status of ['draft', 'approved', 'failed'] as const) {
+    const n = view([card({ status, noteId: 123, sourceSnapshot: undefined })]);
+    assert.equal(n.cards.waiting, 0); assert.equal(n.coverage.unknownSourceCards, 0);
+    assert.equal(n.coverage.canDismiss, false, 'still an unsent record');
+  }
+  assert.equal(view([card({ status: 'sending', noteId: 123 })]).coverage.unresolved, 1);
   const mixed = view([sent(), card(), card({ status: 'dropped' })]);
   assert.equal(mixed.coverage.state, 'sent'); assert.deepEqual(mixed.cards, { waiting: 1, sent: 1, sentElsewhere: 0 });
   assert.equal(view([card({ status: 'dropped' })]).coverage.uncarded, true);
@@ -78,6 +84,13 @@ test('exact IDs never resolve aliases or identical text; missing sources are his
   assert.equal(next.missing[0].coverage.selectable, false);
   const onlyDismissal = projectCoverage([], { ...initialState(), dismissals: [dismiss()] });
   assert.equal(onlyDismissal.missing.length, 1);
+  assert.equal(onlyDismissal.missing[0].coverage.historicalDismissal, true);
+  assert.equal(onlyDismissal.missing[0].coverage.dismissed, false);
+  const history = [sent(), card({ status: 'dropped', sourceSnapshot: { ...snapshot, statementHash: '0'.repeat(64) } })];
+  for (const cards of [history, [...history].reverse()]) {
+    const [row] = projectCoverage([], { ...initialState(), destination: paired, cards }).missing;
+    assert.equal(row.cards.sent, 1); assert.equal(row.coverage.olderSourceCards, 0);
+  }
   assert.equal(graphCoverage({ propositions: [{ ...node, name: 'New label' }] }, state).nodes[0].coverage.state, 'sent');
 });
 
@@ -110,6 +123,41 @@ test('coverage works without catalog/model/Anki, persists dismissals, and refuse
     await next.call('restoreNode', { nodeId: node.id, statementHash: source.statementHash });
     assert.equal((await next.call<CoverageContext>('coverageContext')).nodes[0].coverage.state, 'no-cards');
   } finally { await closeNext(); }
+}));
+
+test('dismiss and restore acknowledge the commit without another graph read', () => fixture(async (_host, c) => {
+  const graph = c.ctx.learning.graph;
+  for (const [operation, state] of [['dismissNode', 'dismissed'], ['restoreNode', 'no-cards']] as const) {
+    let reads = 0;
+    c.ctx.learning.graph = () => { if (++reads > 1) throw new Error('Second graph read unavailable'); return graph(); };
+    const updated = await c.call<CoverageContext>(operation, { nodeId: node.id, statementHash: source.statementHash });
+    assert.equal(reads, 1); assert.equal(updated.nodes[0].coverage.state, state);
+    c.ctx.learning.graph = graph;
+    assert.equal((await c.call<CoverageContext>('coverageContext')).nodes[0].coverage.state, state);
+  }
+}));
+
+test('generation acknowledgement does not read the graph after validation and still starts one worker', () => fixture(async (host, c) => {
+  await c.call('generationSettings', { model: { provider: 'scratch', id: 'writer' } });
+  const original = c.ctx.learning.graph;
+  let reads = 0;
+  c.ctx.learning.graph = () => { reads++; return original(); };
+  const p = await c.call('preflight', { nodeIds: [node.id] });
+  const validationReads = reads; reads = 0;
+  c.ctx.learning.graph = () => { if (++reads > validationReads) throw new Error('Post-commit graph unavailable'); return original(); };
+  const result = await c.call('generate', { preflightId: p.preflightId });
+  assert.equal(result.generations[0].id, p.preflightId); assert.equal(reads, validationReads);
+  await until(() => host.workers.starts.length === 1);
+  assert.equal((await c.call('generate', { preflightId: p.preflightId })).generations.length, 1);
+  assert.equal(reads, validationReads); assert.equal(host.workers.starts.length, 1);
+}));
+
+test('delivery mutation succeeds when graph source warnings cannot be refreshed', () => fixture(async (_host, c) => {
+  c.ctx.learning.graph = () => { throw new Error('Graph unavailable'); };
+  const result = await c.call('draft', { nodeId: node.id, front: 'Question', back: 'Answer' });
+  assert.equal(result.cards[0].status, 'draft');
+  assert.equal((await c.call('snapshot')).cards.length, 1);
+  await assert.rejects(c.call('coverageContext'), /Graph unavailable/);
 }));
 
 test('dismissal rejects malformed, stale and missing sources and never drops waiting cards', () => fixture(async (host, c) => {

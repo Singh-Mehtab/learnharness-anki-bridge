@@ -30,6 +30,7 @@ export interface SessionFlow {
   paired: boolean;
   missing: CoverageNode[];
   pairingWarning: boolean;
+  pairingKey: string;
 }
 export interface SessionSummary { id: string; title: string; updatedAt: string; nodeCount: number; flagCount: number; waitingCount: number }
 export interface SessionList { sessions: SessionSummary[]; unresolved: FlagView[] }
@@ -182,7 +183,7 @@ export class SessionService {
     });
     const title = record?.title || flags[0]?.sessionTitle || graph.sessions?.[sessionId] || '';
     return { session: { id: sessionId, title, exists: !!record }, nodes, flags, cardsPerNode: this.cardsPerNode(), paired: !!state.destination,
-      missing: coverage.missing.filter(n => state.cards.some(c => c.nodeId === n.id && c.sessionId === sessionId)), pairingWarning: coverage.pairingWarning };
+      missing: coverage.missing.filter(n => state.cards.some(c => c.nodeId === n.id && c.sessionId === sessionId)), pairingWarning: coverage.pairingWarning, pairingKey: coverage.pairingKey };
   }
 
   async command(name: string, input: unknown = {}): Promise<unknown> {
