@@ -121,8 +121,6 @@ export function mountDrafting(ctx: PluginFrontendContext, container: HTMLElement
       }); confirm.disabled = !p.batches.length;
       estimate.append(confirm);
     }
-    // Selection callbacks fire only on user interaction, after this closure is initialized.
-    renderPreflight = renderPreflight.bind(null);
     renderPreflight();
     controls.append(el("h4", "Generation activity"), button("Refresh generation", async () => { await snapshot(); await onCardsChanged(); }));
     if (!state.generations.length) controls.append(el("p", "No generation started yet. Estimating does not call a model."));
@@ -142,8 +140,6 @@ export function mountDrafting(ctx: PluginFrontendContext, container: HTMLElement
       controls.append(row);
     }
   }
-  // Reassigned by each render so picker callbacks invalidate the visible estimate.
-  let renderPreflight = () => {};
   const unsubscribe = ctx.onResync(() => { void run(async () => { await load(); await onCardsChanged(); }); });
   void run(load);
   return () => { disposed = true; if (timer) clearTimeout(timer); unsubscribe(); disposeWidgets(); root.remove(); };

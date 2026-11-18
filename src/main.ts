@@ -1,4 +1,5 @@
 import type { PluginFrontendContext } from "../sdk/index.d.ts";
+import { mountDrafting } from "./drafting-ui.ts";
 
 interface Destination { url: string; profile: string }
 interface Card {
@@ -94,8 +95,10 @@ function mount(ctx: PluginFrontendContext, container: HTMLElement, signal: Abort
   feedback.setAttribute("role", "status");
   feedback.setAttribute("aria-live", "polite");
   const controls = element("fieldset");
+  const drafting = element("div");
   root.append(element("h2", settingsOnly ? "Anki Bridge settings" : "Anki Bridge 0.3.0"),
-    element("p", "Draft from your graph, check every answer, then approve and send to Anki. Nothing is sent automatically."), feedback, controls);
+    element("p", settingsOnly ? "Connection, pairing and note type. Use a throwaway Anki profile while testing." : "Draft from your graph, check every answer, then approve and send to Anki. Nothing is sent automatically."),
+    drafting, feedback, controls);
   container.append(root);
   let disposed = false;
   let busy = false;
@@ -328,7 +331,14 @@ function mount(ctx: PluginFrontendContext, container: HTMLElement, signal: Abort
   }
   const unsubscribe = ctx.onResync(() => { void run(refresh); });
   void run(refresh);
-  return () => { disposed = true; unsubscribe(); disposePreviews(); root.remove(); };
+  // Generated drafts arrive in the background. Re-render without dropping unsaved edits (kept in `edits`).
+  const unmountDrafting = settingsOnly ? () => {} : mountDrafting(ctx, drafting, signal, async () => {
+    if (!alive()) return;
+    if (busy) return;
+    const fresh = await ctx.call<Snapshot>("snapshot");
+    if (alive() && !busy) { state = fresh; render(); }
+  });
+  return () => { disposed = true; unsubscribe(); unmountDrafting(); disposePreviews(); root.remove(); };
 }
 
 export function activate(ctx: PluginFrontendContext): void {
