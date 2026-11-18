@@ -4,11 +4,14 @@ import { ensureNoteType, MODEL_NAME, repairFields, updateStyling } from './note-
 import { renderMarkdown } from './render.ts';
 import { StateStore, sameDestination } from './state.ts';
 import type { Card, CardKind, Destination, State } from './state.ts';
+import type { Generation, GenerationSettings } from '../generation/types.ts';
 
 export interface PublicSnapshot {
   settings: { url: string; lastDeck: string; hasApiKey: boolean };
   destination: Destination | null;
-  cards: Card[];
+  cards: (Card & { sourceStatement?: string; sourceChanged?: boolean; sourceMissing?: boolean })[];
+  generationSettings: GenerationSettings;
+  generations: Generation[];
   recoveryError?: string;
 }
 export interface DraftInput {
@@ -46,6 +49,7 @@ export class DeliveryService {
   private readonly lifetime = new AbortController();
   private closed = false;
   private recoveryError?: string;
+  sourceStatements?: () => Map<string, string>;
   private readonly store: StateStore;
   private readonly options: { signal?: AbortSignal; timeoutMs?: number };
   constructor(store: StateStore, options: { signal?: AbortSignal; timeoutMs?: number } = {}) {
@@ -66,21 +70,32 @@ export class DeliveryService {
     const key = this.store.snapshot().settings.apiKey;
     return key ? message.split(key).join('[API key hidden]') : message;
   }
+  reportRecoveryError(error: unknown): void { this.recoveryError = this.message(error); }
   snapshot(): PublicSnapshot {
-    const { settings, destination, cards } = this.store.snapshot();
-    return { settings: { url: settings.url, lastDeck: settings.lastDeck, hasApiKey: !!settings.apiKey }, destination, cards, ...(this.recoveryError ? { recoveryError: this.recoveryError } : {}) };
+    const { settings, destination, cards, generationSettings, generations } = this.store.snapshot();
+    const current = this.sourceStatements?.();
+    const publicCards = cards.map(card => card.sourceSnapshot ? { ...card, sourceStatement: card.sourceSnapshot.statement,
+      sourceMissing: current ? !current.has(card.nodeId) : false,
+      sourceChanged: current?.has(card.nodeId) ? current.get(card.nodeId) !== card.sourceSnapshot.statement : false } : card);
+    return { generationSettings, generations, settings: { url: settings.url, lastDeck: settings.lastDeck, hasApiKey: !!settings.apiKey }, destination, cards: publicCards, ...(this.recoveryError ? { recoveryError: this.recoveryError } : {}) };
   }
-  private async exclusive<T>(operation: () => Promise<T>): Promise<T> {
+  private busyOwner: 'user' | 'background' | undefined;
+  /** One writer fence. User calls fail fast on another user operation (no double sends),
+   * but wait out short background generation commits rather than showing a busy error. */
+  async exclusive<T>(operation: () => Promise<T>, background = false): Promise<T> {
     this.active();
+    while (this.busy && (background || this.busyOwner === 'background')) { await this.busy.catch(() => undefined); this.active(); }
     if (this.busy) throw new Error('Anki Bridge is busy. Wait for the current operation to finish.');
     // Set the fence before invoking operation, even if it throws synchronously.
     const pending = Promise.resolve().then(operation);
-    this.busy = pending;
+    this.busy = pending; this.busyOwner = background ? 'background' : 'user';
     try { return await pending; }
     catch (error) { throw new Error(this.message(error)); }
-    finally { if (this.busy === pending) this.busy = undefined; }
+    finally { if (this.busy === pending) { this.busy = undefined; this.busyOwner = undefined; } }
   }
-  private async save(mutator: (state: State) => void): Promise<void> {
+  /** Call only inside exclusive: delivery and generation share this one writer fence. */
+  async save(mutator: (state: State) => void): Promise<void> {
+    this.active();
     const state = this.store.snapshot();
     mutator(state);
     await this.store.replace(state);
@@ -177,6 +192,10 @@ export class DeliveryService {
         const front = requiredText(value.front, 'Front'), back = requiredText(value.back, 'Back'), extra = optionalText(value.extra, 'Extra');
         renderMarkdown(front); renderMarkdown(back); renderMarkdown(extra);
         await this.patchCard(card.id, { front, back, extra, status: 'draft', lastError: undefined });
+      } else if (name === 'drop') {
+        const cards = idsInput(value.ids).map(id => this.card(id));
+        if (cards.some(c => c.noteId || ['sending', 'sent', 'dropped'].includes(c.status))) throw new Error('Only unsent editable cards can be dropped.');
+        await this.save(s => { for (const card of s.cards) if (cards.some(c => c.id === card.id)) card.status = 'dropped'; });
       } else if (name === 'approve') {
         const cards = idsInput(value.ids).map(id => this.card(id));
         if (cards.some(c => c.noteId || ['sending', 'sent', 'dropped'].includes(c.status))) throw new Error('Only unsent drafts or failed cards can be approved.');

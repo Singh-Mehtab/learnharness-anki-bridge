@@ -6,29 +6,27 @@ import os from 'node:os';
 import type { PluginBackendContext } from '../sdk/index.d.ts';
 import { activate } from '../src/backend.ts';
 import type { PublicSnapshot } from '../src/anki/delivery.ts';
+import { FakeHost } from './fake-host.ts';
 
 function context(directory: string, controller = new AbortController()) {
-  const handlers = new Map<string, (input: unknown) => unknown>();
-  const ctx = {
-    dataDirectory: directory, signal: controller.signal,
-    handle(name: string, handler: (input: unknown) => unknown) { handlers.set(name, handler); return () => { handlers.delete(name); }; },
-  } as unknown as PluginBackendContext;
-  const call = async (name: string, input: unknown = {}) => { const handler = handlers.get(name); assert(handler, `${name} registered`); return await handler(input) as PublicSnapshot; };
-  return { ctx, handlers, call, controller };
+  const c = new FakeHost().context(directory, controller);
+  return { ...c, call: (name: string, input: unknown = {}) => c.call<PublicSnapshot>(name, input) };
 }
 
 test('backend activation registers public operations without graph, model or network access', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'anki-backend-'));
   const c = context(directory); const close = await activate(c.ctx);
   try {
-    assert.equal(c.handlers.size, 13);
+    assert.equal(c.handlers.size, 21);
     const added = await c.call('draft', { front: 'Prompt', back: 'Answer' });
     assert.equal(added.cards[0].status, 'draft');
     await c.call('approve', { ids: [added.cards[0].id] });
     await assert.rejects(c.call('send', { ids: [added.cards[0].id], deck: 'Scratch' }), /Pair/);
     await assert.rejects(c.call('settings', { unexpected: 'setting' }), /Unsupported/);
+    const lateDraft = c.handlers.get('draft')!;
     await close();
-    await assert.rejects(c.call('draft', { front: 'Late', back: 'No' }), /disabled/);
+    assert.equal(c.handlers.size, 0);
+    await assert.rejects(Promise.resolve().then(() => lateDraft({ front: 'Late', back: 'No' })), /disabled/);
     const next = context(directory); const closeNext = await activate(next.ctx);
     try { const state = await next.call('snapshot'); assert.equal(state.cards.length, 1); assert.equal(state.cards[0].status, 'approved'); }
     finally { await closeNext(); }
