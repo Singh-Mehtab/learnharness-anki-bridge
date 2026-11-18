@@ -335,7 +335,7 @@ function mount(ctx: PluginFrontendContext, container: HTMLElement, signal: Abort
       row.append(element("h4", `${card.kind} · ${card.status}`));
       if (card.nodeName || card.sessionName) row.append(element("p", [card.nodeName, card.sessionName].filter(Boolean).join(" / ")));
       if (card.lastError) row.append(element("p", `Error: ${card.lastError}`));
-      if (card.destination) row.append(element("p", `Sent destination: ${card.destination.profile} at ${card.destination.url}`));
+      if (card.destination) row.append(element("p", `${card.status === "sent" || card.status === "sending" ? "Sent destination" : "Last delivery attempt"}: ${card.destination.profile} at ${card.destination.url}`));
       if (card.deck) row.append(element("p", `Deck: ${card.deck}`));
       if (card.presence) row.append(element("p", `Anki presence: ${card.presence}`));
       if (card.noteId !== undefined) row.append(element("p", `Anki note ID: ${card.noteId}`));

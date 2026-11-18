@@ -329,6 +329,28 @@ test('explicit re-pairing preserves old sent history and never inspects it in th
   } finally { await f.close(); }
 });
 
+test('a stale lock from a dead backend is replaced by exactly one of two concurrent openers', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'anki-lock-'));
+  try {
+    const child = spawn(process.execPath, ['-e', '']);
+    const pid = child.pid!;
+    await new Promise(resolve => child.on('exit', resolve));
+    const lock = path.join(directory, 'state.lock');
+    await writeFile(lock, JSON.stringify({ pid, token: 'dead-owner' }));
+    const results = await Promise.allSettled([StateStore.open(directory), StateStore.open(directory)]);
+    const opened = results.filter(r => r.status === 'fulfilled');
+    assert.equal(opened.length, 1);
+    assert.match(String((results.find(r => r.status === 'rejected') as PromiseRejectedResult).reason), /Another Anki Bridge backend/);
+    const owner = JSON.parse(await readFile(lock, 'utf8'));
+    assert.equal(owner.pid, process.pid); assert.notEqual(owner.token, 'dead-owner');
+    await (opened[0] as PromiseFulfilledResult<StateStore>).value.close();
+    await writeFile(lock, JSON.stringify({ pid, token: 'dead-owner' }));
+    await writeFile(path.join(directory, 'state.lock.recovery'), '');
+    await assert.rejects(StateStore.open(directory), /recovering the state lock/);
+    assert.equal(JSON.parse(await readFile(lock, 'utf8')).token, 'dead-owner');
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
 test('state store refuses corrupt/newer snapshots and another active writer', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'anki-state-'));
   try {

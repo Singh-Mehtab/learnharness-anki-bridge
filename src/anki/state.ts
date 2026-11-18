@@ -103,25 +103,43 @@ export class StateStore {
     await mkdir(directory, { recursive: true, mode: 0o700 });
     const lock = path.join(directory, 'state.lock');
     const token = randomUUID();
-    for (let attempt = 0; ; attempt++) {
-      try {
-        const file = await open(lock, 'wx', 0o600);
-        try { await file.writeFile(JSON.stringify({ pid: process.pid, token })); await file.sync(); }
-        finally { await file.close(); }
-        break;
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'EEXIST' || attempt > 0) throw error;
-        let previous: { pid: number };
-        try { previous = JSON.parse(await readFile(lock, 'utf8')); }
-        catch { throw new Error('Anki Bridge state lock is unreadable. Do not remove it while a backend might be running.'); }
-        if (!Number.isSafeInteger(previous.pid) || previous.pid <= 0) throw new Error('Invalid Anki Bridge state lock.');
-        try { process.kill(previous.pid, 0); }
-        catch (e) {
-          if ((e as NodeJS.ErrnoException).code === 'ESRCH') { await unlink(lock); continue; }
-          throw e;
-        }
-        throw new Error('Another Anki Bridge backend owns this data directory.');
+    const acquire = async () => {
+      const file = await open(lock, 'wx', 0o600);
+      try { await file.writeFile(JSON.stringify({ pid: process.pid, token })); await file.sync(); }
+      finally { await file.close(); }
+    };
+    const owner = async (): Promise<{ pid: number; token?: unknown }> => {
+      let previous: { pid: number; token?: unknown };
+      try { previous = JSON.parse(await readFile(lock, 'utf8')); }
+      catch { throw new Error('Anki Bridge state lock is unreadable. Do not remove it while a backend might be running.'); }
+      if (!Number.isSafeInteger(previous.pid) || previous.pid <= 0) throw new Error('Invalid Anki Bridge state lock.');
+      return previous;
+    };
+    try { await acquire(); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+      const previous = await owner();
+      let alive = true;
+      try { process.kill(previous.pid, 0); }
+      catch (e) { if ((e as NodeJS.ErrnoException).code === 'ESRCH') alive = false; else if ((e as NodeJS.ErrnoException).code !== 'EPERM') throw e; }
+      // EPERM means another user's live process has that ID; treat it as an owner.
+      if (alive) throw new Error('Another Anki Bridge backend owns this data directory. If LearnHarness is not running, remove state.lock from the plugin data folder and restart.');
+      // The owner is dead. Only one backend may replace its lock, and only if it is
+      // still the same stale lock, so two recovering backends cannot both win.
+      const recovery = path.join(directory, 'state.lock.recovery');
+      let marker;
+      try { marker = await open(recovery, 'wx', 0o600); }
+      catch (e) {
+        if ((e as NodeJS.ErrnoException).code === 'EEXIST') throw new Error('Another Anki Bridge backend is recovering the state lock. If none is running, quit LearnHarness and remove state.lock.recovery from the plugin data folder.');
+        throw e;
       }
+      try {
+        await marker.close();
+        const current = await owner();
+        if (current.pid !== previous.pid || current.token !== previous.token) throw new Error('Another Anki Bridge backend owns this data directory.');
+        await unlink(lock);
+        await acquire();
+      } finally { await unlink(recovery); }
     }
     try {
       let value: State;

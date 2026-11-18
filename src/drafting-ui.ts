@@ -142,8 +142,8 @@ export function mountDrafting(ctx: PluginFrontendContext, container: HTMLElement
     if (!preflight) return;
     const p = preflight;
     estimate.className = "anki-bridge-preview";
-    estimate.append(el("h4", "Confirm generation"), el("p", `${count(p.nodeCount, "node")}, up to ${count(p.maximumCards, "card")} in ${count(p.batches.length, "model call")}. Approximate tokens: ${p.inputTokens} input, ${p.outputTokens} reserved output.`),
-      el("p", `Model: ${p.model.provider} / ${p.model.id}`), el("p", p.estimatedCost === null ? "No dollar estimate is available for this model. Subscription or provider usage still applies." : `Estimated cost: $${p.estimatedCost.toFixed(4)} USD. Actual usage can differ, especially after validation retries.`));
+    estimate.append(el("h4", "Confirm generation"), el("p", `${count(p.nodeCount, "node")}, up to ${count(p.maximumCards, "card")} in ${count(p.batches.length, "batch", "batches")}, up to ${count(p.batches.length * 3, "model turn")} if validation retries. First-attempt tokens: about ${p.inputTokens} input, ${p.outputTokens} reserved output.`),
+      el("p", `Model: ${p.model.provider} / ${p.model.id}`), el("p", p.estimatedCost === null ? "No dollar estimate is available for this model. Subscription or provider usage still applies, and retries use more." : `Estimated first-attempt cost: $${p.estimatedCost.toFixed(4)} USD. Validation retries can add up to two more turns per batch.`));
     for (const skip of p.skipped) estimate.append(el("p", `Skipped ${nodes.find(n => n.id === skip.nodeId)?.name ?? skip.nodeId}: ${skip.reason}`));
     const confirm = button("Confirm and generate", async () => {
       // A queued click must not revive an estimate invalidated by a new selection.

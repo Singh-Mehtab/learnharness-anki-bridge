@@ -90,7 +90,7 @@ test("drafting needs explicit selection and a confirmed estimate before any gene
     f.select(["n_a"]); await tick();
     f.button("Estimate generation").click(); await tick();
     assert.equal(f.calls.some(c => c.name === "generate"), false);
-    assert.match(f.container.textContent!, /up to 2 cards in 1 model call\./);
+    assert.match(f.container.textContent!, /up to 2 cards in 1 batch, up to 3 model turns if validation retries\./);
     assert.match(f.container.textContent!, /No dollar estimate/);
     // Changing the selection invalidates the visible estimate.
     f.select(["n_a"]); await tick();
