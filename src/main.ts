@@ -121,7 +121,7 @@ function mount(ctx: PluginFrontendContext, container: HTMLElement, signal: Abort
 
   async function run(action: () => Promise<void>): Promise<void> {
     if (!alive() || busy) return;
-    busy = true;
+    busy = true; actions++;
     controls.disabled = true;
     feedback.textContent = "Working...";
     try {
@@ -141,32 +141,46 @@ function mount(ctx: PluginFrontendContext, container: HTMLElement, signal: Abort
   // A snapshot can arrive while the learner is editing. Keep unsaved inputs,
   // open sections, and the caret when updating the review list.
   function applyReviewSnapshot(fresh: Snapshot): void {
+    // A different saved URL makes the last connection test describe another endpoint.
+    if (state && fresh.settings.url !== state.settings.url) connection = undefined;
     state = fresh;
     const kept = captureForm();
     render();
     restoreForm(kept);
   }
-  let refreshPending = false;
+  let refreshPending = false, actions = 0;
   async function backgroundRefresh(): Promise<void> {
     if (!alive()) return;
     if (busy) { refreshPending = true; return; }
     refreshPending = false;
+    const started = actions;
     try {
       const fresh = await ctx.call<Snapshot>("snapshot");
       if (!alive()) return;
       // Set the flag before yielding so the active action sees it on completion.
       if (busy) { refreshPending = true; return; }
+      // An action ran while this snapshot was in flight; it may predate that action's result.
+      if (started !== actions) { void backgroundRefresh(); return; }
       applyReviewSnapshot(fresh);
       await sessionPanel?.refresh(); await draftingPanel?.refresh();
     } catch { refreshPending = true; }
   }
   interface Kept { values: Map<string, { value: string; checked: boolean }>; open: Set<string>; focus?: { key: string; start: number | null; end: number | null } }
+  /** Input values as last rendered; only inputs the learner changed since then are kept. */
+  let rendered = new Map<string, { value: string; checked: boolean }>();
+  function formValues(): Map<string, { value: string; checked: boolean }> {
+    const values = new Map<string, { value: string; checked: boolean }>();
+    for (const node of controls.querySelectorAll<HTMLElement>("[data-keep]")) {
+      if (node.tagName !== "DETAILS") { const input = node as HTMLInputElement; values.set(node.dataset.keep!, { value: input.value, checked: !!input.checked }); }
+    }
+    return values;
+  }
   function captureForm(): Kept {
     const values = new Map<string, { value: string; checked: boolean }>(), open = new Set<string>();
-    for (const node of controls.querySelectorAll<HTMLElement>("[data-keep]")) {
-      const key = node.dataset.keep!;
-      if (node.tagName === "DETAILS") { if ((node as HTMLDetailsElement).open) open.add(key); }
-      else { const input = node as HTMLInputElement; values.set(key, { value: input.value, checked: !!input.checked }); }
+    for (const node of controls.querySelectorAll<HTMLElement>("details[data-keep]")) if ((node as HTMLDetailsElement).open) open.add(node.dataset.keep!);
+    for (const [key, now] of formValues()) {
+      const was = rendered.get(key);
+      if (!was || was.value !== now.value || was.checked !== now.checked) values.set(key, now);
     }
     const active = document.activeElement as HTMLInputElement | null;
     const focus = active?.dataset?.keep && controls.contains(active)
@@ -217,6 +231,10 @@ function mount(ctx: PluginFrontendContext, container: HTMLElement, signal: Abort
     if (alive()) { connection = next; render(); }
   }
   function render(): void {
+    renderControls();
+    if (alive()) rendered = formValues();
+  }
+  function renderControls(): void {
     if (!alive()) return;
     disposePreviews();
     editors.clear();
@@ -408,7 +426,8 @@ function mount(ctx: PluginFrontendContext, container: HTMLElement, signal: Abort
       controls.append(row);
     }
   }
-  const unsubscribe = ctx.onResync(() => { void run(refresh); });
+  // After the first load, resync uses the background path so typing survives a reconnect.
+  const unsubscribe = ctx.onResync(() => { void (state ? backgroundRefresh() : run(refresh)); });
   peers.add(refreshFromPeer);
   void run(refresh);
   const reviewWaiting = async (nodeId: string) => {

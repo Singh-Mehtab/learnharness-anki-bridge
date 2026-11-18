@@ -266,6 +266,52 @@ test("re-pairing in settings refreshes the mounted review view and maintenance n
   } finally { await f.dispose(); }
 });
 
+test("refreshes adopt untouched saved settings and keep typing through a host reconnect", async () => {
+  const f = await setup();
+  try {
+    const viewUrl = () => (f.container.querySelector('input[type=text]') as unknown as HTMLInputElement).value;
+    const settingsContainer = f.window.document.createElement("div");
+    f.window.document.body.append(settingsContainer);
+    const cleanup = await f.settings(settingsContainer as unknown as HTMLElement, f.controller.signal); await tick();
+    const settingsUrl = settingsContainer.querySelector('input[type=text]') as unknown as HTMLInputElement;
+    settingsUrl.value = "http://127.0.0.1:8766/";
+    f.state.settings.url = "http://127.0.0.1:8766/";
+    f.button("Save connection settings", settingsContainer as unknown as typeof f.container).click(); await tick(); await tick();
+    assert.equal(viewUrl(), "http://127.0.0.1:8766/", "an untouched field adopts the newly saved URL");
+    if (typeof cleanup === "function") await cleanup();
+
+    (f.container.querySelector('details[data-keep="manual"]') as unknown as HTMLDetailsElement).open = true;
+    (f.container.querySelector('[data-keep="manual-front"]') as unknown as HTMLTextAreaElement).value = "Typed before reconnect";
+    f.resync(); await tick(); await tick();
+    assert.equal((f.container.querySelector('details[data-keep="manual"]') as unknown as HTMLDetailsElement).open, true);
+    assert.equal((f.container.querySelector('[data-keep="manual-front"]') as unknown as HTMLTextAreaElement).value, "Typed before reconnect");
+  } finally { await f.dispose(); }
+});
+
+test("a background snapshot taken before an action cannot overwrite that action's result", async () => {
+  const state = fixture();
+  state.cards = [{ id: "one", nodeId: "n", kind: "recall", status: "draft", front: "Front", back: "Back", extra: "" }];
+  let holding = false, release: (() => void) | undefined;
+  const f = await setup((name) => {
+    if (name === "coverageContext") return undefined;
+    if (name === "connection") return { profile: "Throwaway <test>", decks: ["Scratch"] };
+    if (name === "sessions") return { sessions: [], unresolved: [] };
+    if (name === "approve") state.cards[0]!.status = "approved";
+    const snap = structuredClone(state);
+    if (name === "snapshot" && holding) return new Promise((resolve) => { release = () => resolve(snap); });
+    return snap;
+  });
+  try {
+    holding = true;
+    f.resync(); await tick();
+    assert.ok(release, "background snapshot is in flight");
+    holding = false;
+    f.button("Approve card").click(); await tick(); await tick();
+    release!(); await tick(); await tick(); await tick();
+    assert.equal(Array.from(f.container.querySelectorAll("button")).some((b) => b.textContent === "Approve card"), false);
+  } finally { await f.dispose(); }
+});
+
 test("plugin UI hand-written draft, saved edits, explicit approval and deck send use named RPCs", async () => {
   const f = await setup();
   try {

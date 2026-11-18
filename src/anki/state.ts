@@ -106,9 +106,11 @@ export class StateStore {
     const token = randomUUID();
     const acquire = async () => {
       const file = await open(lock, 'wx', 0o600);
-      try { await file.writeFile(JSON.stringify({ pid: process.pid, token })); await file.sync(); }
-      catch (error) { await file.close(); await unlink(lock).catch(() => {}); throw error; }
-      await file.close();
+      // Any failure after creating the lock removes it and reports the first error.
+      let failure: unknown;
+      try { await file.writeFile(JSON.stringify({ pid: process.pid, token })); await file.sync(); } catch (e) { failure = e; }
+      try { await file.close(); } catch (e) { failure ??= e; }
+      if (failure !== undefined) { await unlink(lock).catch(() => {}); throw failure; }
     };
     const owner = async (): Promise<{ pid: number; token?: unknown }> => {
       let previous: { pid: number; token?: unknown };
@@ -134,7 +136,7 @@ export class StateStore {
       try { process.kill(previous.pid, 0); }
       catch (e) { if ((e as NodeJS.ErrnoException).code === 'ESRCH') alive = false; else if ((e as NodeJS.ErrnoException).code !== 'EPERM') throw e; }
       // EPERM means another user's live process has that ID; treat it as an owner.
-      if (alive) throw new Error('Another Anki Bridge backend owns this data directory. If LearnHarness is not running, remove state.lock from the plugin data folder and restart.');
+      if (alive) throw new Error(busyLock);
       // The owner is dead. Only one backend may replace its lock, and only if it is
       // still the same stale lock, so two recovering backends cannot both win.
       const recovery = path.join(directory, 'state.lock.recovery');
