@@ -61,7 +61,11 @@ export function mountDrafting(ctx: PluginFrontendContext, container: HTMLElement
   }
   async function snapshot(name = "generationStatus", input?: unknown): Promise<void> {
     const next = await ctx.call<DraftingSnapshot>(name, input);
-    if (alive()) state = next;
+    if (alive()) {
+      state = next;
+      // Saved caps and model defaults also affect the session panel's estimate.
+      if (name === "generationSettings") await onCardsChanged();
+    }
   }
   function schedule(): void {
     if (timer) clearTimeout(timer);

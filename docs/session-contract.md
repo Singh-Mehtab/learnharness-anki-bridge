@@ -1,6 +1,6 @@
 # Session flow contract (0.4.0)
 
-0.4.0 adds flags on teaching replies, the "waiting for extraction" state and session-based node selection. It does not generate cards. Drafting, preflight, review and generation recovery belong to 0.3.0. This page records the boundary between them.
+0.4.0 adds flags on teaching replies, the "waiting for extraction" state and session-based node selection. It uses the drafting panel and generation service merged in 0.3.0, PR #5 at `e88f89d`. This page records the boundary between them.
 
 ## Backend operations
 
@@ -43,6 +43,7 @@ The action is disabled unless the session view reports `status === "ready"` and 
 - **Flag for Anki** sits in the teaching top bar. A click opens a dialog with the reply excerpt and an optional note. The shortcut, default `mod+shift+a`, flags at once and shows a confirmation that closes after 3.5 seconds unless the learner clicks or types in it. The confirmation offers a note field, and Undo when this press created the flag. Pressing the shortcut on an already flagged reply says so and never offers to undo the earlier flag.
 - **Make cards** sits in the teaching top bar and opens the Anki Bridge view on that session.
 - The view's session panel lists flags and their status, with Refresh and Remove flag. Unresolved flags from other sessions appear above it. The node list ticks flagged nodes by default and greys nodes that already have cards. "Select all uncarded" ticks nodes with no unsent or paired-sent cards.
+- Saved generation settings and card mutations refresh session estimates and card counts through `SessionPanelHandle.refresh()`. A refresh requested during a session operation is deferred rather than dropped. Manual node choices survive refresh.
 - Extraction has no completion event. While any flag is `waiting`, the panel re-checks one second after an `activity-changed` or `turn-settled` app event. Refresh is the reliable path.
 
 ## State
@@ -55,15 +56,17 @@ interface Flag { id: string; sessionId: string; sessionTitle: string; messageIds
 
 No two flags may claim the same `(sessionId, messageId)`. The cap is 5,000 flags and 50 message IDs per flag.
 
-On this branch the snapshot goes from schema 1 to 2 by adding `flags: []`. 0.3.0 also moves to schema 2, adding generation settings and batches. **When 0.4.0 is rebased onto 0.3.0, flags become schema 3**, migrating 1 → 2 → 3, so that each version number means one layout. The migration code here is one line inside `migrateState` for that reason.
+State schema is 3. `migrateState` chains the 0.3.0 schema 1 → 2 step, which adds generation settings and batches, with a schema 2 → 3 step adding `flags: []`. Generation settings, completed results, cards and source snapshots are preserved. Validation requires schema 3 and keeps both generation and flag checks. `StateStore.open` writes the migrated snapshot atomically only after validation passes. Malformed and future-version files are refused and left unchanged.
+
+The earlier, unmerged 0.4.0 development branch also called its flags-only layout schema 2. That layout was used only in scratch data and is not a supported migration source. Schema 2 here means the layout shipped by merged 0.3.0.
 
 ## Integration with 0.3.0
 
-These are the four points agreed before both versions touch shared code.
+Both services now run together. The integration follows these four ownership boundaries.
 
-1. **Opening drafting with a session and node IDs.** The session panel calls `onDraft({sessionId, nodeIds})`, with `nodeIds` in display order. 0.3.0's draft screen should accept an initial selection and then call its existing `preflight({nodeIds})`. Until that exists, `onDraft` is absent and the button is disabled with a note saying so.
-2. **Flag notes reaching the writer.** `SessionService.flagNotes()` returns `Map<nodeId, note>`, joining several notes with " / ". 0.3.0's input preparation passes `flagNote: notes.get(id)` into the existing writer extras (`src/writer/input.ts` already accepts `flagNote`). The cards-per-node cap shown in the panel comes from the `cardsPerNode` option, which should read 0.3.0's generation settings.
-3. **Persistence.** Flags go through `DeliveryService.exclusive(operation, true)` and `DeliveryService.save`, the same fence and writer as 0.3.0. There is no second state file. This branch makes `exclusive` and `save` public with the same text as the 0.3.0 branch, so the two changes merge without conflict.
-4. **Ownership.** 0.3.0 owns generation operations, the generation schema fields and the draft screen. 0.4.0 owns the `flags` field, the four operations above and the two top-bar actions. Backend handler registration is additive in `src/backend.ts`; whichever branch merges second resolves that file and `migrateState`.
+1. **Opening drafting with a session and node IDs.** The session panel calls `onDraft({sessionId, nodeIds})`, with `nodeIds` in display order. `main.ts` awaits `draftingPanel.select(nodeIds)`, then scrolls to and focuses the draft panel. This replaces the selection and clears an old estimate without generating. The learner then estimates and confirms through the existing generation operations.
+2. **Flag notes reaching the writer.** `backend.ts` sets `generation.flagNotes = () => session.flagNotes()`. The map joins several notes with " / ". Generation preparation passes each note as the existing writer extra `flagNote`. Notes enter the exact-prompt digest, so changing one invalidates an outstanding estimate. The session panel reads `store.snapshot().generationSettings.cardsPerNode` for its cap.
+3. **Persistence.** Flags go through `DeliveryService.exclusive(operation, true)` and `DeliveryService.save`, the same fence and writer as generation. There is no second state file. `delivery.ts` is unchanged from merged 0.3.0. Its second argument is `background`, not the old `wait` parameter. Flags wait for the fence; user delivery calls wait out background commits but refuse a second user operation.
+4. **Ownership.** 0.3.0 owns generation operations, the generation schema fields and the draft screen. 0.4.0 owns the `flags` field, the four operations above and the two top-bar actions. Backend handler registration is additive in `src/backend.ts`; disable unregisters both services' handlers and closes both services.
 
-Merge order is 0.3.0 first, then this branch rebased onto it.
+PR #4 is rebased onto merged 0.3.0 and remains unmerged for review.

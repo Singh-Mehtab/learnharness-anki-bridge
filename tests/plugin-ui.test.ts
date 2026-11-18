@@ -40,7 +40,8 @@ async function setup(handler?: (name: string, input: unknown) => unknown | Promi
     onResync: (listener: () => void) => { resyncs.add(listener); return () => { resyncs.delete(listener); }; },
     app: { openView: (id: string) => { openedView = id; } },
     call: async (name: string, input: unknown) => {
-      calls.push({ name, input });
+      // This fixture checks delivery commands, not the session panel's background reads.
+      if (name !== "sessions" && name !== "sessionFlow") calls.push({ name, input });
       if (handler) return handler(name, input);
       if (name === "connection") return { profile: "Throwaway <test>", decks: ["Scratch", "New::Deck"] };
       if (name === "sessions") return { sessions: [], unresolved: [] };

@@ -143,14 +143,19 @@ export interface SessionPanelOptions {
   onDraft?: (request: DraftRequest) => void | Promise<void>;
 }
 
+export interface SessionPanelHandle {
+  (): void;
+  refresh(): Promise<void>;
+}
+
 /** Session picker, flags with extraction status, and node selection for drafting. */
-export function mountSessionFlow(ctx: PluginFrontendContext, container: HTMLElement, signal: AbortSignal, options: SessionPanelOptions): () => void {
+export function mountSessionFlow(ctx: PluginFrontendContext, container: HTMLElement, signal: AbortSignal, options: SessionPanelOptions): SessionPanelHandle {
   const root = el("section", undefined, "anki-bridge-session");
   const feedback = el("p"); feedback.setAttribute("role", "status"); feedback.setAttribute("aria-live", "polite");
   const controls = el("fieldset");
   root.append(el("h3", "Cards from a session"), feedback, controls);
   container.append(root);
-  let disposed = false, busy = false, refreshTimer: ReturnType<typeof setTimeout> | undefined;
+  let disposed = false, busy = false, refreshPending = false, refreshTimer: ReturnType<typeof setTimeout> | undefined;
   let list: SessionList | undefined, flow: SessionFlow | undefined;
   let sessionId = options.requests.take();
   let selected = new Set<string>();
@@ -163,7 +168,11 @@ export function mountSessionFlow(ctx: PluginFrontendContext, container: HTMLElem
     if (!quiet) feedback.textContent = "Working...";
     try { await action(); if (alive()) { render(); if (!quiet) feedback.textContent = ""; } }
     catch (error) { if (alive()) { render(); feedback.textContent = error instanceof Error ? error.message : String(error); } }
-    finally { busy = false; if (alive()) controls.disabled = false; }
+    finally {
+      busy = false;
+      if (alive()) controls.disabled = false;
+      if (refreshPending && alive()) { refreshPending = false; void run(load, true); }
+    }
   }
   function button(text: string, action: () => Promise<void> | void, disabled = false): HTMLButtonElement {
     const b = el("button", text); b.type = "button"; b.disabled = disabled;
@@ -289,5 +298,10 @@ export function mountSessionFlow(ctx: PluginFrontendContext, container: HTMLElem
     }),
   ];
   void run(load);
-  return () => { disposed = true; clearTimeout(refreshTimer); for (const u of unsubscribers) u(); root.remove(); };
+  return Object.assign(() => { disposed = true; clearTimeout(refreshTimer); for (const u of unsubscribers) u(); root.remove(); }, {
+    refresh: async () => {
+      if (busy) { refreshPending = true; return; }
+      await run(load, true);
+    },
+  });
 }

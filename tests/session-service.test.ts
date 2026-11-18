@@ -87,6 +87,38 @@ test('version 1 state migrates to flags without losing cards; newer versions are
   assert.equal(await readFile(file, 'utf8'), future);
 }));
 
+test('schema 2 migrates to 3 and preserves generation settings and cards', async () => withDir(async dir => {
+  const { flags: _flags, ...base } = initialState();
+  const v2 = { ...base, schemaVersion: 2,
+    generationSettings: { ...base.generationSettings, cardsPerNode: 4, enabledKinds: ['recall'] }, cards: [card({})] };
+  const file = path.join(dir, 'state.json');
+  await writeFile(file, JSON.stringify(v2));
+  const store = await StateStore.open(dir);
+  try {
+    assert.deepEqual(store.snapshot(), { ...v2, schemaVersion: 3, flags: [] });
+    assert.deepEqual(JSON.parse(await readFile(file, 'utf8')), store.snapshot());
+    const delivery = new DeliveryService(store), h = host();
+    const session = new SessionService(h.learning as never, store, delivery);
+    const flow = await session.command('sessionFlow', { sessionId: 's1' }) as SessionFlow;
+    assert.equal(flow.cardsPerNode, 4);
+    await delivery.close();
+  } finally { await store.close(); }
+}));
+
+test('malformed schema 2 generation and schema 3 flags are refused without touching the file', async () => withDir(async dir => {
+  const file = path.join(dir, 'state.json');
+  for (const bad of [
+    { ...initialState(), schemaVersion: 2, generations: [{ id: 'broken' }] },
+    { ...initialState(), flags: [{ id: 'broken' }] },
+    { ...initialState(), cards: [card({ sourceSnapshot: { broken: true } })] },
+  ]) {
+    const raw = JSON.stringify(bad);
+    await writeFile(file, raw);
+    await assert.rejects(StateStore.open(dir), /Invalid/);
+    assert.equal(await readFile(file, 'utf8'), raw);
+  }
+}));
+
 test('a flag waits for extraction, then reports no nodes or matched nodes, and survives restart', async () => withDir(async dir => {
   const h = host(), c = context(dir, h.learning);
   let close = await activate(c.ctx);

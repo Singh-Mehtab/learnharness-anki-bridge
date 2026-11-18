@@ -102,6 +102,7 @@ function mount(ctx: PluginFrontendContext, container: HTMLElement, signal: Abort
     element("p", settingsOnly ? "Connection, pairing and note type. Use a throwaway Anki profile while testing." : "Pick ideas from a session or your graph, check every answer, then approve and send to Anki. Nothing is sent automatically."),
     sessionHost, drafting, feedback, controls);
   container.append(root);
+  let sessionPanel: ReturnType<typeof mountSessionFlow> | undefined;
   let disposed = false;
   let busy = false;
   let state: Snapshot | undefined;
@@ -147,6 +148,7 @@ function mount(ctx: PluginFrontendContext, container: HTMLElement, signal: Abort
       const kept = captureForm();
       render();
       restoreForm(kept);
+      await sessionPanel?.refresh();
     } catch { refreshPending = true; }
   }
   interface Kept { values: Map<string, { value: string; checked: boolean }>; open: Set<string>; focus?: { key: string; start: number | null; end: number | null } }
@@ -186,7 +188,7 @@ function mount(ctx: PluginFrontendContext, container: HTMLElement, signal: Abort
   async function snapshotAction(name: string, input?: unknown): Promise<void> {
     try {
       const next = await ctx.call<Snapshot>(name, input);
-      if (alive()) state = next;
+      if (alive()) { state = next; await sessionPanel?.refresh(); }
     } catch (error) {
       if (name === "send" && alive()) {
         // A failed send may still have persisted per-card results.
@@ -381,7 +383,7 @@ function mount(ctx: PluginFrontendContext, container: HTMLElement, signal: Abort
   const unsubscribe = ctx.onResync(() => { void run(refresh); });
   void run(refresh);
   const draftingPanel = settingsOnly ? undefined : mountDrafting(ctx, drafting, signal, backgroundRefresh);
-  const disposeSession = !settingsOnly && requests && draftingPanel ? mountSessionFlow(ctx, sessionHost, signal, {
+  sessionPanel = !settingsOnly && requests && draftingPanel ? mountSessionFlow(ctx, sessionHost, signal, {
     requests,
     // Replaces the draft selection and clears any estimate; the learner still estimates and confirms.
     onDraft: async ({ nodeIds }) => {
@@ -389,7 +391,7 @@ function mount(ctx: PluginFrontendContext, container: HTMLElement, signal: Abort
       if (alive()) { drafting.scrollIntoView?.({ block: "start" }); drafting.querySelector<HTMLElement>("button, input")?.focus(); }
     },
   }) : undefined;
-  return () => { disposed = true; unsubscribe(); disposeSession?.(); draftingPanel?.dispose(); disposePreviews(); root.remove(); };
+  return () => { disposed = true; unsubscribe(); sessionPanel?.(); draftingPanel?.dispose(); disposePreviews(); root.remove(); };
 }
 
 export function activate(ctx: PluginFrontendContext): void {
