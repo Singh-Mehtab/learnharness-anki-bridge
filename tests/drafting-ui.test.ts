@@ -53,14 +53,14 @@ test("drafting needs explicit selection and a confirmed estimate before any gene
     f.button("Estimate generation").click(); await tick();
     assert.match(f.container.textContent!, /Select at least one graph node/);
     f.select(["n_a"]); await tick();
-    assert.match(f.container.textContent!, /1 nodes selected/);
+    assert.match(f.container.textContent!, /1 node selected/);
     assert.match(f.container.textContent!, /Alpha holds under A/);
     await f.pickModel({ provider: "scratch", id: "writer" }); await tick();
     assert.deepEqual(f.calls.find(c => c.name === "generationSettings")!.input, { model: { provider: "scratch", id: "writer" } });
     f.select(["n_a"]); await tick();
     f.button("Estimate generation").click(); await tick();
     assert.equal(f.calls.some(c => c.name === "generate"), false);
-    assert.match(f.container.textContent!, /up to 2 cards in 1 model calls/);
+    assert.match(f.container.textContent!, /up to 2 cards in 1 model call\./);
     assert.match(f.container.textContent!, /No dollar estimate/);
     // Changing the selection invalidates the visible estimate.
     f.select(["n_a"]); await tick();
@@ -69,7 +69,7 @@ test("drafting needs explicit selection and a confirmed estimate before any gene
     f.button("Confirm and generate").click(); await tick();
     assert.deepEqual(f.calls.find(c => c.name === "generate")!.input, { preflightId: "p1" });
     assert.ok(f.refreshed() >= 1);
-    assert.match(f.container.textContent!, /running: 0\/1 tasks applied/);
+    assert.match(f.container.textContent!, /running: 0 of 1 task applied/);
     f.button("Cancel generation").click(); await tick();
     assert.deepEqual(f.calls.find(c => c.name === "cancelGeneration")!.input, { id: "p1" });
     f.button("Estimate retry").click(); await tick();
@@ -108,7 +108,7 @@ test("polling a running generation keeps unsaved settings and pickers, and refre
     assert.equal((f.container.querySelector("input[type=number]") as unknown as HTMLInputElement).value, "3");
     f.state.generations[0].status = "completed"; f.state.generations[0].tasks[0].status = "applied";
     await new Promise(resolve => setTimeout(resolve, 1300)); await tick();
-    assert.match(f.container.textContent!, /completed: 1\/1 tasks applied/);
+    assert.match(f.container.textContent!, /completed: 1 of 1 task applied/);
     assert.equal(f.refreshed(), refreshed + 1);
     assert.equal(f.knowledgeMounts(), mounts);
     assert.equal((f.container.querySelector("input[type=number]") as unknown as HTMLInputElement).value, "3");

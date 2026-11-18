@@ -311,7 +311,7 @@ function mount(ctx: PluginFrontendContext, container: HTMLElement, signal: Abort
     for (const card of state.cards.filter(card => card.status !== "dropped")) {
       const row = element("article");
       row.append(element("h4", `${card.kind} · ${card.status}`));
-      if (card.nodeName || card.sessionName) row.append(element("p", `${card.nodeName} / ${card.sessionName}`));
+      if (card.nodeName || card.sessionName) row.append(element("p", [card.nodeName, card.sessionName].filter(Boolean).join(" / ")));
       if (card.lastError) row.append(element("p", `Error: ${card.lastError}`));
       if (card.destination) row.append(element("p", `Sent destination: ${card.destination.profile} at ${card.destination.url}`));
       if (card.deck) row.append(element("p", `Deck: ${card.deck}`));

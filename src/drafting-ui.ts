@@ -13,6 +13,7 @@ const kinds: readonly Kind[] = ["recall", "why", "compose", "discriminate"];
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, text?: string): HTMLElementTagNameMap[K] {
   const node = document.createElement(tag); if (text !== undefined) node.textContent = text; return node;
 }
+const count = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 function label(text: string, input: HTMLElement): HTMLElement { const node = el("label"); node.append(el("span", text), input); return node; }
 
 /** Each view owns only its widgets/timer. Closing a view does not cancel backend generation. */
@@ -81,7 +82,7 @@ export function mountDrafting(ctx: PluginFrontendContext, container: HTMLElement
   }
   function renderSelection(target: HTMLElement): void {
     target.replaceChildren();
-    target.append(el("p", `${selection.length} nodes selected. Only selected nodes are drafted.`));
+    target.append(el("p", `${count(selection.length, "node")} selected. Only selected nodes are drafted.`));
     const list = el("ul"); list.className = "anki-bridge-node-list";
     for (const id of selection) {
       const source = nodes.find(n => n.id === id);
@@ -95,7 +96,7 @@ export function mountDrafting(ctx: PluginFrontendContext, container: HTMLElement
     if (!preflight) return;
     const p = preflight;
     estimate.className = "anki-bridge-preview";
-    estimate.append(el("h4", "Confirm generation"), el("p", `${p.nodeCount} nodes, up to ${p.maximumCards} cards in ${p.batches.length} model calls. Approximate tokens: ${p.inputTokens} input, ${p.outputTokens} reserved output.`),
+    estimate.append(el("h4", "Confirm generation"), el("p", `${count(p.nodeCount, "node")}, up to ${count(p.maximumCards, "card")} in ${count(p.batches.length, "model call")}. Approximate tokens: ${p.inputTokens} input, ${p.outputTokens} reserved output.`),
       el("p", `Model: ${p.model.provider} / ${p.model.id}`), el("p", p.estimatedCost === null ? "No dollar estimate is available for this model. Subscription or provider usage still applies." : `Estimated cost: $${p.estimatedCost.toFixed(4)} USD. Actual usage can differ, especially after validation retries.`));
     for (const skip of p.skipped) estimate.append(el("p", `Skipped ${nodes.find(n => n.id === skip.nodeId)?.name ?? skip.nodeId}: ${skip.reason}`));
     const confirm = button("Confirm and generate", async () => {
@@ -115,7 +116,7 @@ export function mountDrafting(ctx: PluginFrontendContext, container: HTMLElement
     for (const generation of [...state.generations].reverse()) {
       const row = el("div"); row.className = "anki-bridge-batch";
       const done = generation.tasks.filter(t => t.status === "applied").length;
-      row.append(el("h5", `${generation.status}: ${done}/${generation.tasks.length} tasks applied`));
+      row.append(el("h5", `${generation.status}: ${done} of ${count(generation.tasks.length, "task")} applied`));
       for (const skip of generation.skipped) row.append(el("p", `Skipped ${name(skip.nodeId)}: ${skip.reason}`));
       for (const task of generation.tasks) {
         row.append(el("p", `${task.sources.map(s => s.name).join(", ")}: ${task.status}${task.error ? `. ${task.error}` : ""}`));
