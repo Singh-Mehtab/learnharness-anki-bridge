@@ -33,3 +33,13 @@
   .anki-bridge-review-columns { grid-template-columns: minmax(0, 1fr); gap: .75rem; }
   .anki-bridge-review-columns aside { border-right: 0; border-bottom: 1px solid var(--border-color, #888); padding: 0 0 .75rem; }
 }
+.anki-bridge-session { border-bottom: 1px solid var(--border-color, #888); padding-bottom: 1rem; margin-bottom: 1rem; }
+.anki-bridge-session ul { list-style: none; padding: 0; margin: .5rem 0; }
+.anki-bridge-session li { border: 1px solid var(--border-color, #888); border-radius: .4rem; padding: .5rem .75rem; margin: .4rem 0; }
+.anki-bridge .anki-bridge-node { flex-direction: row; align-items: flex-start; gap: .6rem; margin: 0; cursor: pointer; }
+.anki-bridge-node > span { display: flex; flex-direction: column; gap: .2rem; min-width: 0; }
+.anki-bridge-muted { opacity: .75; font-size: .92em; }
+.anki-bridge-badges { font-size: .85em; font-weight: 600; }
+.anki-bridge-carded { opacity: .6; }
+.anki-bridge-flag-waiting, .anki-bridge-flag-no-nodes, .anki-bridge-flag-missing { border-style: dashed !important; }
+.anki-bridge-flag { max-width: 34rem; }

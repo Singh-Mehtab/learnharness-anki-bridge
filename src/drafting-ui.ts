@@ -61,7 +61,11 @@ export function mountDrafting(ctx: PluginFrontendContext, container: HTMLElement
   }
   async function snapshot(name = "generationStatus", input?: unknown): Promise<void> {
     const next = await ctx.call<DraftingSnapshot>(name, input);
-    if (alive()) state = next;
+    if (alive()) {
+      state = next;
+      // Saved caps and model defaults also affect the session panel's estimate.
+      if (name === "generationSettings") await onCardsChanged();
+    }
   }
   function schedule(): void {
     if (timer) clearTimeout(timer);
@@ -108,6 +112,8 @@ export function mountDrafting(ctx: PluginFrontendContext, container: HTMLElement
       el("p", `Model: ${p.model.provider} / ${p.model.id}`), el("p", p.estimatedCost === null ? "No dollar estimate is available for this model. Subscription or provider usage still applies." : `Estimated cost: $${p.estimatedCost.toFixed(4)} USD. Actual usage can differ, especially after validation retries.`));
     for (const skip of p.skipped) estimate.append(el("p", `Skipped ${nodes.find(n => n.id === skip.nodeId)?.name ?? skip.nodeId}: ${skip.reason}`));
     const confirm = button("Confirm and generate", async () => {
+      // A queued click must not revive an estimate invalidated by a new selection.
+      if (preflight !== p) throw new Error("Estimate changed. Estimate generation again before confirming.");
       // Backend rejects stale, changed or replayed inputs independently of UI controls.
       await snapshot("generate", { preflightId: p.preflightId }); preflight = undefined; await onCardsChanged();
     }, false);
@@ -182,7 +188,7 @@ export function mountDrafting(ctx: PluginFrontendContext, container: HTMLElement
   const unsubscribe = ctx.onResync(() => { void run(async () => { await load(); await onCardsChanged(); }); });
   void run(load);
   return {
-    select: nodeIds => run(async () => { selection = [...new Set(nodeIds)]; invalidate(); }),
+    select: nodeIds => run(async () => { selection = [...new Set(nodeIds)]; invalidate(); render(); await load(); }),
     dispose: () => { disposed = true; if (timer) clearTimeout(timer); unsubscribe(); disposeWidgets(); root.remove(); },
   };
 }

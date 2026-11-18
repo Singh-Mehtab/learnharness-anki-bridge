@@ -24,23 +24,27 @@ async function setup(handler?: (name: string, input: unknown) => unknown | Promi
   let view!: PluginView;
   let settings!: PluginView["mount"];
   let openedView = "";
-  let action: { run: () => void } | undefined;
+  const actions = new Map<string, { run: (context?: unknown) => void }>();
+  const placements: Array<{ actionId: string; location: string }> = [];
   let dialog: HTMLElement | undefined;
   let dialogDisposals = 0;
-  let resync: (() => void) | undefined;
+  const resyncs = new Set<() => void>();
   const ctx = {
     signal: activation.signal,
     cleanup: (fn: () => void) => cleanups.push(fn),
     registerView: (value: PluginView) => { view = value; return () => {}; },
-    registerAction: (value: { run: () => void }) => { action = value; return () => {}; },
-    placeAction: (value: { location: string }) => { assert.equal(value.location, "sidebar"); return () => {}; },
+    registerAction: (value: { id: string; run: () => void }) => { actions.set(value.id, value); return () => {}; },
+    placeAction: (value: { actionId: string; location: string }) => { placements.push(value); return () => {}; },
+    onAppEvent: () => () => {},
     registerSettings: (value: PluginView["mount"]) => { settings = value; return () => {}; },
-    onResync: (listener: () => void) => { resync = listener; return () => { resync = undefined; }; },
+    onResync: (listener: () => void) => { resyncs.add(listener); return () => { resyncs.delete(listener); }; },
     app: { openView: (id: string) => { openedView = id; } },
     call: async (name: string, input: unknown) => {
-      calls.push({ name, input });
+      // This fixture checks delivery commands, not the session panel's background reads.
+      if (name !== "sessions" && name !== "sessionFlow") calls.push({ name, input });
       if (handler) return handler(name, input);
       if (name === "connection") return { profile: "Throwaway <test>", decks: ["Scratch", "New::Deck"] };
+      if (name === "sessions") return { sessions: [], unresolved: [] };
       return structuredClone(state);
     },
     ui: { mountMarkdown: (target: HTMLElement, props: { text: string }) => {
@@ -66,8 +70,11 @@ async function setup(handler?: (name: string, input: unknown) => unknown | Promi
     window, controller, activation, calls, state, container, button, settings, ctx,
     dialog: () => dialog,
     dialogDisposals: () => dialogDisposals,
-    openSidebar: () => { action?.run(); return openedView; },
-    resync: () => resync?.(),
+    openSidebar: () => {
+      assert.deepEqual(placements.map((p) => [p.actionId, p.location]), [["flag-for-anki", "top-bar"], ["make-cards", "top-bar"], ["open-bridge", "sidebar"]]);
+      actions.get("open-bridge")?.run(); return openedView;
+    },
+    resync: () => { for (const listener of resyncs) listener(); },
     dispose: async () => { controller.abort(); if (typeof cleanup === "function") await cleanup(); cleanups.forEach((fn) => fn()); await window.happyDOM.close(); },
   };
 }
@@ -174,8 +181,9 @@ test("plugin UI never offers resend for sent, deleted or uncertain cards and exp
     assert.equal(f.calls.at(-1)!.name, "reconcile");
     f.button("Check presence in Anki").click(); await tick();
     assert.equal(f.calls.at(-1)!.name, "presence");
+    const before = f.calls.length;
     f.resync(); await tick();
-    assert.equal(f.calls.at(-1)!.name, "snapshot");
+    assert.ok(f.calls.slice(before).some(c => c.name === "snapshot"));
   } finally { await f.dispose(); }
 });
 
@@ -220,10 +228,12 @@ test("plugin UI blocks pairing a null profile and removes stale connected status
   } finally { await f.dispose(); }
 });
 
-test("plugin UI refreshes persisted results after a send error without offering uncertain resend", async () => {
+test("plugin UI refreshes review and session counts after a send error without offering uncertain resend", async () => {
   const state = fixture();
+  let sessionReads = 0;
   state.cards.push({ id: "partial", kind: "recall", status: "approved", front: "Question", back: "Answer", extra: "" });
   const f = await setup((name) => {
+    if (name === "sessions") { sessionReads++; return { sessions: [], unresolved: [] }; }
     if (name === "send") {
       state.cards[0]!.status = "sending";
       throw new Error("Uncertain outcome; reconcile before retrying");
@@ -231,7 +241,9 @@ test("plugin UI refreshes persisted results after a send error without offering 
     return structuredClone(state);
   });
   try {
+    const before = sessionReads;
     f.button("Send approved card").click(); await tick();
+    assert.ok(sessionReads > before, "partial-send recovery refreshes session counts");
     assert.match(f.container.textContent!, /Uncertain outcome/);
     assert.match(f.container.textContent!, /recall · sending/);
     assert.equal(f.calls.at(-1)!.name, "snapshot");
