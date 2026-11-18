@@ -124,9 +124,16 @@ function mount(ctx: PluginFrontendContext, container: HTMLElement, signal: Abort
     busy = true; actions++;
     controls.disabled = true;
     feedback.textContent = "Working...";
+    // Unrelated actions keep typing in other fields; an action that used its fields consumes them.
+    const kept = state ? captureForm() : undefined;
+    consumed = [];
     try {
       await action();
-      if (alive()) { render(); feedback.textContent = "Done."; }
+      if (alive()) {
+        render();
+        if (kept) { for (const key of consumed) kept.values.delete(key); restoreForm(kept); }
+        feedback.textContent = "Done.";
+      }
     } catch (error) {
       if (alive()) {
         if (!state) render();
@@ -142,28 +149,42 @@ function mount(ctx: PluginFrontendContext, container: HTMLElement, signal: Abort
   // open sections, and the caret when updating the review list.
   function applyReviewSnapshot(fresh: Snapshot): void {
     // A different saved URL makes the last connection test describe another endpoint.
-    if (state && fresh.settings.url !== state.settings.url) connection = undefined;
+    const urlChanged = !!state && fresh.settings.url !== state.settings.url;
+    if (urlChanged) connection = undefined;
     state = fresh;
     const kept = captureForm();
+    // A typed key belongs to the URL it was typed beside. If the saved URL changed
+    // and this view's URL field was untouched, the field adopts the new URL, so drop the key.
+    if (urlChanged && !kept.values.has("url")) { kept.values.delete("api-key"); kept.values.delete("clear-key"); }
     render();
     restoreForm(kept);
   }
-  let refreshPending = false, actions = 0;
+  let refreshPending = false, actions = 0, reads = 0, consumed: string[] = [];
+  /** Reads a snapshot for background use. Returns 'busy' if an action is running, or
+   * 'stale' if a newer read started. Rereads if an action ran while it was in flight. */
+  async function readSnapshot(): Promise<Snapshot | "busy" | "stale"> {
+    for (;;) {
+      const read = ++reads, started = actions;
+      const fresh = await ctx.call<Snapshot>("snapshot");
+      // Set the flag in this tick: the active action's finally may run before our caller resumes.
+      if (busy) { refreshPending = true; return "busy"; }
+      if (read !== reads) return "stale";
+      if (started === actions) return fresh;
+    }
+  }
   async function backgroundRefresh(): Promise<void> {
     if (!alive()) return;
     if (busy) { refreshPending = true; return; }
     refreshPending = false;
-    const started = actions;
     try {
-      const fresh = await ctx.call<Snapshot>("snapshot");
-      if (!alive()) return;
-      // Set the flag before yielding so the active action sees it on completion.
-      if (busy) { refreshPending = true; return; }
-      // An action ran while this snapshot was in flight; it may predate that action's result.
-      if (started !== actions) { void backgroundRefresh(); return; }
+      const fresh = await readSnapshot();
+      if (!alive() || fresh === "stale" || fresh === "busy") return;
       applyReviewSnapshot(fresh);
       await sessionPanel?.refresh(); await draftingPanel?.refresh();
-    } catch { refreshPending = true; }
+    } catch (error) {
+      refreshPending = true;
+      if (alive()) feedback.textContent = `Could not refresh: ${error instanceof Error ? error.message : String(error)}`;
+    }
   }
   interface Kept { values: Map<string, { value: string; checked: boolean }>; open: Set<string>; focus?: { key: string; start: number | null; end: number | null } }
   /** Input values as last rendered; only inputs the learner changed since then are kept. */
@@ -273,6 +294,7 @@ function mount(ctx: PluginFrontendContext, container: HTMLElement, signal: Abort
         else if (key.value) input.apiKey = key.value;
         connection = undefined;
         await snapshotAction("settings", input);
+        consumed.push("url", "api-key", "clear-key");
       }), button("Test connection", checkConnection));
     controls.append(element("p", connection ? (connection.profile === null ? "Connected. Open a profile in Anki." : `Connected profile: ${connection.profile}`) : "Connection not tested. Test again after switching profiles in Anki."));
     if (connection) controls.append(element("p", `Decks: ${connection.decks.join(", ") || "none"}`));
@@ -319,6 +341,7 @@ function mount(ctx: PluginFrontendContext, container: HTMLElement, signal: Abort
     manual.append(field("Front", front), field("Back", back), field("Extra, optional", extra), field("Kind", kind),
       button("Create draft", async () => {
         await snapshotAction("draft", { front: front.value, back: back.value, extra: extra.value, kind: kind.value });
+        consumed.push("manual-front", "manual-back", "manual-extra", "manual-kind");
       }));
     controls.append(manual);
     controls.append(element("h3", "Review and send"));
@@ -367,7 +390,7 @@ function mount(ctx: PluginFrontendContext, container: HTMLElement, signal: Abort
       if (card.presence) row.append(element("p", `Anki presence: ${card.presence}`));
       if (card.noteId !== undefined) row.append(element("p", `Anki note ID: ${card.noteId}`));
       const editable = ["draft", "approved", "failed"].includes(card.status) && card.noteId === undefined;
-      const cached = edits.get(card.id) ?? card;
+      const cached = (editable && edits.get(card.id)) || card;
       const cardFront = keep(textArea(cached.front), `card-${card.id}-front`), cardBack = keep(textArea(cached.back), `card-${card.id}-back`), cardExtra = keep(textArea(cached.extra), `card-${card.id}-extra`);
       cardFront.readOnly = cardBack.readOnly = cardExtra.readOnly = !editable;
       const columns = element("div");
@@ -392,29 +415,29 @@ function mount(ctx: PluginFrontendContext, container: HTMLElement, signal: Abort
         previews.push(handle);
         return { input, handle };
       });
-      const updatePreview = () => {
+      const updatePreview = (typed = true) => {
         parts.forEach(({ input, handle }) => handle.update({ text: input.value }));
         const words = (text: string) => text.trim().split(/\s+/u).filter(Boolean).length;
         const f = words(cardFront.value), b = words(cardBack.value);
         length.textContent = f > 30 || b > 15 ? `Long card: ${f} front words, ${b} back words. Targets are about 30 and 15. Keep enough context for correctness.` : "";
-        if (editable) edits.set(card.id, { front: cardFront.value, back: cardBack.value, extra: cardExtra.value });
+        if (editable && typed) edits.set(card.id, { front: cardFront.value, back: cardBack.value, extra: cardExtra.value });
       };
-      parts.forEach(({ input }) => { input.oninput = updatePreview; });
-      updatePreview();
+      parts.forEach(({ input }) => { input.oninput = () => updatePreview(); });
+      updatePreview(false);
       editor.append(length, preview);
       columns.append(editor);
       row.append(columns);
       if (editable) {
         row.append(button("Save edits", async () => {
           await snapshotAction("edit", { id: card.id, front: cardFront.value, back: cardBack.value, extra: cardExtra.value });
-          edits.delete(card.id);
+          edits.delete(card.id); consumed.push(`card-${card.id}-front`, `card-${card.id}-back`, `card-${card.id}-extra`);
         }));
         // Never approve or send different content from the visible editor.
         const requireSaved = () => {
           if (cardFront.value !== card.front || cardBack.value !== card.back || cardExtra.value !== card.extra) throw new Error("Save edits before approving or sending this card.");
         };
         editors.set(card.id, requireSaved);
-        row.append(button("Drop card", async () => { await snapshotAction("drop", { ids: [card.id] }); edits.delete(card.id); }));
+        row.append(button("Drop card", async () => { await snapshotAction("drop", { ids: [card.id] }); edits.delete(card.id); consumed.push(`card-${card.id}-front`, `card-${card.id}-back`, `card-${card.id}-extra`); }));
         if (card.status === "draft") row.append(button("Approve card", async () => { requireSaved(); await snapshotAction("approve", { ids: [card.id] }); }));
         if (card.status === "approved" || card.status === "failed") row.append(button(card.status === "failed" ? "Retry approved card" : "Send approved card", async () => {
           requireSaved();
@@ -441,10 +464,11 @@ function mount(ctx: PluginFrontendContext, container: HTMLElement, signal: Abort
     const waitMessage = "Wait for the current card action to finish, then try again.";
     if (busy) { feedback.textContent = waitMessage; return; }
     try {
-      const fresh = await ctx.call<Snapshot>("snapshot");
+      const fresh = await readSnapshot();
       if (!alive()) return;
-      if (busy) { feedback.textContent = waitMessage; return; }
-      applyReviewSnapshot(fresh);
+      if (fresh === "busy") { feedback.textContent = waitMessage; return; }
+      // A newer read has the latest list; it renders before focusing.
+      if (fresh !== "stale") applyReviewSnapshot(fresh);
       feedback.textContent = focusWaiting() ? "" : "No waiting cards for this node in the review list.";
     } catch (error) {
       if (alive()) feedback.textContent = `Could not refresh the review list: ${error instanceof Error ? error.message : String(error)}`;

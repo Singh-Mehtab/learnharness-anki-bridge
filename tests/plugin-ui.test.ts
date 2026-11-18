@@ -273,11 +273,16 @@ test("refreshes adopt untouched saved settings and keep typing through a host re
     const settingsContainer = f.window.document.createElement("div");
     f.window.document.body.append(settingsContainer);
     const cleanup = await f.settings(settingsContainer as unknown as HTMLElement, f.controller.signal); await tick();
+    const viewKey = () => f.container.querySelector('[data-keep="api-key"]') as unknown as HTMLInputElement;
+    viewKey().value = "[REDACTED:Generic Password Field]";
     const settingsUrl = settingsContainer.querySelector('input[type=text]') as unknown as HTMLInputElement;
     settingsUrl.value = "http://127.0.0.1:8766/";
     f.state.settings.url = "http://127.0.0.1:8766/";
     f.button("Save connection settings", settingsContainer as unknown as typeof f.container).click(); await tick(); await tick();
     assert.equal(viewUrl(), "http://127.0.0.1:8766/", "an untouched field adopts the newly saved URL");
+    assert.equal(viewKey().value, "", "a key typed for the old URL does not follow the new one");
+    f.button("Save connection settings").click(); await tick();
+    assert.deepEqual(f.calls.filter(c => c.name === "settings").at(-1), { name: "settings", input: { url: "http://127.0.0.1:8766/" } });
     if (typeof cleanup === "function") await cleanup();
 
     (f.container.querySelector('details[data-keep="manual"]') as unknown as HTMLDetailsElement).open = true;
@@ -285,6 +290,26 @@ test("refreshes adopt untouched saved settings and keep typing through a host re
     f.resync(); await tick(); await tick();
     assert.equal((f.container.querySelector('details[data-keep="manual"]') as unknown as HTMLDetailsElement).open, true);
     assert.equal((f.container.querySelector('[data-keep="manual-front"]') as unknown as HTMLTextAreaElement).value, "Typed before reconnect");
+  } finally { await f.dispose(); }
+});
+
+test("unrelated actions keep hand-card typing; Create draft consumes it; untouched card text refreshes", async () => {
+  const f = await setup();
+  try {
+    const manual = () => f.container.querySelector('details[data-keep="manual"]') as unknown as HTMLDetailsElement;
+    const front = () => f.container.querySelector('[data-keep="manual-front"]') as unknown as HTMLTextAreaElement;
+    manual().open = true; front().value = "Half-written";
+    f.state.cards.push({ id: "c", nodeId: "n", kind: "recall", status: "draft", front: "Question", back: "Answer", extra: "" });
+    f.button("Refresh cards").click(); await tick();
+    assert.equal(manual().open, true); assert.equal(front().value, "Half-written");
+    const editor = () => f.container.querySelector('[data-keep="card-c-front"]') as unknown as HTMLTextAreaElement;
+    assert.equal(editor().value, "Question");
+    f.state.cards[0]!.front = "Changed elsewhere";
+    f.resync(); await tick(); await tick();
+    assert.equal(editor().value, "Changed elsewhere", "an untouched editor shows the fresh card text");
+    (f.container.querySelectorAll("textarea")[1] as unknown as HTMLTextAreaElement).value = "Back";
+    f.button("Create draft").click(); await tick();
+    assert.equal(front().value, "", "a created draft clears the hand-card form");
   } finally { await f.dispose(); }
 });
 
