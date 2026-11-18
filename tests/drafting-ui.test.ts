@@ -36,13 +36,13 @@ function setup() {
   } as unknown as PluginFrontendContext;
   const container = window.document.createElement("div");
   window.document.body.append(container);
-  const unmount = mountDrafting(ctx, container as unknown as HTMLElement, controller.signal, async () => { refreshed++; });
+  const panel = mountDrafting(ctx, container as unknown as HTMLElement, controller.signal, async () => { refreshed++; });
   const button = (label: string) => {
     const found = [...container.querySelectorAll("button")].find(b => b.textContent === label);
     assert.ok(found, `button ${label}`); return found;
   };
   return { container, calls, state, button, select: (ids: string[]) => knowledge!(ids), pickModel: (v: { provider: string; id: string }) => model!(v),
-    refreshed: () => refreshed, knowledgeMounts: () => knowledgeMounts, close: async () => { unmount(); controller.abort(); await window.happyDOM.close(); } };
+    refreshed: () => refreshed, knowledgeMounts: () => knowledgeMounts, panel, close: async () => { panel.dispose(); controller.abort(); await window.happyDOM.close(); } };
 }
 
 test("drafting needs explicit selection and a confirmed estimate before any generate call", async () => {
@@ -123,5 +123,16 @@ test("actions clicked while another is in flight are queued, not dropped", async
     f.button("Refresh graph").click();
     await tick(); await tick();
     assert.deepEqual(f.calls.map(c => c.name).filter(n => n !== "generationStatus"), ["generationContext", "generationSettings", "generationContext"]);
+  } finally { await f.close(); }
+});
+
+test("an outside selection (0.4.0 session panel) replaces the selection without starting generation", async () => {
+  const f = setup();
+  try {
+    await tick();
+    await f.panel.select(["n_a", "n_a"]); await tick();
+    assert.match(f.container.textContent!, /1 node selected/);
+    assert.match(f.container.textContent!, /Alpha holds under A/);
+    assert.equal(f.calls.some(c => c.name === "preflight" || c.name === "generate"), false);
   } finally { await f.close(); }
 });

@@ -48,6 +48,8 @@ export class GenerationService {
   private readonly lifetime = new AbortController();
   private readonly drivers = new Set<Promise<void>>();
   private unregister?: () => void;
+  /** Optional per-node learner notes (0.4.0 session flags). Untrusted text; part of the prompt, so part of the preflight binding. */
+  flagNotes?: () => Map<string, string>;
   private closed = false;
   private readonly abort = () => { this.lifetime.abort(); };
   constructor(ctx: PluginBackendContext, store: StateStore, delivery: DeliveryService) {
@@ -147,7 +149,8 @@ export class GenerationService {
         sessionId, sessionName: session?.title ?? '',
         source: sourcePassage(n, chatId => this.ctx.learning.getSession(chatId)) });
     }
-    const packed = pack(graph, ids, id => ({ source: sources.find(s => s.nodeId === id)?.source,
+    const notes = this.flagNotes?.();
+    const packed = pack(graph, ids, id => ({ source: sources.find(s => s.nodeId === id)?.source, flagNote: notes?.get(id) || undefined,
       existingCards: cards.filter(c => c.nodeId === id).reverse().slice(0, 6).map(c => ({ kind: c.kind, front: c.front, back: c.back })) }),
     { maxCardsPerNode: settings.cardsPerNode, enabledKinds: settings.enabledKinds, contextWindow: model.contextWindow, maxTokens: model.maxTokens });
     const batches: Batch[] = [], skipped = [...packed.skipped];

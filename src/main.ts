@@ -378,8 +378,8 @@ function mount(ctx: PluginFrontendContext, container: HTMLElement, signal: Abort
   }
   const unsubscribe = ctx.onResync(() => { void run(refresh); });
   void run(refresh);
-  const unmountDrafting = settingsOnly ? () => {} : mountDrafting(ctx, drafting, signal, backgroundRefresh);
-  return () => { disposed = true; unsubscribe(); unmountDrafting(); disposePreviews(); root.remove(); };
+  const draftingPanel = settingsOnly ? undefined : mountDrafting(ctx, drafting, signal, backgroundRefresh);
+  return () => { disposed = true; unsubscribe(); draftingPanel?.dispose(); disposePreviews(); root.remove(); };
 }
 
 export function activate(ctx: PluginFrontendContext): void {

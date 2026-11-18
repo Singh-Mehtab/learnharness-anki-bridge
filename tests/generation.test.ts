@@ -5,6 +5,9 @@ import path from 'node:path';
 import os from 'node:os';
 import { activate } from '../src/backend.ts';
 import { FakeHost, until } from './fake-host.ts';
+import { StateStore } from '../src/anki/state.ts';
+import { DeliveryService } from '../src/anki/delivery.ts';
+import { GenerationService } from '../src/generation/service.ts';
 
 const result = (nodeIds: string[], skip: string[] = []) => ({ targets: nodeIds.map(nodeId => skip.includes(nodeId)
   ? { nodeId, cards: [], skipReason: 'Nothing worth testing beyond the statement.' }
@@ -270,4 +273,26 @@ test('an unexpected driver failure interrupts the batch instead of leaving it ru
     const q = await c.call('preflight', { nodeIds: ['n_b'] });
     await c.call('generate', { preflightId: q.preflightId });
   } finally { await close(); }
+}));
+
+test('flag notes (0.4.0 seam) reach the writer input and are bound into the preflight', () => withHost(async (host, directory) => {
+  const { ctx } = host.context(directory);
+  const store = await StateStore.open(directory);
+  const delivery = new DeliveryService(store, { signal: ctx.signal });
+  const generation = new GenerationService(ctx, store, delivery);
+  await generation.activate();
+  try {
+    let notes = new Map([['n_a', 'I got the direction of the implication wrong']]);
+    generation.flagNotes = () => notes;
+    await generation.command('generationSettings', { model: { provider: 'scratch', id: 'writer' }, cardsPerNode: 1 });
+    const p = await generation.command('preflight', { nodeIds: ['n_a', 'n_b'] }) as { preflightId: string };
+    notes = new Map([['n_a', 'A different note']]);
+    await assert.rejects(generation.command('generate', { preflightId: p.preflightId }), /stale/);
+    const q = await generation.command('preflight', { nodeIds: ['n_a', 'n_b'] }) as { preflightId: string };
+    await generation.command('generate', { preflightId: q.preflightId });
+    await until(() => host.workers.starts.length === 1);
+    const input = host.workers.starts[0].input as { targets: { nodeId: string; flagNote?: string }[] };
+    assert.equal(input.targets.find(t => t.nodeId === 'n_a')!.flagNote, 'A different note');
+    assert.equal(input.targets.find(t => t.nodeId === 'n_b')!.flagNote, undefined);
+  } finally { await generation.close(); await delivery.close(); }
 }));

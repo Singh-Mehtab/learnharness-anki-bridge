@@ -48,3 +48,12 @@ If the driver fails unexpectedly, for example on a storage error, it reports a r
 The authoritative complete result, its request's `applied` status, and all new draft UUIDs commit together in one snapshot. Replay cannot recreate dropped or edited drafts. Worker identity and frozen input must match the saved request. On activation, pending requests are compared with host worker history, including requests whose acceptance was saved before their task ID. Finished results are applied; all others become interrupted and require a new preflight to retry. Activation never starts model work.
 
 Disable unregisters handlers and the worker definition, aborts waiters and waits for plugin callbacks before closing the store. Unfinished persisted requests are recovered next activation. Finished host results survive disable and are applied on the next activation if not yet committed. No model calls or live Anki access are needed to test this flow.
+
+## Seams for 0.4.0
+
+These match points 1 and 2 of 0.4.0's `docs/session-contract.md`.
+
+- `mountDrafting(...)` returns `{select(nodeIds), dispose()}`. `select` replaces the drafting selection and discards any visible estimate. It never starts generation; the learner still estimates and confirms. The main view keeps the handle as `draftingPanel`, so a session panel's `onDraft({sessionId, nodeIds})` can call `draftingPanel.select(nodeIds)`.
+- `GenerationService.flagNotes?: () => Map<nodeId, note>`. When set, `prepare` passes each note to the writer as `flagNote`. Notes are part of the prompt, so changing one makes an outstanding preflight stale. 0.4.0 sets it from `SessionService.flagNotes()` in `backend.ts`.
+- The fence's second argument is now `background`. `exclusive(op, true)` waits for the fence instead of failing. 0.4.0 calls it that way for flags, which is still correct. The function body differs from the text 0.4.0 copied, so expect a conflict in `delivery.ts` on rebase. Keep this branch's version.
+- 0.3.0 takes state schema 2. Flags become schema 3.

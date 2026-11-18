@@ -16,8 +16,13 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, text?: string): HTMLE
 const count = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 function label(text: string, input: HTMLElement): HTMLElement { const node = el("label"); node.append(el("span", text), input); return node; }
 
+export interface DraftingHandle {
+  /** Replace the node selection, e.g. from a session panel. Discards any visible estimate; never starts generation. */
+  select(nodeIds: readonly string[]): Promise<void>;
+  dispose(): void;
+}
 /** Each view owns only its widgets/timer. Closing a view does not cancel backend generation. */
-export function mountDrafting(ctx: PluginFrontendContext, container: HTMLElement, signal: AbortSignal, onCardsChanged: () => Promise<void>): () => void {
+export function mountDrafting(ctx: PluginFrontendContext, container: HTMLElement, signal: AbortSignal, onCardsChanged: () => Promise<void>): DraftingHandle {
   const root = el("section");
   root.append(el("h3", "Draft from graph nodes"));
   const feedback = el("p"); feedback.setAttribute("role", "status"); feedback.setAttribute("aria-live", "polite");
@@ -172,5 +177,8 @@ export function mountDrafting(ctx: PluginFrontendContext, container: HTMLElement
   }
   const unsubscribe = ctx.onResync(() => { void run(async () => { await load(); await onCardsChanged(); }); });
   void run(load);
-  return () => { disposed = true; if (timer) clearTimeout(timer); unsubscribe(); disposeWidgets(); root.remove(); };
+  return {
+    select: nodeIds => run(async () => { selection = [...new Set(nodeIds)]; preflight = undefined; }),
+    dispose: () => { disposed = true; if (timer) clearTimeout(timer); unsubscribe(); disposeWidgets(); root.remove(); },
+  };
 }
