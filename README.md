@@ -2,11 +2,11 @@
 
 An unofficial LearnHarness community plugin in development. The goal is to draft cards from your knowledge graph, let you edit and approve them, and send them to Anki through AnkiConnect. Delivery is one-way; Anki keeps responsibility for reviews and scheduling. This project is not affiliated with Anki or LearnHarness.
 
-**Version 0.5.0, development build for review.** Select ideas from a teaching session or the graph, confirm a generation estimate, review and edit the model's drafts, then explicitly approve and send them to Anki. Flag a teaching reply during a session to mark it for cards. There is no public release yet.
+**Version 0.5.0 is merged.** Select ideas from a teaching session or the graph, confirm a generation estimate, review and edit the model's drafts, then explicitly approve and send them to Anki. Flag a teaching reply during a session to mark it for cards. There is no public release yet.
 
 ![Target workflow: graph selection, card writing, approval, then delivery to Anki. Each step shows its implementation status.](docs/images/workflow.svg)
 
-Graph drafting, review and delivery work with session flags and session-based selection. This branch adds coverage labels, reversible dismissals and a shared no-cards filter to the manual and session pickers.
+Graph drafting, review and delivery work with session flags and session-based selection. Version 0.5.0 adds coverage labels, reversible dismissals and a shared no-cards filter to the manual and session pickers.
 
 ## What's done
 
@@ -17,7 +17,7 @@ Graph drafting, review and delivery work with session flags and session-based se
 | 0.2.0 | Merged in [PR #2](https://github.com/Singh-Mehtab/learnharness-anki-bridge/pull/2) | Connection/profile pairing, owned Basic note type, approval, durable delivery, interrupted-send recovery, presence checks and Show in Anki. Final merged head passed 77 tests, build and typecheck. Real AnkiConnect and scratch LearnHarness checks predate the final renderer fixes and main merge. |
 | 0.3.0 | Merged in [PR #5](https://github.com/Singh-Mehtab/learnharness-anki-bridge/pull/5) (`e88f89d`) | Native graph and model pickers, configurable card kinds and cap, confirmed preflight, worker generation, source-aware editable review with previews, bulk approval/send, dropping cards and generation recovery. 100 tests, typecheck and build pass. A scratch LearnHarness run with a local stub model passed seven end-to-end checks and a restart-during-generation check. Not yet tested with a real model in the app, or by sending generated cards to Anki. See [verification and limits](docs/0.3.0-verification.md). |
 | 0.4.0 | Merged in [PR #4](https://github.com/Singh-Mehtab/learnharness-anki-bridge/pull/4) | Flag for Anki and Make cards in the teaching top bar, flag notes passed to the writer, waiting-for-extraction status, and session node selection that feeds the draft panel. 137 tests, typecheck and build pass. Both Sol reviewers approved after three rounds each. Earlier scratch LearnHarness checks passed 17 session checks and 9 integrated drafting checks with a local stub. No real model or Anki calls were made. See [verification and limits](docs/0.4.0-verification.md). |
-| 0.5.0 | Implemented on this branch, not merged | Shared destination-aware coverage, changed/missing-source warnings, dismiss/restore, coverage-aware node lists and no-cards backfill. State schema 4 preserves older cards, flags and generation recovery data. See [verification and limits](docs/0.5.0-verification.md). |
+| 0.5.0 | Merged | Shared destination-aware coverage, changed/missing-source warnings, dismiss/restore, coverage-aware node lists and no-cards backfill. State schema 4 preserves older cards, flags and generation recovery data. See [verification and limits](docs/0.5.0-verification.md). |
 
 ### Card writer
 
