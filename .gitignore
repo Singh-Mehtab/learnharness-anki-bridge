@@ -2,6 +2,7 @@ node_modules/
 dist/
 .sdk/
 *.zip
+/.package-*/
 .env
 .DS_Store
 bench-output/

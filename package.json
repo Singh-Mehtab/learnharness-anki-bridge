@@ -1,6 +1,6 @@
 {
   "name": "learnharness-anki-bridge",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "private": true,
   "type": "module",
   "description": "Unofficial graph-to-Anki drafting, review and one-way AnkiConnect delivery.",
@@ -16,6 +16,7 @@
     "bench:score": "node bench/score-server.ts",
     "bench:summary": "node bench/summarise.ts",
     "build": "node scripts/build.mjs",
+    "package:plugin": "node scripts/package-plugin.mjs",
     "install:local": "npm run build && node scripts/install-plugin-local.mjs",
     "test:anki-live": "node scripts/test-anki-live.ts"
   },
