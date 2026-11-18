@@ -36,7 +36,7 @@ export class CoverageService {
     if (typeof value.nodeId !== 'string' || !value.nodeId || value.nodeId.length > 500 || value.nodeId.includes('\0') || typeof value.statementHash !== 'string' || !/^[a-f0-9]{64}$/.test(value.statementHash)) throw new Error('Choose a current source node.');
     return this.delivery.exclusive(async () => {
       const view = this.snapshot(), node = view.nodes.find(n => n.id === value.nodeId);
-      if (!node) throw new Error('Source node is missing. Refresh the graph.');
+      if (!node) throw new Error('Source node is missing from the returned snapshot. The host may have returned incomplete data. Refresh the graph.');
       if (node.statementHash !== value.statementHash) throw new Error('Source changed. Refresh before changing its dismissal.');
       if (name === 'dismissNode') {
         if (!node.coverage.canDismiss) throw new Error('Review or drop waiting cards, settle generation or delivery, or restore the existing dismissal first. Current sent coverage cannot be dismissed.');
