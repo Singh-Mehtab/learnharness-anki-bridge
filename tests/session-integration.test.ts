@@ -124,7 +124,7 @@ test('schema 2 migration preserves a completed generation, applied result, and g
     await writeFile(file, JSON.stringify(v2));
     const store = await StateStore.open(f.directory);
     try {
-      assert.deepEqual(store.snapshot(), { ...v2, schemaVersion: 3, flags: [] });
+      assert.deepEqual(store.snapshot(), { ...v2, schemaVersion: 4, flags: [], dismissals: [] });
       assert.equal(store.snapshot().generations[0].tasks[0].status, 'applied');
       assert.equal(store.snapshot().cards[0].sourceSnapshot?.statement, f.host.nodes[0].statement);
     } finally { await store.close(); }

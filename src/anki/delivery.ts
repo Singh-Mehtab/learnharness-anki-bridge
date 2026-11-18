@@ -5,6 +5,7 @@ import { renderMarkdown } from './render.ts';
 import { StateStore, sameDestination } from './state.ts';
 import type { Card, CardKind, Destination, State } from './state.ts';
 import type { Generation, GenerationSettings } from '../generation/types.ts';
+import type { CoverageContext } from '../coverage/flow.ts';
 
 export interface PublicSnapshot {
   settings: { url: string; lastDeck: string; hasApiKey: boolean };
@@ -13,6 +14,7 @@ export interface PublicSnapshot {
   generationSettings: GenerationSettings;
   generations: Generation[];
   recoveryError?: string;
+  coverage?: CoverageContext;
 }
 export interface DraftInput {
   front: string; back: string; extra?: string; kind?: CardKind;
@@ -50,6 +52,7 @@ export class DeliveryService {
   private closed = false;
   private recoveryError?: string;
   sourceStatements?: () => Map<string, string>;
+  coverageContext?: () => CoverageContext;
   private readonly store: StateStore;
   private readonly options: { signal?: AbortSignal; timeoutMs?: number };
   constructor(store: StateStore, options: { signal?: AbortSignal; timeoutMs?: number } = {}) {
@@ -77,7 +80,7 @@ export class DeliveryService {
     const publicCards = cards.map(card => card.sourceSnapshot ? { ...card, sourceStatement: card.sourceSnapshot.statement,
       sourceMissing: current ? !current.has(card.nodeId) : false,
       sourceChanged: current?.has(card.nodeId) ? current.get(card.nodeId) !== card.sourceSnapshot.statement : false } : card);
-    return { generationSettings, generations, settings: { url: settings.url, lastDeck: settings.lastDeck, hasApiKey: !!settings.apiKey }, destination, cards: publicCards, ...(this.recoveryError ? { recoveryError: this.recoveryError } : {}) };
+    return { ...(this.coverageContext ? { coverage: this.coverageContext() } : {}), generationSettings, generations, settings: { url: settings.url, lastDeck: settings.lastDeck, hasApiKey: !!settings.apiKey }, destination, cards: publicCards, ...(this.recoveryError ? { recoveryError: this.recoveryError } : {}) };
   }
   private busyOwner: 'user' | 'background' | undefined;
   /** One writer fence. User calls fail fast on another user operation (no double sends),

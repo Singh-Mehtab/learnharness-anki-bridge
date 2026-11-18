@@ -161,17 +161,19 @@ export function flagNotesByNode(flags: readonly Flag[], graph: GraphLike): Map<s
   return new Map([...notes].map(([id, list]) => [id, list.join(' / ').slice(0, MAX_FLAG_NOTE * 3)]));
 }
 
-export interface CardCounts { waiting: number; sent: number; sentElsewhere: number }
-export interface SelectableNode { id: string; flagged: boolean; cards: CardCounts }
-export const hasCards = (c: CardCounts): boolean => c.waiting > 0 || c.sent > 0;
+export { hasCards } from '../coverage/flow.ts';
+export type { CardCounts } from '../coverage/flow.ts';
+import { canSelectNode, isUncardedNode } from '../coverage/flow.ts';
+import type { CoverageSelectable } from '../coverage/flow.ts';
+export interface SelectableNode extends CoverageSelectable { flagged: boolean }
 
 /** Draft screen default: flagged nodes ticked, nothing else. A flag is an explicit
  * request, so a flagged node stays ticked even when it already has cards; the
  * writer sees existing cards and aims for new angles. */
 export function defaultSelection(nodes: readonly SelectableNode[]): string[] {
-  return nodes.filter(n => n.flagged).map(n => n.id);
+  return nodes.filter(n => n.flagged && canSelectNode(n)).map(n => n.id);
 }
 /** "Select all uncarded": nodes with no cards waiting or sent to the paired profile. */
 export function uncardedIds(nodes: readonly SelectableNode[]): string[] {
-  return nodes.filter(n => !hasCards(n.cards)).map(n => n.id);
+  return nodes.filter(isUncardedNode).map(n => n.id);
 }

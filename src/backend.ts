@@ -3,10 +3,13 @@ import { DeliveryService } from './anki/delivery.ts';
 import { StateStore } from './anki/state.ts';
 import { GenerationService, GENERATION_OPERATIONS } from './generation/service.ts';
 import { SessionService, SESSION_OPERATIONS } from './session/service.ts';
+import { CoverageService, COVERAGE_OPERATIONS } from './coverage/service.ts';
 
 export async function activate(ctx: PluginBackendContext): Promise<() => Promise<void>> {
   const store = await StateStore.open(ctx.dataDirectory);
   const service = new DeliveryService(store, { signal: ctx.signal });
+  const coverage = new CoverageService(ctx, store, service);
+  service.coverageContext = () => coverage.snapshot();
   const generation = new GenerationService(ctx, store, service);
   const session = new SessionService(ctx.learning, store, service, { signal: ctx.signal });
   // Flag notes are part of the writer prompt, so editing a note makes an open estimate stale.
@@ -27,6 +30,7 @@ export async function activate(ctx: PluginBackendContext): Promise<() => Promise
     }
     for (const name of GENERATION_OPERATIONS) handlers.push(ctx.handle(name, input => generation.command(name, input ?? {})));
     for (const name of SESSION_OPERATIONS) handlers.push(ctx.handle(name, input => session.command(name, input ?? {})));
+    for (const name of COVERAGE_OPERATIONS) handlers.push(ctx.handle(name, input => coverage.command(name, input ?? {})));
     return close;
   } catch (error) {
     await close();

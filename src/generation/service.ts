@@ -13,10 +13,10 @@ import type { Batch } from '../writer/input.ts';
 import type { WriterInput, WriterResult } from '../writer/types.ts';
 import { validGenerationSettings } from './types.ts';
 import type { Generation, GenerationSettings, GenerationTask, SourceSnapshot } from './types.ts';
+import { graphCoverage, statementHash } from '../coverage/service.ts';
 
 const WORKER = 'manual-card-writer';
 const digest = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
-const statementHash = (value: string) => createHash('sha256').update(value).digest('hex');
 const errorText = (e: unknown) => e instanceof Error ? e.message : String(e);
 function object(v: unknown): Record<string, unknown> {
   if (!v || typeof v !== 'object' || Array.isArray(v)) throw new Error('Expected an input object.');
@@ -138,7 +138,12 @@ export class GenerationService {
     const model = catalog.models.find(m => m.provider === settings.model!.provider && m.id === settings.model!.id);
     if (!model || !catalog.providers.some(p => p.id === model.provider && p.keyPresent)) throw new Error('The selected model is unavailable. Choose an available model; no fallback is used.');
     const graph = this.ctx.learning.graph();
-    const cards = this.store.snapshot().cards.filter(c => c.status !== 'dropped');
+    const state = this.store.snapshot(), coverage = graphCoverage(graph, state);
+    const cards = state.cards.filter(c => c.status !== 'dropped');
+    for (const id of ids) {
+      const node = coverage.nodes.find(n => n.id === id);
+      if (node && !node.coverage.selectable) throw new Error(`Node ${id} is dismissed, generating, or has unresolved delivery. Restore or settle it before generating.`);
+    }
     const sources: SourceSnapshot[] = [];
     for (const id of ids) {
       const n = graph.propositions.find(n => n.id === id);
@@ -171,7 +176,9 @@ export class GenerationService {
       if (current.targets.length) batches.push(batch(current));
     }
     // Bind exactly what would be sent and spent: prompts, limits, model entry and skips.
-    return { binding: digest({ batches, skipped, settings, model, sources }), settings, model, batches, skipped, sources };
+    const coverageBinding = { destination: state.destination, nodes: coverage.nodes.filter(n => ids.includes(n.id)),
+      dismissals: state.dismissals.filter(d => ids.includes(d.nodeId)) };
+    return { binding: digest({ batches, skipped, settings, model, sources, coverageBinding }), settings, model, batches, skipped, sources };
   }
   private async preflight(ids: string[]): Promise<unknown> {
     const prepared = await this.prepare(ids), id = randomUUID();
@@ -193,7 +200,7 @@ export class GenerationService {
       if (name === 'generationContext') {
         keys(value, []);
         const catalog = await this.ctx.inference.catalog(); this.active();
-        return { nodes: this.ctx.learning.graph().propositions.map(({ id, name, statement }) => ({ id, name, statement })), catalog };
+        return { ...graphCoverage(this.ctx.learning.graph(), this.store.snapshot()), catalog };
       }
       if (name === 'generationSettings') {
         keys(value, ['cardsPerNode', 'enabledKinds', 'model']);

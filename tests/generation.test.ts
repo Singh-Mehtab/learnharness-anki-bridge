@@ -205,7 +205,7 @@ test('schema 1 state migrates without losing pairing or cards, and malformed gen
     assert.equal(snap.cards.length, 1); assert.equal(snap.destination.profile, 'Throwaway'); assert.deepEqual(snap.generations, []);
   } finally { await close(); }
   const saved = JSON.parse(await readFile(statePath(directory), 'utf8'));
-  assert.equal(saved.schemaVersion, 3);
+  assert.equal(saved.schemaVersion, 4);
   saved.generations = [{ id: 'g', bogus: true }];
   const broken = JSON.stringify(saved);
   await writeFile(statePath(directory), broken);

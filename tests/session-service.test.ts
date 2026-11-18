@@ -76,18 +76,18 @@ test('version 1 state migrates to flags without losing cards; newer versions are
   const h = host(), c = context(dir, h.learning), close = await activate(c.ctx);
   try {
     const saved = JSON.parse(await readFile(file, 'utf8'));
-    assert.equal(saved.schemaVersion, 3);
+    assert.equal(saved.schemaVersion, 4);
     assert.deepEqual(saved.flags, []);
     assert.deepEqual(saved.cards, v1.cards);
     assert.equal(saved.settings.apiKey, 'k');
   } finally { await close(); }
-  const future = JSON.stringify({ ...v1, schemaVersion: 4, flags: [] });
+  const future = JSON.stringify({ ...v1, schemaVersion: 5, flags: [] });
   await writeFile(file, future);
   await assert.rejects(activate(context(dir, h.learning).ctx), /Unsupported/);
   assert.equal(await readFile(file, 'utf8'), future);
 }));
 
-test('schema 2 migrates to 3 and preserves generation settings and cards', async () => withDir(async dir => {
+test('schema 2 migrates through 3 to 4 and preserves generation settings and cards', async () => withDir(async dir => {
   const { flags: _flags, ...base } = initialState();
   const v2 = { ...base, schemaVersion: 2,
     generationSettings: { ...base.generationSettings, cardsPerNode: 4, enabledKinds: ['recall'] }, cards: [card({})] };
@@ -95,7 +95,7 @@ test('schema 2 migrates to 3 and preserves generation settings and cards', async
   await writeFile(file, JSON.stringify(v2));
   const store = await StateStore.open(dir);
   try {
-    assert.deepEqual(store.snapshot(), { ...v2, schemaVersion: 3, flags: [] });
+    assert.deepEqual(store.snapshot(), { ...v2, schemaVersion: 4, flags: [], dismissals: [] });
     assert.deepEqual(JSON.parse(await readFile(file, 'utf8')), store.snapshot());
     const delivery = new DeliveryService(store), h = host();
     const session = new SessionService(h.learning as never, store, delivery);
@@ -123,7 +123,7 @@ test('a flag waits for extraction, then reports no nodes or matched nodes, and s
   const h = host(), c = context(dir, h.learning);
   let close = await activate(c.ctx);
   try {
-    assert.equal(c.handlers.size, 25);
+    assert.equal(c.handlers.size, 28);
     const waiting = await c.call<FlagView>('flag', { sessionId: 's1', messageIds: ['a3'] });
     assert.equal(waiting.status, 'waiting');
     assert.equal((waiting as FlagView & { created: boolean }).created, true);
