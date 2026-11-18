@@ -102,11 +102,13 @@ export class StateStore {
   static async open(directory: string): Promise<StateStore> {
     await mkdir(directory, { recursive: true, mode: 0o700 });
     const lock = path.join(directory, 'state.lock');
+    const busyLock = 'Another Anki Bridge backend owns this data directory. If LearnHarness is not running, remove state.lock from the plugin data folder and restart.';
     const token = randomUUID();
     const acquire = async () => {
       const file = await open(lock, 'wx', 0o600);
       try { await file.writeFile(JSON.stringify({ pid: process.pid, token })); await file.sync(); }
-      finally { await file.close(); }
+      catch (error) { await file.close(); await unlink(lock).catch(() => {}); throw error; }
+      await file.close();
     };
     const owner = async (): Promise<{ pid: number; token?: unknown }> => {
       let previous: { pid: number; token?: unknown };
@@ -114,11 +116,11 @@ export class StateStore {
       try { text = await readFile(lock, 'utf8'); }
       catch (e) {
         // Missing means another backend is mid-recovery; it will own the lock shortly.
-        if ((e as NodeJS.ErrnoException).code === 'ENOENT') throw new Error('Another Anki Bridge backend owns this data directory.');
+        if ((e as NodeJS.ErrnoException).code === 'ENOENT') throw new Error(busyLock);
         throw e;
       }
       // An empty lock was just created by another opener that has not written it yet.
-      if (!text) throw new Error('Another Anki Bridge backend owns this data directory.');
+      if (!text) throw new Error(busyLock);
       try { previous = JSON.parse(text); }
       catch { throw new Error('Anki Bridge state lock is unreadable. Do not remove it while a backend might be running.'); }
       if (!Number.isSafeInteger(previous.pid) || previous.pid <= 0) throw new Error('Invalid Anki Bridge state lock.');

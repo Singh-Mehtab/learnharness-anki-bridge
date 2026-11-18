@@ -208,7 +208,8 @@ function mount(ctx: PluginFrontendContext, container: HTMLElement, signal: Abort
     }
   }
   async function refresh(): Promise<void> { await snapshotAction("snapshot"); }
-  function refreshFromPeer(): void { void run(refresh); }
+  // Background path: keeps unsaved form input and queues itself if this view is busy.
+  function refreshFromPeer(): void { void backgroundRefresh(); }
   async function checkConnection(): Promise<void> {
     connection = undefined;
     render();

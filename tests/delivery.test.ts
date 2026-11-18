@@ -274,6 +274,9 @@ test('note type maintenance rejects a view that shows an old or missing pairing 
     assert.equal(f.calls.length, before);
     await f.service.command('repairFields', { expectedDestination: f.snap().destination });
     assert.ok(f.calls.length > before);
+    const styling = f.calls.length;
+    await f.service.command('updateStyling', { confirmed: true, expectedDestination: f.snap().destination });
+    assert.ok(f.calls.slice(styling).some(c => c.action === 'updateModelStyling'));
   } finally { await f.close(); }
 });
 

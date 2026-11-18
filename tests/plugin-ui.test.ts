@@ -231,9 +231,11 @@ test("re-pairing in settings refreshes the mounted review view and maintenance n
     f.state.cards = [
       { id: "sent", nodeId: "n", kind: "recall", status: "sent", noteId: 1, destination: paired(), front: "Sent", back: "A", extra: "" },
       { id: "failed", nodeId: "n", kind: "recall", status: "failed", destination: paired(), front: "Failed", back: "A", extra: "" },
+      { id: "pending", nodeId: "n", kind: "recall", status: "sending", destination: paired(), front: "Pending", back: "A", extra: "" },
     ];
     f.resync(); await tick();
     assert.match(f.container.textContent!, /Last delivery attempt: Throwaway/);
+    assert.match(f.container.textContent!, /Delivery unconfirmed: Throwaway/);
     assert.ok(f.button("Show sent cards in Anki"));
     f.button("Update note type styling").click(); await tick();
     assert.match(f.dialog()!.textContent!, /profile Throwaway at http:\/\/127\.0\.0\.1:8765\//);
@@ -244,6 +246,9 @@ test("re-pairing in settings refreshes the mounted review view and maintenance n
     assert.match(f.container.textContent!, /Saving a different URL clears the saved API key/);
     url.value = "http://127.0.0.1:8765/"; url.dispatchEvent(new f.window.Event("input") as unknown as Event);
     assert.doesNotMatch(f.container.textContent!, /clears the saved API key/);
+    url.value = "http://127.0.0.1:9999/"; // unsaved input must survive the peer refresh
+    (f.container.querySelector('details[data-keep="manual"]') as unknown as HTMLDetailsElement).open = true;
+    (f.container.querySelector('[data-keep="manual-front"]') as unknown as HTMLTextAreaElement).value = "Half-written front";
 
     const settingsContainer = f.window.document.createElement("div");
     f.window.document.body.append(settingsContainer);
@@ -253,6 +258,9 @@ test("re-pairing in settings refreshes the mounted review view and maintenance n
     f.state.destination = { url: "http://127.0.0.1:8765/", profile: "Other" };
     f.dialog()!.querySelectorAll("button")[1]!.click(); await tick(); await tick();
     assert.match(f.container.textContent!, /Paired destination: Other/);
+    assert.equal((f.container.querySelector('input[type=text]') as unknown as HTMLInputElement).value, "http://127.0.0.1:9999/");
+    assert.equal((f.container.querySelector('details[data-keep="manual"]') as unknown as HTMLDetailsElement).open, true);
+    assert.equal((f.container.querySelector('[data-keep="manual-front"]') as unknown as HTMLTextAreaElement).value, "Half-written front");
     assert.equal(Array.from(f.container.querySelectorAll("button")).some(b => /^Show/.test(b.textContent!)), false);
     if (typeof cleanup === "function") await cleanup();
   } finally { await f.dispose(); }

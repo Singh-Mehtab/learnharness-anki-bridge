@@ -93,7 +93,7 @@ try {
   await service.command('presence');
   assert.equal(service.snapshot().cards[0].presence, 'present');
   // Current AnkiConnect blocks note-type writes while an affected editor is open.
-  await service.command('updateStyling', { confirmed: true });
+  await service.command('updateStyling', { confirmed: true, expectedDestination });
   evidence.push('explicit owned styling/template update');
   await service.command('show', { ids: [fourth] });
   const browsed = await client.call<number[]>('guiBrowse', { query: `LH_ID:${fourth}` });
