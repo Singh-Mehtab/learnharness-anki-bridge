@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { mkdir, open, readFile, rename, unlink } from 'node:fs/promises';
 import path from 'node:path';
+import { defaultGenerationSettings, validateGenerations, validSource } from '../generation/types.ts';
+import type { Generation, GenerationSettings, SourceSnapshot } from '../generation/types.ts';
 
 export interface Destination { url: string; profile: string }
 export type CardStatus = 'draft' | 'approved' | 'sending' | 'sent' | 'failed' | 'dropped';
@@ -22,15 +24,22 @@ export interface Card {
   destination?: Destination;
   lastError?: string;
   presence?: 'present' | 'deleted' | 'unknown';
+  sourceSnapshot?: SourceSnapshot;
+  generationId?: string;
+  requestId?: string;
 }
 export interface State {
-  schemaVersion: 1;
+  schemaVersion: 2;
+  generationSettings: GenerationSettings;
+  generations: Generation[];
   settings: { url: string; apiKey: string; lastDeck: string };
   destination: Destination | null;
   cards: Card[];
 }
 export const initialState = (): State => ({
-  schemaVersion: 1,
+  schemaVersion: 2,
+  generationSettings: defaultGenerationSettings(),
+  generations: [],
   settings: { url: 'http://127.0.0.1:8765/', apiKey: '', lastDeck: '' },
   destination: null,
   cards: [],
@@ -42,19 +51,30 @@ function destination(v: unknown): v is Destination {
   return object(v) && text(v.url) && !!v.url && text(v.profile) && !!v.profile;
 }
 export function validateState(value: unknown): asserts value is State {
-  if (!object(value) || value.schemaVersion !== 1) throw new Error('Unsupported state format. Keep state.json intact and use a compatible Anki Bridge version.');
+  if (!object(value) || value.schemaVersion !== 2) throw new Error('Unsupported state format. Keep state.json intact and use a compatible Anki Bridge version.');
+  validateGenerations(value.generationSettings, value.generations);
   const settings = value.settings;
   if (!object(settings) || !['url', 'apiKey', 'lastDeck'].every(k => text(settings[k])) || !(value.destination === null || destination(value.destination)) || !Array.isArray(value.cards)) throw new Error('Invalid Anki Bridge state. The file has not been reset.');
   const ids = new Set<string>();
   for (const card of value.cards) {
     if (!object(card) || !['id', 'nodeId', 'statementHash', 'sessionId', 'nodeName', 'sessionName', 'front', 'back', 'extra'].every(k => text(card[k])) || !/^[\da-f]{8}-(?:[\da-f]{4}-){3}[\da-f]{12}$/i.test(card.id as string) || ids.has(card.id as string) || !['recall', 'why', 'compose', 'discriminate'].includes(card.kind as string) || !['draft', 'approved', 'sending', 'sent', 'failed', 'dropped'].includes(card.status as string)) throw new Error('Invalid card state. The file has not been reset.');
     ids.add(card.id as string);
+    if (card.sourceSnapshot !== undefined && !validSource(card.sourceSnapshot) || card.generationId !== undefined && !text(card.generationId) || card.requestId !== undefined && !text(card.requestId)) throw new Error('Invalid generation card metadata.');
     if (card.destination !== undefined && !destination(card.destination)) throw new Error('Invalid card destination.');
     if (card.noteId !== undefined && (!Number.isSafeInteger(card.noteId) || (card.noteId as number) <= 0)) throw new Error('Invalid Anki note ID.');
     if (['sent', 'sending'].includes(card.status as string) && (!destination(card.destination) || !text(card.deck) || !card.deck)) throw new Error('Missing delivery destination or deck.');
     if (card.status === 'sent' && card.noteId === undefined) throw new Error('Sent card has no Anki note ID.');
     if (card.deck !== undefined && !text(card.deck) || card.lastError !== undefined && !text(card.lastError) || card.presence !== undefined && !['present', 'deleted', 'unknown'].includes(card.presence as string)) throw new Error('Invalid delivery metadata.');
   }
+}
+
+/** Validate the old payload before the atomic v2 rewrite; never reset unknown data. */
+export function migrateState(raw: unknown): State {
+  const value = object(raw) && raw.schemaVersion === 1
+    ? { ...raw, schemaVersion: 2, generationSettings: defaultGenerationSettings(), generations: [] }
+    : raw;
+  validateState(value);
+  return value;
 }
 
 /** One backend owns a data directory. Writes are private, fsynced, atomic snapshots. */
@@ -92,7 +112,7 @@ export class StateStore {
     }
     try {
       let value: State;
-      try { const raw: unknown = JSON.parse(await readFile(path.join(directory, 'state.json'), 'utf8')); validateState(raw); value = raw; }
+      try { const raw: unknown = JSON.parse(await readFile(path.join(directory, 'state.json'), 'utf8')); value = migrateState(raw); }
       catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; value = initialState(); }
       const store = new StateStore(directory, value, token);
       // Create a durable initial snapshot without overwriting a malformed/newer file.
