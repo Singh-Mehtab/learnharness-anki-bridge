@@ -29,6 +29,8 @@ export interface Generation {
   id: string;
   createdAt: string;
   nodeIds: string[];
+  /** Absent on legacy generations, whose targets were all explicit requests. */
+  backfillNodeIds?: string[];
   status: 'running' | 'completed' | 'cancelled' | 'interrupted' | 'failed';
   settings: GenerationSettings;
   tasks: GenerationTask[];
@@ -71,6 +73,7 @@ export function validateGenerations(settings: unknown, generations: unknown): vo
   const ids = new Set<string>(), requests = new Set<string>();
   for (const g of generations) {
     if (!object(g) || typeof g.id !== 'string' || !g.id || ids.has(g.id) || typeof g.createdAt !== 'string' || !strings(g.nodeIds) || !validGenerationSettings(g.settings) || !['running', 'completed', 'cancelled', 'interrupted', 'failed'].includes(String(g.status)) || !Array.isArray(g.tasks) || !Array.isArray(g.skipped) || g.skipped.some(s => !object(s) || typeof s.nodeId !== 'string' || typeof s.reason !== 'string')) throw new Error('Invalid generation batch.');
+    if (g.backfillNodeIds !== undefined && (!strings(g.backfillNodeIds) || new Set(g.backfillNodeIds).size !== g.backfillNodeIds.length || g.backfillNodeIds.some(id => !(g.nodeIds as string[]).includes(id)))) throw new Error('Invalid generation backfill targets.');
     ids.add(g.id);
     for (const t of g.tasks) {
       if (!object(t) || typeof t.requestId !== 'string' || !t.requestId || requests.has(t.requestId) || (t.taskId !== undefined && typeof t.taskId !== 'string') || !['pending', 'running', 'applied', 'failed', 'cancelled', 'interrupted'].includes(String(t.status)) || !validWriterInput(t.input) || !Array.isArray(t.sources) || !t.sources.every(validSource) || !Number.isSafeInteger(t.outputAllowance) || Number(t.outputAllowance) <= 0 || (t.error !== undefined && typeof t.error !== 'string') || (t.status === 'applied' && !object(t.result))) throw new Error('Invalid generation task.');

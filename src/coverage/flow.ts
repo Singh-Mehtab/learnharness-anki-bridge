@@ -2,6 +2,7 @@
 import type { Card, State } from '../anki/state.ts';
 import { sameDestination } from '../anki/destination.ts';
 
+export const MAX_SELECTED_NODES = 1000;
 export interface Dismissal { nodeId: string; statementHash: string; dismissedAt: string }
 export interface CardCounts { waiting: number; sent: number; sentElsewhere: number }
 export type BaseCoverage = 'no-cards' | 'drafts-waiting' | 'sent' | 'dismissed';
