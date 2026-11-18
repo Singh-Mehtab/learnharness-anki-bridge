@@ -17,12 +17,13 @@ async function setup() {
   let previewDisposals = 0;
   const ctx = {
     signal: controller.signal, cleanup: () => {}, registerView: (v: PluginView) => { view = v; return () => {}; },
-    registerSettings: () => () => {}, registerAction: () => () => {}, placeAction: () => () => {}, onResync: () => () => {},
+    registerSettings: () => () => {}, registerAction: () => () => {}, placeAction: () => () => {}, onResync: () => () => {}, onAppEvent: () => () => {},
     call: async (name: string, input: any) => {
       calls.push({ name, input });
       if (name === "edit") Object.assign(cards.find(c => c.id === input.id)!, input, { status: "draft" });
       if (name === "drop") cards.filter(c => input.ids.includes(c.id)).forEach(c => { c.status = "dropped"; });
       if (name === "generationContext") return { nodes: [], catalog: {} };
+      if (name === "sessions") return { sessions: [], unresolved: [] };
       if (name === "approve") cards.filter(c => input.ids.includes(c.id)).forEach(c => { c.status = "approved"; });
       return structuredClone(state);
     },
