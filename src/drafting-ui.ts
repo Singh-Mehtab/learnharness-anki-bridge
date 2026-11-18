@@ -51,14 +51,18 @@ export function mountDrafting(ctx: PluginFrontendContext, container: HTMLElement
     reviewWaiting,
     changed: source => { if (source === "user") choiceRevision++; invalidate(); renderPreflight(); if (estimateButton) estimateButton.disabled = picker.isStale; },
     mutate: (name, node) => { invalidate(); renderPreflight(); void run(async () => {
-      if (picker.isStale) throw new Error("Refresh graph before changing coverage.");
       try { await ctx.call(name, { nodeId: node.id, statementHash: node.statementHash }); }
       catch (error) { if (alive()) { coverageRequest++; picker.markStale(); } throw error; }
-      try { await refreshCoverage(); }
-      catch (error) {
+      try {
+        try { await refreshCoverage(); }
+        finally { await onCardsChanged(); }
+      } catch (error) {
         throw new Error(`${name === "dismissNode" ? "Dismissal" : "Restoration"} saved, but the graph refresh failed: ${error instanceof Error ? error.message : String(error)}`);
       }
-      await onCardsChanged();
+    }, true, () => {
+      const current = nodes.find(n => n.id === node.id);
+      return !picker.isStale && !!current && current.statementHash === node.statementHash &&
+        !!(name === "dismissNode" ? current.coverage?.canDismiss : current.coverage?.dismissed);
     }); },
   });
   root.insertBefore(picker.root, controls);
@@ -83,15 +87,15 @@ export function mountDrafting(ctx: PluginFrontendContext, container: HTMLElement
     catch (error) { if (alive()) feedback.textContent = error instanceof Error ? error.message : String(error); }
   }
   const disposeWidgets = () => { widgets.forEach(w => w.dispose()); widgets = []; };
-  /** Actions run one at a time in click order; none are silently dropped. */
-  function run(action: () => Promise<void>, rerender = true): Promise<void> {
+  /** Actions run in click order. A superseded action leaves the last result visible. */
+  function run(action: () => Promise<void>, rerender = true, shouldRun = () => true): Promise<void> {
     pending++;
-    feedback.textContent = "Working...";
     queue = queue.then(async () => {
-      if (!alive()) return;
       try {
+        if (!alive() || !shouldRun()) return;
+        feedback.textContent = "Working...";
         await action();
-        if (alive()) { if (rerender) render(); else renderActivity(); if (pending === 1) feedback.textContent = ""; }
+        if (alive()) { if (rerender) render(); else renderActivity(); feedback.textContent = ""; }
       } catch (error) { if (alive()) feedback.textContent = error instanceof Error ? error.message : String(error); }
       finally { pending--; schedule(); }
     });

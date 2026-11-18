@@ -113,6 +113,31 @@ test("Review waiting cards fetches a newly visible draft without discarding unsa
   } finally { await f.dispose(); }
 });
 
+test("a background review refresh is retried when a card action finishes as its snapshot arrives", async () => {
+  const state = fixture();
+  state.cards = [{ id: 'sent', nodeId: 'target:id', kind: 'recall', status: 'sent', front: 'Sent card', back: 'Answer', extra: '' }];
+  let reads = 0, releaseSnapshot!: (value: typeof state) => void, finishShow!: () => void;
+  const heldSnapshot = new Promise<typeof state>(resolve => { releaseSnapshot = resolve; });
+  const shown = new Promise<void>(resolve => { finishShow = resolve; });
+  const f = await setup(name => {
+    if (name === 'sessions') return { sessions: [], unresolved: [] };
+    if (name === 'coverageContext') return undefined;
+    if (name === 'snapshot') return ++reads === 2 ? heldSnapshot : structuredClone(state);
+    if (name === 'show') return shown;
+    return undefined;
+  });
+  try {
+    f.button('Refresh generation').click(); await tick();
+    assert.equal(reads, 2);
+    f.button('Show in Anki').click();
+    const older = structuredClone(state);
+    state.cards.push({ id: 'new', nodeId: 'target:id', kind: 'recall', status: 'draft', front: 'New draft', back: 'Answer', extra: '' });
+    finishShow(); await Promise.resolve(); releaseSnapshot(older); await tick();
+    assert.equal(reads, 3, 'the finished card action must see the pending refresh');
+    assert.ok(f.container.querySelector('[data-waiting-node="target:id"]'));
+  } finally { await f.dispose(); }
+});
+
 test("plugin UI registers sidebar/view/settings, saves password without exposing stored key, and warns about localhost", async () => {
   const f = await setup();
   try {

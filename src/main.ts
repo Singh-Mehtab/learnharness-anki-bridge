@@ -137,22 +137,23 @@ function mount(ctx: PluginFrontendContext, container: HTMLElement, signal: Abort
   }
   // A snapshot can arrive while the learner is editing. Keep unsaved inputs,
   // open sections, and the caret when updating the review list.
-  async function refreshReviewCards(): Promise<boolean> {
-    if (!alive() || busy) return false;
-    const fresh = await ctx.call<Snapshot>("snapshot");
-    if (!alive() || busy) return false;
+  function applyReviewSnapshot(fresh: Snapshot): void {
     state = fresh;
     const kept = captureForm();
     render();
     restoreForm(kept);
-    return true;
   }
   let refreshPending = false;
   async function backgroundRefresh(): Promise<void> {
     if (!alive()) return;
+    if (busy) { refreshPending = true; return; }
     refreshPending = false;
     try {
-      if (!await refreshReviewCards()) { refreshPending = true; return; }
+      const fresh = await ctx.call<Snapshot>("snapshot");
+      if (!alive()) return;
+      // Set the flag before yielding so the active action sees it on completion.
+      if (busy) { refreshPending = true; return; }
+      applyReviewSnapshot(fresh);
       await sessionPanel?.refresh(); await draftingPanel?.refresh();
     } catch { refreshPending = true; }
   }
@@ -400,12 +401,14 @@ function mount(ctx: PluginFrontendContext, container: HTMLElement, signal: Abort
       return true;
     };
     if (!alive() || focusWaiting()) return;
+    const waitMessage = "Wait for the current card action to finish, then try again.";
+    if (busy) { feedback.textContent = waitMessage; return; }
     try {
-      const refreshed = await refreshReviewCards();
+      const fresh = await ctx.call<Snapshot>("snapshot");
       if (!alive()) return;
-      if (!refreshed) feedback.textContent = "Wait for the current card action to finish, then try again.";
-      else if (!focusWaiting()) feedback.textContent = "No waiting cards for this node in the review list.";
-      else feedback.textContent = "";
+      if (busy) { feedback.textContent = waitMessage; return; }
+      applyReviewSnapshot(fresh);
+      feedback.textContent = focusWaiting() ? "" : "No waiting cards for this node in the review list.";
     } catch (error) {
       if (alive()) feedback.textContent = `Could not refresh the review list: ${error instanceof Error ? error.message : String(error)}`;
     }

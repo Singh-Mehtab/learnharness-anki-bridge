@@ -67,7 +67,11 @@ function setup(options: { catalogUnavailable?: boolean; initialGraphFailure?: bo
       graphHold = new Promise<void>((yes, no) => { resolve = yes; reject = no; });
       return { allowFollowingReads: () => { graphHold = undefined; }, resolve: () => { graphHold = undefined; resolve(); }, reject: () => { graphHold = undefined; reject(new Error("Graph reload failed")); } };
     },
-    holdMutation: () => { let reject!: (e: Error) => void; mutationGate = new Promise<void>((_, no) => { reject = no; }); return () => { mutationGate = undefined; reject(new Error("Graph read failed")); }; },
+    holdMutation: () => {
+      let resolve!: () => void, reject!: (e: Error) => void;
+      mutationGate = new Promise<void>((yes, no) => { resolve = yes; reject = no; });
+      return { resolve: () => { mutationGate = undefined; resolve(); }, reject: () => { mutationGate = undefined; reject(new Error("Graph read failed")); } };
+    },
     refreshed: () => refreshed, knowledgeMounts: () => knowledgeMounts, panel, holdEstimates: () => { let release!: () => void; hold = new Promise(r => { release = r; }); return () => { hold = undefined; release(); }; }, close: async () => { panel.dispose(); controller.abort(); await window.happyDOM.close(); } };
 }
 
@@ -240,13 +244,31 @@ test("a queued dismissal does not run after the first dismissal marks coverage s
   const f = setup();
   try {
     await tick();
-    const reject = f.holdMutation();
+    const mutation = f.holdMutation();
     const action = f.button("Don't card this");
     action.click(); action.click(); await tick();
     assert.equal(f.calls.filter(c => c.name === "dismissNode").length, 1);
-    reject(); await tick();
+    mutation.reject(); await tick();
     assert.equal(f.calls.filter(c => c.name === "dismissNode").length, 1);
     assert.match(f.container.textContent!, /Coverage is stale/);
+  } finally { await f.close(); }
+});
+
+test("a committed dismissal keeps its acknowledgement and refreshes the session when a duplicate click follows a failed graph read", async () => {
+  const f = setup();
+  try {
+    await tick();
+    const mutation = f.holdMutation();
+    const action = f.button("Don't card this");
+    const refreshed = f.refreshed();
+    action.click(); action.click(); await tick();
+    const graph = f.holdGraphReload();
+    mutation.resolve(); await tick();
+    graph.reject(); await tick();
+    assert.equal(f.calls.filter(c => c.name === "dismissNode").length, 1);
+    assert.match(f.container.textContent!, /Dismissal saved, but the graph refresh failed/);
+    assert.match(f.container.textContent!, /Coverage is stale/);
+    assert.equal(f.refreshed(), refreshed + 1, "refresh the session even if the graph refresh fails");
   } finally { await f.close(); }
 });
 
