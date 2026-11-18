@@ -12,7 +12,7 @@ All calls use `ctx.call`. No call silently selects a model. No session flags or 
 | `generate` | `{preflightId}` | Snapshot after durable acceptance, not completion |
 | `generationStatus` | `{}` | Snapshot, including durable task states |
 | `cancelGeneration` | `{id}` | Snapshot; completed task results are applied, unfinished tasks are cancelled, already created drafts remain |
-| `retryGeneration` | `{id}` | New preflight for unfinished task nodes, not an automatic model call; confirm with `generate` |
+| `retryGeneration` | `{id}` | New preflight for unfinished task nodes using the current settings, not the batch's frozen ones. Not a model call; confirm with `generate` |
 | `drop` | `{ids: string[]}` | Snapshot; only unsent editable cards may be dropped, preserving their history |
 
 Setting model to null clears the choice. The default cap is 2, with all four kinds enabled and no model selected. Model limits and costs may be null. Null limits use the writer's fixed budgets, not a fabricated limit; null cost produces no dollar estimate. Availability requires the selected model and its available provider in the catalog. No catalog defaults, slots or role pins select a model for this feature.
@@ -31,7 +31,7 @@ Preflights are ephemeral, bound to graph, source passages, current nondropped ca
 Top-level `generationSettings` has the settings shape above. `generations` contains:
 
 - `id` (the accepted preflight ID), `createdAt`, `nodeIds`, frozen `settings`, `skipped`.
-- `status`: `running`, `completed`, `cancelled`, `interrupted`, `failed`.
+- `status`: `running`, `completed`, `cancelled`, `interrupted`, `failed`. Once no task is pending or running, the batch takes the first that applies: `cancelled` if any task was cancelled, then `interrupted`, then `failed`, else `completed`.
 - `tasks`: `{requestId, taskId?, status, input, sources, outputAllowance, result?, error?}`.
 - Task status: `pending`, `running`, `applied`, `failed`, `cancelled`, `interrupted`. `applied` means a complete validated worker result was atomically applied. A result may legitimately contain zero cards with an explicit skip reason; consult `result.targets`.
 
@@ -39,7 +39,11 @@ Generated cards retain all existing delivery fields plus `generationId`, `reques
 
 ## Persistence and lifecycle
 
-Schema 1 migrates to schema 2 through the existing locked, atomic `StateStore`, preserving settings, pairing and cards. Unsupported or malformed data is refused without resetting. Delivery and generation share the delivery service's mutation fence; background result applications wait for the fence, while competing UI mutations receive the existing busy error. Worker partial/streaming text is never a draft.
+Schema 1 migrates to schema 2 through the existing locked, atomic `StateStore`, preserving settings, pairing and cards. Unsupported or malformed data is refused without resetting. Persisted applied results get a shape check (targets from the input, card fields and core kinds). Writer content rules run once, at apply time, so a later stricter rule never makes old state unreadable.
+
+Delivery and generation share one mutation fence. Background work (activation recovery, the generation driver) waits for it. A UI call waits out a background hold, but still gets the busy error if another UI operation holds the fence, which keeps double-clicked sends from running twice. Worker partial/streaming text is never a draft.
+
+If the driver fails unexpectedly, for example on a storage error, it reports a recovery error, cancels any running worker and marks the batch's open tasks `interrupted`. A batch is never left `running` without a driver, because that would block new generations.
 
 The authoritative complete result, its request's `applied` status, and all new draft UUIDs commit together in one snapshot. Replay cannot recreate dropped or edited drafts. Worker identity and frozen input must match the saved request. On activation, pending requests are compared with host worker history, including requests whose acceptance was saved before their task ID. Finished results are applied; all others become interrupted and require a new preflight to retry. Activation never starts model work.
 
