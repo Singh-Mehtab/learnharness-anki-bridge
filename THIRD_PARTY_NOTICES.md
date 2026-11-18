@@ -8,7 +8,7 @@ Source: https://github.com/amosblomqvist/learnharness, v0.6.1, AGPL-3.0. Copyrig
 
 ## Twig and core Flashcards
 
-The existing card writer bench adapts card-kind and prompt rules from [Twig](https://github.com/amoghu1s1/twig), by its contributors, and LearnHarness core Flashcards, by the LearnHarness contributors. Both are AGPL-3.0. The 0.2.0 frontend does not run that writer or generate cards.
+The card writer and its benchmark adapt card-kind and prompt rules from [Twig](https://github.com/amoghu1s1/twig), by its contributors, and LearnHarness core Flashcards, by the LearnHarness contributors. Both are AGPL-3.0.
 
 ## Development dependencies
 

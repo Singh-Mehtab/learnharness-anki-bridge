@@ -2,9 +2,9 @@
 
 An unofficial LearnHarness community plugin in development. The goal is to draft cards from your knowledge graph, let you edit and approve them, and send them to Anki through AnkiConnect. Delivery is one-way; Anki keeps responsibility for reviews and scheduling. This project is not affiliated with Anki or LearnHarness.
 
-**Version 0.5.0 is merged.** Select ideas from a teaching session or the graph, confirm a generation estimate, review and edit the model's drafts, then explicitly approve and send them to Anki. Flag a teaching reply during a session to mark it for cards. There is no public release yet.
+**Version 0.6.0 is a personal-use candidate.** It packages the existing workflow as an install zip and documents how to install and upgrade it. There is no public release yet. See the [install guide](docs/install.md) for requirements, setup and troubleshooting.
 
-![Target workflow: graph selection, card writing, approval, then delivery to Anki. Each step shows its implementation status.](docs/images/workflow.svg)
+![Anki Bridge 0.6.0 personal-use candidate: graph selection, card writing, approval, then delivery to Anki.](docs/images/workflow.svg)
 
 Graph drafting, review and delivery work with session flags and session-based selection. Version 0.5.0 adds coverage labels, reversible dismissals and a shared no-cards filter to the manual and session pickers.
 
@@ -17,7 +17,8 @@ Graph drafting, review and delivery work with session flags and session-based se
 | 0.2.0 | Merged in [PR #2](https://github.com/Singh-Mehtab/learnharness-anki-bridge/pull/2) | Connection/profile pairing, owned Basic note type, approval, durable delivery, interrupted-send recovery, presence checks and Show in Anki. Final merged head passed 77 tests, build and typecheck. Real AnkiConnect and scratch LearnHarness checks predate the final renderer fixes and main merge. |
 | 0.3.0 | Merged in [PR #5](https://github.com/Singh-Mehtab/learnharness-anki-bridge/pull/5) (`e88f89d`) | Native graph and model pickers, configurable card kinds and cap, confirmed preflight, worker generation, source-aware editable review with previews, bulk approval/send, dropping cards and generation recovery. 100 tests, typecheck and build pass. A scratch LearnHarness run with a local stub model passed seven end-to-end checks and a restart-during-generation check. Not yet tested with a real model in the app, or by sending generated cards to Anki. See [verification and limits](docs/0.3.0-verification.md). |
 | 0.4.0 | Merged in [PR #4](https://github.com/Singh-Mehtab/learnharness-anki-bridge/pull/4) | Flag for Anki and Make cards in the teaching top bar, flag notes passed to the writer, waiting-for-extraction status, and session node selection that feeds the draft panel. 137 tests, typecheck and build pass. Both Sol reviewers approved after three rounds each. Earlier scratch LearnHarness checks passed 17 session checks and 9 integrated drafting checks with a local stub. No real model or Anki calls were made. See [verification and limits](docs/0.4.0-verification.md). |
-| 0.5.0 | Merged | Shared destination-aware coverage, changed/missing-source warnings, dismiss/restore, coverage-aware node lists and no-cards backfill. State schema 4 preserves older cards, flags and generation recovery data. See [verification and limits](docs/0.5.0-verification.md). |
+| 0.5.0 | Merged in [PR #7](https://github.com/Singh-Mehtab/learnharness-anki-bridge/pull/7) | Shared destination-aware coverage, changed/missing-source warnings, dismiss/restore, coverage-aware node lists and no-cards backfill. State schema 4 preserves older cards, flags and generation recovery data. See [verification and limits](docs/0.5.0-verification.md). |
+| 0.6.0 | Personal-use candidate | Install zip and upgrade instructions. No new workflow features. See [verification and limits](docs/0.6.0-verification.md). |
 
 ### Card writer
 
@@ -75,7 +76,7 @@ The 0.2.0 tests used LearnHarness 0.6.1, Anki 26.08.1 and AnkiConnect builds 26.
 
 ## Development setup
 
-Use Node.js 23.6 or newer and npm:
+Use Node.js 23.6 or newer, npm, and Info-ZIP-compatible `zip` and `unzip` for the packaging tests. The tests need `unzip -Z1`, which BusyBox `unzip` does not support.
 
 ```sh
 npm ci
@@ -121,15 +122,11 @@ The bridge never updates or deletes existing Anki notes or their review history.
 
 The optional API key is stored in plain text in the plugin's `data/` directory. Keep it private, use loopback and a trusted local AnkiConnect service, and never distribute `data/`. A remote HTTP endpoint can expose both the key and card content. The saved key is not displayed; a blank key input keeps it, and the clear checkbox removes it.
 
-The opt-in [live integration test](docs/0.2.0-verification.md) requires an isolated profile named `Anki Bridge Test`, leaves notes in that collection, and refuses ports 8765 and 8766. It does not start or stop Anki. The core Flashcards plugin is independent and can remain enabled. A public installation guide will accompany a release.
+The opt-in [live integration test](docs/0.2.0-verification.md) requires an isolated profile named `Anki Bridge Test`, leaves notes in that collection, and refuses ports 8765 and 8766. It does not start or stop Anki. The core Flashcards plugin is independent and can remain enabled.
 
-## Next versions
+## Before public release
 
-| Version | Planned scope |
-| --- | --- |
-| 0.6.0 | First public release, after validation and explicit publication approval. |
-
-These are plans, not shipped features or promised dates. The design is one-way and approval-first: the plugin must not update or delete existing Anki notes or change scheduling. Anki edits win.
+The full card-quality benchmark is still open. A personal trial can find setup and workflow problems, but it does not close that quality check. Public availability and community announcements are separate decisions.
 
 ## Keeping this page current
 
