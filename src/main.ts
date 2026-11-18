@@ -1,5 +1,6 @@
 import type { PluginFrontendContext } from "../sdk/index.d.ts";
 import { mountDrafting } from "./drafting-ui.ts";
+import { mountSessionFlow, registerSessionActions, SessionRequests } from "./session-ui.ts";
 
 interface Destination { url: string; profile: string }
 interface Card {
@@ -88,17 +89,18 @@ function confirmAction(ctx: PluginFrontendContext, signal: AbortSignal, title: s
   });
 }
 
-function mount(ctx: PluginFrontendContext, container: HTMLElement, signal: AbortSignal, settingsOnly = false): () => void {
+function mount(ctx: PluginFrontendContext, container: HTMLElement, signal: AbortSignal, settingsOnly = false, requests?: SessionRequests): () => void {
   const root = element("section");
   root.className = "anki-bridge";
   const feedback = element("p");
   feedback.setAttribute("role", "status");
   feedback.setAttribute("aria-live", "polite");
   const controls = element("fieldset");
+  const sessionHost = element("div");
   const drafting = element("div");
-  root.append(element("h2", settingsOnly ? "Anki Bridge settings" : "Anki Bridge 0.3.0"),
-    element("p", settingsOnly ? "Connection, pairing and note type. Use a throwaway Anki profile while testing." : "Draft from your graph, check every answer, then approve and send to Anki. Nothing is sent automatically."),
-    drafting, feedback, controls);
+  root.append(element("h2", settingsOnly ? "Anki Bridge settings" : "Anki Bridge 0.4.0"),
+    element("p", settingsOnly ? "Connection, pairing and note type. Use a throwaway Anki profile while testing." : "Pick ideas from a session or your graph, check every answer, then approve and send to Anki. Nothing is sent automatically."),
+    sessionHost, drafting, feedback, controls);
   container.append(root);
   let disposed = false;
   let busy = false;
@@ -379,11 +381,21 @@ function mount(ctx: PluginFrontendContext, container: HTMLElement, signal: Abort
   const unsubscribe = ctx.onResync(() => { void run(refresh); });
   void run(refresh);
   const draftingPanel = settingsOnly ? undefined : mountDrafting(ctx, drafting, signal, backgroundRefresh);
-  return () => { disposed = true; unsubscribe(); draftingPanel?.dispose(); disposePreviews(); root.remove(); };
+  const disposeSession = !settingsOnly && requests && draftingPanel ? mountSessionFlow(ctx, sessionHost, signal, {
+    requests,
+    // Replaces the draft selection and clears any estimate; the learner still estimates and confirms.
+    onDraft: async ({ nodeIds }) => {
+      await draftingPanel.select(nodeIds);
+      if (alive()) { drafting.scrollIntoView?.({ block: "start" }); drafting.querySelector<HTMLElement>("button, input")?.focus(); }
+    },
+  }) : undefined;
+  return () => { disposed = true; unsubscribe(); disposeSession?.(); draftingPanel?.dispose(); disposePreviews(); root.remove(); };
 }
 
 export function activate(ctx: PluginFrontendContext): void {
-  ctx.cleanup(ctx.registerView({ id: "bridge", name: "Anki Bridge", mount: (container, signal) => mount(ctx, container, signal) }));
+  const requests = new SessionRequests();
+  ctx.cleanup(ctx.registerView({ id: "bridge", name: "Anki Bridge", mount: (container, signal) => mount(ctx, container, signal, false, requests) }));
+  registerSessionActions(ctx, requests);
   ctx.cleanup(ctx.registerAction({ id: "open-bridge", name: "Anki Bridge", run: () => ctx.app.openView("bridge") }));
   ctx.cleanup(ctx.placeAction({ id: "bridge-sidebar", actionId: "open-bridge", location: "sidebar" }));
   ctx.cleanup(ctx.registerSettings((container, signal) => mount(ctx, container, signal, true)));

@@ -2,7 +2,7 @@
 
 An unofficial LearnHarness community plugin in development. The goal is to draft cards from your knowledge graph, let you edit and approve them, and send them to Anki through AnkiConnect. Delivery is one-way; Anki keeps responsibility for reviews and scheduling. This project is not affiliated with Anki or LearnHarness.
 
-**Version 0.3.0, in review.** Select graph nodes, confirm a generation estimate, review and edit the model's drafts, then explicitly approve and send them to Anki. Interrupted generation can recover completed results after restart. There is no public release yet.
+**Version 0.4.0, in review.** Select ideas from a teaching session or the graph, confirm a generation estimate, review and edit the model's drafts, then explicitly approve and send them to Anki. Flag a teaching reply during a session to mark it for cards. There is no public release yet.
 
 ![Target workflow: graph selection, card writing, approval, then delivery to Anki. Each step shows its implementation status.](docs/images/workflow.svg)
 
@@ -15,8 +15,8 @@ The diagram shows the manual drafting workflow implemented on this branch. Sessi
 | 0.1.0 | Merged | Shared writer input builder, graph context, batching, prompts, result schema and validation. Sonnet bench with real QM nodes and labelled synthetic fixtures. Local browser scoring, JSON results and per-run reports. |
 | 0.1.1 | Merged in [PR #1](https://github.com/Singh-Mehtab/learnharness-anki-bridge/pull/1) | Multiline code support, stronger accuracy and answer-leak guidance, soft word targets, a hard generation-call budget, and separate automated/human scoring. 22 tests, typecheck and browser checks passed. Sol approved the code. |
 | 0.2.0 | Merged in [PR #2](https://github.com/Singh-Mehtab/learnharness-anki-bridge/pull/2) | Connection/profile pairing, owned Basic note type, approval, durable delivery, interrupted-send recovery, presence checks and Show in Anki. Final merged head passed 77 tests, build and typecheck. Real AnkiConnect and scratch LearnHarness checks predate the final renderer fixes and main merge. |
-| 0.3.0 | In review in [PR #5](https://github.com/Singh-Mehtab/learnharness-anki-bridge/pull/5), not merged | Native graph and model pickers, configurable card kinds and cap, confirmed preflight, worker generation, source-aware editable review with previews, bulk approval/send, dropping cards and generation recovery. 100 tests, typecheck and build pass. A scratch LearnHarness run with a local stub model passed seven end-to-end checks and a restart-during-generation check. Not yet tested with a real model in the app, or by sending generated cards to Anki. See [verification and limits](docs/0.3.0-verification.md). |
-| 0.4.0 | In review in [PR #4](https://github.com/Singh-Mehtab/learnharness-anki-bridge/pull/4), not merged | Session flags, waiting-for-extraction status and session-based node selection. It merges after 0.3.0. This branch already provides the two hooks it needs: a starting node selection for the draft screen and flag notes for the writer. |
+| 0.3.0 | Merged in [PR #5](https://github.com/Singh-Mehtab/learnharness-anki-bridge/pull/5) (`e88f89d`) | Native graph and model pickers, configurable card kinds and cap, confirmed preflight, worker generation, source-aware editable review with previews, bulk approval/send, dropping cards and generation recovery. 100 tests, typecheck and build pass. A scratch LearnHarness run with a local stub model passed seven end-to-end checks and a restart-during-generation check. Not yet tested with a real model in the app, or by sending generated cards to Anki. See [verification and limits](docs/0.3.0-verification.md). |
+| 0.4.0 | In review in [PR #4](https://github.com/Singh-Mehtab/learnharness-anki-bridge/pull/4), not merged | Flag for Anki and Make cards in the teaching top bar, flag notes passed to the writer, waiting-for-extraction status, and session node selection that feeds the draft panel. TESTS_TBD |
 
 ### Card writer
 
@@ -35,6 +35,20 @@ The original core bench failed the zero-answer-leak criterion. The 0.1.1 follow-
 That is a partial result, **not a full benchmark pass**. Claude's quota stopped both synthetic-subject batches. The fixtures are hand-written and cleaner than real extraction output; the QM sample is not from an independent lecture. Human spot-checks and model scores remain separate.
 
 Additional card-quality validation is deferred until before public release. No automatic rerun is scheduled. See the [bench guide](bench/README.md) and [0.1.1 closeout](bench/0.1.1-closeout.md) for methods and limitations. Private graph data, generated cards and per-card scores are not committed.
+
+### Session flags (0.4.0)
+
+In a teaching session, **Flag for Anki** in the top bar marks the teacher's latest reply for cards. A click opens a dialog for an optional note such as "I got the sign wrong"; the card writer will aim a card at it. The shortcut, `Cmd/Ctrl+Shift+A` by default, flags straight away and offers the note in a short confirmation. The button is disabled while a reply is still streaming.
+
+A flag covers every idea LearnHarness extracted from that reply, which is usually about two. You can't flag a single sentence.
+
+LearnHarness extracts ideas after a reply settles and doesn't announce when it finishes. Until it does, a flag shows "waiting for extraction". The panel re-checks when extraction activity changes, and Refresh checks on demand. A flag whose reply produced no new ideas says so. Flags are kept until you remove them, including flags on deleted sessions.
+
+**Make cards** opens Anki Bridge on the session. Flagged ideas are ticked; ideas that already have cards are greyed and unticked. "Select all uncarded" ticks every idea without cards and estimates the card count. Drafting from that selection connects to the 0.3.0 draft screen once both versions merge.
+
+![Session panel with one flagged idea ticked, in a scratch LearnHarness host](docs/images/0.4.0-session-panel.png)
+
+Screenshot from the scratch-host test with a synthetic session. See [0.4.0 verification](docs/0.4.0-verification.md) and the [session flow contract](docs/session-contract.md).
 
 ## Development preview
 
@@ -98,7 +112,6 @@ The opt-in [live integration test](docs/0.2.0-verification.md) requires an isola
 
 | Version | Planned scope |
 | --- | --- |
-| 0.4.0 | Session workflow and session-based card generation. Implemented in PR #4, awaiting review. |
 | 0.5.0 | Card coverage and no-cards filtering. |
 | 0.6.0 | First public release, after validation and explicit publication approval. |
 

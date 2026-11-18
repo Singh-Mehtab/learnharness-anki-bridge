@@ -17,7 +17,7 @@ test('backend activation registers public operations without graph, model or net
   const directory = await mkdtemp(path.join(os.tmpdir(), 'anki-backend-'));
   const c = context(directory); const close = await activate(c.ctx);
   try {
-    assert.equal(c.handlers.size, 21);
+    assert.equal(c.handlers.size, 25);
     const added = await c.call('draft', { front: 'Prompt', back: 'Answer' });
     assert.equal(added.cards[0].status, 'draft');
     await c.call('approve', { ids: [added.cards[0].id] });
