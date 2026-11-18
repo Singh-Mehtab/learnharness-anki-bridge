@@ -37,6 +37,9 @@ export function mountDrafting(ctx: PluginFrontendContext, container: HTMLElement
   let widgets: Array<{ dispose(): void }> = [];
   let timer: ReturnType<typeof setTimeout> | undefined;
   let queue: Promise<void> = Promise.resolve(), pending = 0;
+  /** Bumped by every selection/settings change; an estimate reply from an older revision is discarded. */
+  let revision = 0;
+  const invalidate = () => { revision++; preflight = undefined; };
   const alive = () => !disposed && !signal.aborted && !ctx.signal.aborted;
   const disposeWidgets = () => { widgets.forEach(w => w.dispose()); widgets = []; };
   /** Actions run one at a time in click order; none are silently dropped. */
@@ -129,7 +132,8 @@ export function mountDrafting(ctx: PluginFrontendContext, container: HTMLElement
       }
       if (generation.status === "running") row.append(button("Cancel generation", async () => { await snapshot("cancelGeneration", { id: generation.id }); await onCardsChanged(); }, false));
       else if (generation.tasks.some(t => t.status !== "applied")) row.append(button("Estimate retry", async () => {
-        const next = await ctx.call<Preflight>("retryGeneration", { id: generation.id }); if (alive()) preflight = next;
+        invalidate(); const at = revision;
+        const next = await ctx.call<Preflight>("retryGeneration", { id: generation.id }); if (alive() && at === revision) preflight = next;
       }, false));
       activity.append(row);
     }
@@ -143,13 +147,13 @@ export function mountDrafting(ctx: PluginFrontendContext, container: HTMLElement
     controls.append(picker, selected);
     renderSelection(selected);
     const knowledge = ctx.ui.mountKnowledgePicker(picker, { value: selection, onChange: ids => {
-      selection = [...ids]; preflight = undefined; knowledge.update({ value: selection }); renderSelection(selected); renderPreflight();
+      selection = [...ids]; invalidate(); knowledge.update({ value: selection }); renderSelection(selected); renderPreflight();
     } }, { signal });
     widgets.push(knowledge);
     if (!nodes.length) controls.append(el("p", "Your graph has no source nodes yet. Extract knowledge in LearnHarness, then refresh the graph."));
     const model = el("div"); controls.append(label("Drafting model", model));
     const modelPicker = ctx.ui.mountModelPicker(model, { value: settings.model ?? undefined, onChange: value => {
-      preflight = undefined; renderPreflight();
+      invalidate(); renderPreflight();
       return run(async () => { await snapshot("generationSettings", { model: value }); });
     } }, { signal }); widgets.push(modelPicker);
     if (!settings.model) controls.append(el("p", "Choose a configured model. There is no automatic fallback."));
@@ -161,24 +165,24 @@ export function mountDrafting(ctx: PluginFrontendContext, container: HTMLElement
       toggles.append(label(kind, input)); return { kind, input };
     });
     const readSettings = () => ({ cardsPerNode: Number(cap.value), enabledKinds: checkboxes.filter(c => c.input.checked).map(c => c.kind) });
-    const edited = () => { unsaved = readSettings(); preflight = undefined; renderPreflight(); };
+    const edited = () => { unsaved = readSettings(); invalidate(); renderPreflight(); };
     cap.oninput = edited; checkboxes.forEach(c => { c.input.onchange = edited; });
     controls.append(label("Maximum cards per node, 1 to 4", cap), el("p", "This is a maximum, not a quota. The writer can skip a node with a reason."), toggles,
-      button("Save drafting defaults", async () => { preflight = undefined; await snapshot("generationSettings", readSettings()); unsaved = undefined; }),
-      button("Refresh graph", async () => { preflight = undefined; await load(); }),
+      button("Save drafting defaults", async () => { invalidate(); await snapshot("generationSettings", readSettings()); unsaved = undefined; }),
+      button("Refresh graph", async () => { invalidate(); await load(); }),
       button("Estimate generation", async () => {
         if (!selection.length) throw new Error("Select at least one graph node first.");
-        preflight = undefined;
+        invalidate(); const at = revision;
         await snapshot("generationSettings", readSettings()); unsaved = undefined;
         const next = await ctx.call<Preflight>("preflight", { nodeIds: selection });
-        if (alive()) preflight = next;
+        if (alive() && at === revision) preflight = next;
       }), estimate);
     renderActivity();
   }
   const unsubscribe = ctx.onResync(() => { void run(async () => { await load(); await onCardsChanged(); }); });
   void run(load);
   return {
-    select: nodeIds => run(async () => { selection = [...new Set(nodeIds)]; preflight = undefined; }),
+    select: nodeIds => run(async () => { selection = [...new Set(nodeIds)]; invalidate(); }),
     dispose: () => { disposed = true; if (timer) clearTimeout(timer); unsubscribe(); disposeWidgets(); root.remove(); },
   };
 }

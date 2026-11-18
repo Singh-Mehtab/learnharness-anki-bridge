@@ -15,7 +15,7 @@ function setup() {
   const calls: Array<{ name: string; input: any }> = [];
   const state: any = { generationSettings: { cardsPerNode: 2, enabledKinds: ["recall", "why", "compose", "discriminate"], model: null }, generations: [] };
   let knowledge: ((ids: readonly string[]) => void) | undefined, model: ((v: { provider: string; id: string }) => void | Promise<void>) | undefined;
-  let refreshed = 0, knowledgeMounts = 0;
+  let refreshed = 0, knowledgeMounts = 0, hold: Promise<void> | undefined;
   const widget = () => ({ update: () => {}, dispose: () => {} });
   const ctx = {
     signal: controller.signal, onResync: () => () => {},
@@ -23,7 +23,7 @@ function setup() {
       calls.push({ name, input });
       if (name === "generationContext") return { nodes: [{ id: "n_a", name: "Alpha", statement: "Alpha holds under A." }], catalog: {} };
       if (name === "generationSettings") Object.assign(state.generationSettings, input);
-      if (name === "preflight" || name === "retryGeneration") return structuredClone(preflight);
+      if (name === "preflight" || name === "retryGeneration") { await hold; return structuredClone(preflight); }
       if (name === "generate") state.generations.push({ id: "p1", status: "running", nodeIds: ["n_a"], skipped: [], settings: {}, createdAt: "", tasks: [
         { requestId: "r1", status: "running", input: {}, outputAllowance: 1200, sources: [{ nodeId: "n_a", name: "Alpha" }] }] });
       if (name === "cancelGeneration") { state.generations[0].status = "cancelled"; state.generations[0].tasks[0].status = "cancelled"; }
@@ -42,7 +42,7 @@ function setup() {
     assert.ok(found, `button ${label}`); return found;
   };
   return { container, calls, state, button, select: (ids: string[]) => knowledge!(ids), pickModel: (v: { provider: string; id: string }) => model!(v),
-    refreshed: () => refreshed, knowledgeMounts: () => knowledgeMounts, panel, close: async () => { panel.dispose(); controller.abort(); await window.happyDOM.close(); } };
+    refreshed: () => refreshed, knowledgeMounts: () => knowledgeMounts, panel, holdEstimates: () => { let release!: () => void; hold = new Promise(r => { release = r; }); return () => { hold = undefined; release(); }; }, close: async () => { panel.dispose(); controller.abort(); await window.happyDOM.close(); } };
 }
 
 test("drafting needs explicit selection and a confirmed estimate before any generate call", async () => {
@@ -135,4 +135,21 @@ test("an outside selection (0.4.0 session panel) replaces the selection without 
     assert.match(f.container.textContent!, /Alpha holds under A/);
     assert.equal(f.calls.some(c => c.name === "preflight" || c.name === "generate"), false);
   } finally { await f.close(); }
+});
+
+test("an estimate reply that arrives after the selection or settings changed is discarded", async () => {
+  for (const change of ["selection", "settings"] as const) {
+    const f = setup();
+    try {
+      await tick();
+      f.select(["n_a"]); await f.pickModel({ provider: "scratch", id: "writer" }); await tick();
+      const release = f.holdEstimates();
+      f.button("Estimate generation").click(); await tick();
+      if (change === "selection") f.select(["n_a", "n_b"]);
+      else { const cap = f.container.querySelector("input[type=\"number\"]") as any; cap.value = "1"; cap.dispatchEvent(new cap.ownerDocument.defaultView.Event("input")); }
+      release(); await tick();
+      assert.equal([...f.container.querySelectorAll("button")].some(b => b.textContent === "Confirm and generate"), false, change);
+      assert.equal(f.calls.some(c => c.name === "generate"), false);
+    } finally { await f.close(); }
+  }
 });
