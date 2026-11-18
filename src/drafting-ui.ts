@@ -84,7 +84,7 @@ export function mountDrafting(ctx: PluginFrontendContext, container: HTMLElement
 
   async function refresh(): Promise<void> {
     try { await refreshCoverage(); }
-    catch (error) { if (alive()) feedback.textContent = error instanceof Error ? error.message : String(error); }
+    catch { /* The picker shows stale coverage; keep action feedback intact. */ }
   }
   const disposeWidgets = () => { widgets.forEach(w => w.dispose()); widgets = []; };
   /** Actions run in click order. A superseded action leaves the last result visible. */

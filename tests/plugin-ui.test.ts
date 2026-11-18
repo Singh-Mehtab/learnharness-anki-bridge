@@ -138,6 +138,35 @@ test("a background review refresh is retried when a card action finishes as its 
   } finally { await f.dispose(); }
 });
 
+test("a deferred graph refresh does not overwrite the saved dismissal acknowledgement", async () => {
+  const state = fixture();
+  state.cards = [{ id: 'sent', nodeId: 'other:id', kind: 'recall', status: 'sent', front: 'Sent card', back: 'Answer', extra: '' }];
+  let saved = false, failedReads = 0, finishShow!: () => void;
+  const shown = new Promise<void>(resolve => { finishShow = resolve; });
+  const f = await setup(name => {
+    if (name === 'sessions') return { sessions: [], unresolved: [] };
+    if (name === 'show') return shown;
+    if (name === 'dismissNode') { saved = true; return {}; }
+    if (name === 'coverageContext') {
+      if (saved) { failedReads++; throw new Error('Graph read failed'); }
+      return { nodes: [{ id: 'target:id', name: 'Target', statement: 'Statement', statementHash: 'a'.repeat(64),
+        cards: { waiting: 0, sent: 0, sentElsewhere: 0 }, coverage: { state: 'no-cards', base: 'no-cards', selectable: true, canDismiss: true } }],
+        missing: [], paired: true, cardsPerNode: 2 };
+    }
+    return structuredClone(state);
+  });
+  try {
+    f.button('Show in Anki').click();
+    f.button("Don't card this").click(); await tick();
+    assert.equal(failedReads, 1);
+    assert.match(f.container.textContent!, /Dismissal saved, but the graph refresh failed: Graph read failed/);
+    finishShow(); await tick();
+    assert.equal(failedReads, 2, 'the completed review action releases the deferred refresh');
+    assert.match(f.container.textContent!, /Dismissal saved, but the graph refresh failed: Graph read failed/);
+    assert.match(f.container.textContent!, /Coverage is stale/);
+  } finally { finishShow(); await f.dispose(); }
+});
+
 test("plugin UI registers sidebar/view/settings, saves password without exposing stored key, and warns about localhost", async () => {
   const f = await setup();
   try {
