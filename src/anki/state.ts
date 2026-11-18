@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir, open, readFile, rename, unlink } from 'node:fs/promises';
+import { link, mkdir, open, readFile, rename, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import { defaultGenerationSettings, validateGenerations, validSource } from '../generation/types.ts';
 import type { Generation, GenerationSettings, SourceSnapshot } from '../generation/types.ts';
@@ -90,6 +90,26 @@ export function migrateState(raw: unknown): State {
   return value;
 }
 
+/** Keep the original bytes before upgrading. Never replace an earlier backup. */
+async function backUpBeforeMigration(directory: string, version: number, original: Buffer): Promise<void> {
+  const backup = path.join(directory, `state.v${version}.bak`);
+  const temporary = path.join(directory, `state.${randomUUID()}.tmp`);
+  const file = await open(temporary, 'wx', 0o600);
+  try {
+    try { await file.writeFile(original); await file.sync(); }
+    finally { await file.close(); }
+    try { await link(temporary, backup); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+      if (!original.equals(await readFile(backup))) {
+        throw new Error(`The existing state.v${version}.bak differs from state.json. Move that backup to a safe place before upgrading. Neither file was changed.`);
+      }
+    }
+    const dir = await open(directory, 'r');
+    try { await dir.sync(); } finally { await dir.close(); }
+  } finally { await unlink(temporary); }
+}
+
 /** One backend owns a data directory. Writes are private, fsynced, atomic snapshots. */
 export class StateStore {
   private value: State;
@@ -102,31 +122,68 @@ export class StateStore {
   static async open(directory: string): Promise<StateStore> {
     await mkdir(directory, { recursive: true, mode: 0o700 });
     const lock = path.join(directory, 'state.lock');
+    const busyLock = 'Another Anki Bridge backend owns this data directory. If LearnHarness is not running, remove state.lock from the plugin data folder and restart.';
     const token = randomUUID();
-    for (let attempt = 0; ; attempt++) {
-      try {
-        const file = await open(lock, 'wx', 0o600);
-        try { await file.writeFile(JSON.stringify({ pid: process.pid, token })); await file.sync(); }
-        finally { await file.close(); }
-        break;
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'EEXIST' || attempt > 0) throw error;
-        let previous: { pid: number };
-        try { previous = JSON.parse(await readFile(lock, 'utf8')); }
-        catch { throw new Error('Anki Bridge state lock is unreadable. Do not remove it while a backend might be running.'); }
-        if (!Number.isSafeInteger(previous.pid) || previous.pid <= 0) throw new Error('Invalid Anki Bridge state lock.');
-        try { process.kill(previous.pid, 0); }
-        catch (e) {
-          if ((e as NodeJS.ErrnoException).code === 'ESRCH') { await unlink(lock); continue; }
-          throw e;
-        }
-        throw new Error('Another Anki Bridge backend owns this data directory.');
+    const acquire = async () => {
+      const file = await open(lock, 'wx', 0o600);
+      // Any failure after creating the lock removes it and reports the first error.
+      let failure: unknown;
+      try { await file.writeFile(JSON.stringify({ pid: process.pid, token })); await file.sync(); } catch (e) { failure = e; }
+      try { await file.close(); } catch (e) { failure ??= e; }
+      if (failure !== undefined) { await unlink(lock).catch(() => {}); throw failure; }
+    };
+    const owner = async (): Promise<{ pid: number; token?: unknown }> => {
+      let previous: { pid: number; token?: unknown };
+      let text: string;
+      try { text = await readFile(lock, 'utf8'); }
+      catch (e) {
+        // Missing means another backend is mid-recovery; it will own the lock shortly.
+        if ((e as NodeJS.ErrnoException).code === 'ENOENT') throw new Error(busyLock);
+        throw e;
       }
+      // An empty lock was just created by another opener that has not written it yet.
+      if (!text) throw new Error(busyLock);
+      try { previous = JSON.parse(text); }
+      catch { throw new Error('Anki Bridge state lock is unreadable. Do not remove it while a backend might be running.'); }
+      if (!Number.isSafeInteger(previous.pid) || previous.pid <= 0) throw new Error('Invalid Anki Bridge state lock.');
+      return previous;
+    };
+    try { await acquire(); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+      const previous = await owner();
+      let alive = true;
+      try { process.kill(previous.pid, 0); }
+      catch (e) { if ((e as NodeJS.ErrnoException).code === 'ESRCH') alive = false; else if ((e as NodeJS.ErrnoException).code !== 'EPERM') throw e; }
+      // EPERM means another user's live process has that ID; treat it as an owner.
+      if (alive) throw new Error(busyLock);
+      // The owner is dead. Only one backend may replace its lock, and only if it is
+      // still the same stale lock, so two recovering backends cannot both win.
+      const recovery = path.join(directory, 'state.lock.recovery');
+      let marker;
+      try { marker = await open(recovery, 'wx', 0o600); }
+      catch (e) {
+        if ((e as NodeJS.ErrnoException).code === 'EEXIST') throw new Error('Another Anki Bridge backend is recovering the state lock. If none is running, quit LearnHarness and remove state.lock.recovery from the plugin data folder.');
+        throw e;
+      }
+      try {
+        await marker.close();
+        const current = await owner();
+        if (current.pid !== previous.pid || current.token !== previous.token) throw new Error('Another Anki Bridge backend owns this data directory.');
+        await unlink(lock);
+        await acquire();
+      } finally { await unlink(recovery); }
     }
     try {
-      let value: State;
-      try { const raw: unknown = JSON.parse(await readFile(path.join(directory, 'state.json'), 'utf8')); value = migrateState(raw); }
-      catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; value = initialState(); }
+      const original = await readFile(path.join(directory, 'state.json')).catch((error: NodeJS.ErrnoException) => {
+        if (error.code !== 'ENOENT') throw error;
+        return undefined;
+      });
+      const raw: unknown = original === undefined ? undefined : JSON.parse(original.toString('utf8'));
+      const value = original === undefined ? initialState() : migrateState(raw);
+      if (original !== undefined && object(raw) && raw.schemaVersion !== value.schemaVersion) {
+        await backUpBeforeMigration(directory, raw.schemaVersion as number, original);
+      }
       const store = new StateStore(directory, value, token);
       // Create a durable initial snapshot without overwriting a malformed/newer file.
       await store.replace(value);

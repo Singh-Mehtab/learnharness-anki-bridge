@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { AnkiClient, AnkiError } from "../src/anki/client.ts";
-import { ensureNoteType, repairFields, updateStyling, FIELDS, MARKER, MODEL_NAME } from "../src/anki/note-type.ts";
+import { ensureNoteType, repairFields, updateStyling, FIELDS, MARKER, MODEL_NAME, STYLE_REVISION } from "../src/anki/note-type.ts";
 
 class FakeAnki extends AnkiClient {
   exists = true;
@@ -93,9 +93,14 @@ test("missing or reordered Front is never automatically added or reordered", asy
 
 test("explicit update replaces edited Card 1 content only after ownership and field checks", async () => {
   const client = new FakeAnki();
+  client.css = "/* learnharness-anki v1 */ user style";
+  await ensureNoteType(client); // A 0.6.0 note type does not need a styling update to send.
+  assert.equal(mutations(client).length, 0);
+  client.calls = [];
   await updateStyling(client);
   assert.deepEqual(client.calls.map(({ action }) => action), ["modelStyling", "modelFieldNames", "modelTemplates", "updateModelStyling", "updateModelTemplates"]);
   assert.ok(client.css.includes(MARKER));
+  assert.ok(client.css.includes(STYLE_REVISION));
   assert.equal(client.templates["Card 1"]!.Front, "{{Front}}");
   assert.match(client.templates["Card 1"]!.Back, /\{\{Source\}\}/);
   client.calls = [];

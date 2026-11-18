@@ -78,7 +78,7 @@ async function fixture() {
   };
   const pair = () => service.command('pair', { confirmed: true });
   const approve = (ids: string[]) => service.command('approve', { ids });
-  const send = (ids: string[], deck = 'Scratch::New') => service.command('send', { ids, deck });
+  const send = (ids: string[], deck = 'Scratch::New') => service.command('send', { ids, deck, expectedDestination: service.snapshot().destination });
   const reopen = async () => { await service.close(); store = await StateStore.open(directory); service = new DeliveryService(store); await service.activate(); };
   const close = async () => { await service.close(); server.closeAllConnections(); await new Promise<void>((resolve, reject) => server.close(e => e ? reject(e) : resolve())); await rm(directory, { recursive: true, force: true }); };
   return { directory, url, calls, notes, errors, snap, draft, pair, approve, send, reopen, close, addEntered, addCompleted, get service() { return service; }, get store() { return store; },
@@ -105,7 +105,7 @@ test('hand-written cards require explicit pairing and durable approval, then add
     const note = f.notes[0];
     assert.equal(note.fields.LH_ID, id);
     assert.equal(note.fields.LH_Node, 'node-1');
-    assert.deepEqual(note.tags, ['learnharness', 'learnharness::kind::recall', 'learnharness::session::Session-one']);
+    assert.deepEqual(note.tags, ['learnharness', 'learnharness::kind::recall']);
     const add = f.calls.find(c => c.action === 'addNote')!;
     assert.equal(add.params.note.options.allowDuplicate, false);
     assert.equal(add.params.note.options.duplicateScope, 'deck');
@@ -189,7 +189,7 @@ test('note fields and ownership are checked on every send, never silently repair
     const b = await f.draft('New prompt'); await f.approve([b]);
     f.setFields(['Front', 'Back', 'Extra', 'Source', 'LH_Node']);
     await assert.rejects(f.send([b]), /LH_ID|field/i); assert.equal(f.notes.length, 1);
-    await f.service.command('repairFields'); await f.send([b]); assert.equal(f.notes.length, 2);
+    await f.service.command('repairFields', { expectedDestination: f.snap().destination }); await f.send([b]); assert.equal(f.notes.length, 2);
     const c = await f.draft('Third prompt'); await f.approve([c]); f.setCss('user model');
     await assert.rejects(f.send([c]), /own|marker|Anki Bridge|LearnHarness/i); assert.equal(f.notes.length, 2);
     await assert.rejects(f.service.command('updateStyling', {}), /Confirm/);
@@ -244,6 +244,73 @@ test('pairing rejects a profile or endpoint different from the confirmed dialog'
   } finally { await f.close(); }
 });
 
+test('a saved API key stays with its URL and is never sent to a changed endpoint', async () => {
+  const f = await fixture();
+  try {
+    await f.service.command('settings', { url: f.url, apiKey: 'endpoint-key' });
+    await f.service.command('settings', { url: f.url });
+    assert.equal(f.snap().settings.hasApiKey, true);
+    await f.service.command('settings', { url: 'http://127.0.0.1:19999/' });
+    assert.equal(f.snap().settings.hasApiKey, false);
+    await f.service.command('settings', { url: f.url });
+    assert.equal(f.snap().settings.hasApiKey, false);
+    await f.service.command('settings', { url: 'http://127.0.0.1:19999/', apiKey: 'new-endpoint-key' });
+    assert.equal(f.snap().settings.hasApiKey, true);
+  } finally { await f.close(); }
+});
+
+test('note type maintenance rejects a view that shows an old or missing pairing before any Anki call', async () => {
+  const f = await fixture();
+  try {
+    // Sending once creates the owned note type in the fake collection.
+    await f.pair(); const id = await f.draft(); await f.approve([id]); await f.send([id]);
+    const shown = f.snap().destination;
+    f.setProfile('Different'); await f.pair();
+    const before = f.calls.length;
+    for (const [name, extra] of [['repairFields', {}], ['updateStyling', { confirmed: true }]] as const) {
+      await assert.rejects(f.service.command(name, { ...extra, expectedDestination: shown }), /destination changed/);
+      await assert.rejects(f.service.command(name, { ...extra }), /destination changed/);
+    }
+    assert.equal(f.calls.length, before);
+    await f.service.command('repairFields', { expectedDestination: f.snap().destination });
+    assert.ok(f.calls.length > before);
+    const styling = f.calls.length;
+    await f.service.command('updateStyling', { confirmed: true, expectedDestination: f.snap().destination });
+    assert.ok(f.calls.slice(styling).some(c => c.action === 'updateModelStyling'));
+  } finally { await f.close(); }
+});
+
+test('send rejects a view that shows an old or missing pairing before any Anki call', async () => {
+  const f = await fixture();
+  try {
+    await f.pair(); const id = await f.draft(); await f.approve([id]);
+    const shown = f.snap().destination;
+    f.setProfile('Different'); await f.pair();
+    const before = f.calls.length;
+    await assert.rejects(f.service.command('send', { ids: [id], deck: 'Scratch', expectedDestination: shown }), /destination changed/);
+    await assert.rejects(f.service.command('send', { ids: [id], deck: 'Scratch' }), /destination changed/);
+    assert.equal(f.calls.length, before);
+    assert.equal(f.snap().cards[0].status, 'approved');
+    f.setProfile('Throwaway'); await f.pair();
+    await f.send([id]);
+    assert.equal(f.notes[0].fields.LH_ID, id);
+  } finally { await f.close(); }
+});
+
+test('recovery finds an interrupted note by delivery ID even if the note type was renamed', async () => {
+  const f = await fixture();
+  try {
+    await f.pair(); const id = await f.draft(); await f.approve([id]);
+    f.dropAfterAdd();
+    await assert.rejects(f.send([id]));
+    f.notes[0].modelName = 'Renamed in Anki';
+    await f.send([id]);
+    assert.equal(f.notes.length, 1); assert.equal(f.snap().cards[0].status, 'sent');
+    const lookups = f.calls.filter(c => c.action === 'findNotes').map(c => c.params.query);
+    assert(lookups.length && lookups.every(q => q === `"LH_ID:${id}"`));
+  } finally { await f.close(); }
+});
+
 test('backend errors do not echo the saved API key into the frontend', async () => {
   const f = await fixture();
   try {
@@ -283,6 +350,28 @@ test('explicit re-pairing preserves old sent history and never inspects it in th
   } finally { await f.close(); }
 });
 
+test('a stale lock from a dead backend is replaced by exactly one of two concurrent openers', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'anki-lock-'));
+  try {
+    const child = spawn(process.execPath, ['-e', '']);
+    const pid = child.pid!;
+    await new Promise(resolve => child.on('exit', resolve));
+    const lock = path.join(directory, 'state.lock');
+    await writeFile(lock, JSON.stringify({ pid, token: 'dead-owner' }));
+    const results = await Promise.allSettled([StateStore.open(directory), StateStore.open(directory)]);
+    const opened = results.filter(r => r.status === 'fulfilled');
+    assert.equal(opened.length, 1);
+    assert.match(String((results.find(r => r.status === 'rejected') as PromiseRejectedResult).reason), /Another Anki Bridge backend/);
+    const owner = JSON.parse(await readFile(lock, 'utf8'));
+    assert.equal(owner.pid, process.pid); assert.notEqual(owner.token, 'dead-owner');
+    await (opened[0] as PromiseFulfilledResult<StateStore>).value.close();
+    await writeFile(lock, JSON.stringify({ pid, token: 'dead-owner' }));
+    await writeFile(path.join(directory, 'state.lock.recovery'), '');
+    await assert.rejects(StateStore.open(directory), /recovering the state lock/);
+    assert.equal(JSON.parse(await readFile(lock, 'utf8')).token, 'dead-owner');
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
 test('state store refuses corrupt/newer snapshots and another active writer', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'anki-state-'));
   try {
@@ -311,7 +400,7 @@ test('actual process death after addNote and before state write reconciles on re
       const replace = store.replace.bind(store);
       store.replace = async state => { if (state.cards.some(c => c.status === 'sent')) process.kill(process.pid, 'SIGKILL'); return replace(state); };
       const service = new DeliveryService(store);
-      await service.command('send', {ids:[${JSON.stringify(id)}],deck:'Crash deck'});
+      await service.command('send', {ids:[${JSON.stringify(id)}],deck:'Crash deck',expectedDestination:service.snapshot().destination});
       throw Error('Crash injection was not reached');
     `], { stdio: ['ignore', 'pipe', 'pipe'] });
     const exit = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => { child.on('error', reject); child.on('exit', (code, signal) => resolve({ code, signal })); });

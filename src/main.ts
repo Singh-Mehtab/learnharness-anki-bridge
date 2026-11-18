@@ -1,5 +1,6 @@
 import type { PluginFrontendContext } from "../sdk/index.d.ts";
 import { mountDrafting } from "./drafting-ui.ts";
+import { renderMarkdown } from "./anki/render.ts";
 import { isWaitingCard } from "./coverage/flow.ts";
 import { mountSessionFlow, registerSessionActions, SessionRequests } from "./session-ui.ts";
 
@@ -33,6 +34,11 @@ interface Snapshot {
   recoveryError?: string;
 }
 interface Connection { profile: string | null; decks: string[] }
+
+function endpoint(value: string | undefined): string | undefined {
+  try { return value === undefined ? undefined : new URL(value.trim()).href; }
+  catch { return value?.trim(); }
+}
 
 function element<K extends keyof HTMLElementTagNameMap>(tag: K, text?: string): HTMLElementTagNameMap[K] {
   const node = document.createElement(tag);
@@ -91,7 +97,10 @@ function confirmAction(ctx: PluginFrontendContext, signal: AbortSignal, title: s
   });
 }
 
-function mount(ctx: PluginFrontendContext, container: HTMLElement, signal: AbortSignal, settingsOnly = false, requests?: SessionRequests): () => void {
+/** Live mounts of this activation. Pairing or settings changes in one refresh the others,
+ * so the review view cannot keep showing a destination the settings dialog replaced. */
+type Peers = Set<() => void>;
+function mount(ctx: PluginFrontendContext, container: HTMLElement, signal: AbortSignal, settingsOnly = false, requests?: SessionRequests, peers: Peers = new Set()): () => void {
   const root = element("section");
   root.className = "anki-bridge";
   const feedback = element("p");
@@ -100,7 +109,7 @@ function mount(ctx: PluginFrontendContext, container: HTMLElement, signal: Abort
   const controls = element("fieldset");
   const sessionHost = element("div");
   const drafting = element("div");
-  root.append(element("h2", settingsOnly ? "Anki Bridge settings" : "Anki Bridge 0.4.0"),
+  root.append(element("h2", settingsOnly ? "Anki Bridge settings" : "Anki Bridge"),
     element("p", settingsOnly ? "Connection, pairing and note type. Use a throwaway Anki profile while testing." : "Pick ideas from a session or your graph, check every answer, then approve and send to Anki. Nothing is sent automatically."),
     sessionHost, drafting, feedback, controls);
   container.append(root);
@@ -118,15 +127,24 @@ function mount(ctx: PluginFrontendContext, container: HTMLElement, signal: Abort
 
   async function run(action: () => Promise<void>): Promise<void> {
     if (!alive() || busy) return;
-    busy = true;
+    busy = true; actions++;
     controls.disabled = true;
     feedback.textContent = "Working...";
+    // Unrelated actions keep typing in other fields; an action that used its fields consumes them.
+    const kept = state ? captureForm() : undefined;
+    consumed = [];
     try {
       await action();
-      if (alive()) { render(); feedback.textContent = "Done."; }
+      if (alive()) {
+        render();
+        if (kept) { for (const key of consumed) kept.values.delete(key); restoreForm(kept); }
+        feedback.textContent = "Done.";
+      }
     } catch (error) {
       if (alive()) {
-        if (!state) render();
+        // The action may have redrawn before failing; nothing was consumed, so put typing back.
+        render();
+        if (kept) restoreForm(kept);
         feedback.textContent = error instanceof Error ? error.message : String(error);
       }
     } finally {
@@ -138,44 +156,84 @@ function mount(ctx: PluginFrontendContext, container: HTMLElement, signal: Abort
   // A snapshot can arrive while the learner is editing. Keep unsaved inputs,
   // open sections, and the caret when updating the review list.
   function applyReviewSnapshot(fresh: Snapshot): void {
-    state = fresh;
+    setState(fresh);
     const kept = captureForm();
     render();
     restoreForm(kept);
   }
-  let refreshPending = false;
+  /** A different saved URL makes the last connection test describe another endpoint. */
+  function setState(next: Snapshot): void {
+    if (state && next.settings.url !== state.settings.url) connection = undefined;
+    state = next;
+  }
+  let refreshPending = false, actions = 0, consumed: string[] = [];
+  let reading: Promise<Snapshot | "busy"> | undefined, queuedRead: Promise<Snapshot | "busy"> | undefined;
+  async function fetchSnapshot(): Promise<Snapshot | "busy"> {
+    for (;;) {
+      const started = actions;
+      const fresh = await ctx.call<Snapshot>("snapshot");
+      // Set the flag in this tick: the active action's finally may run before our caller resumes.
+      if (busy) { refreshPending = true; return "busy"; }
+      // An action ran while this read was in flight; its result may be newer.
+      if (started === actions) return fresh;
+    }
+  }
+  /** Background reads run one at a time. A caller arriving during a read waits for one
+   * that starts after it, so every caller gets a snapshot at least as new as its request,
+   * and callers resume in read order. Returns 'busy' if an action is running. */
+  function readSnapshot(): Promise<Snapshot | "busy"> {
+    if (!reading) { reading = fetchSnapshot().finally(() => { reading = undefined; }); return reading; }
+    queuedRead ??= reading.catch(() => undefined).then(() => { queuedRead = undefined; return readSnapshot(); });
+    return queuedRead;
+  }
   async function backgroundRefresh(): Promise<void> {
     if (!alive()) return;
     if (busy) { refreshPending = true; return; }
     refreshPending = false;
     try {
-      const fresh = await ctx.call<Snapshot>("snapshot");
-      if (!alive()) return;
-      // Set the flag before yielding so the active action sees it on completion.
-      if (busy) { refreshPending = true; return; }
+      const fresh = await readSnapshot();
+      if (!alive() || fresh === "busy") return;
       applyReviewSnapshot(fresh);
       await sessionPanel?.refresh(); await draftingPanel?.refresh();
-    } catch { refreshPending = true; }
+    } catch (error) {
+      refreshPending = true;
+      if (alive()) feedback.textContent = `Could not refresh: ${error instanceof Error ? error.message : String(error)}`;
+    }
   }
-  interface Kept { values: Map<string, { value: string; checked: boolean }>; open: Set<string>; focus?: { key: string; start: number | null; end: number | null } }
+  interface Kept { values: Map<string, { value: string; checked: boolean }>; open: Set<string>; url?: string; focus?: { key: string; start: number | null; end: number | null } }
+  /** Input values as last rendered; only inputs the learner changed since then are kept. */
+  let rendered = new Map<string, { value: string; checked: boolean }>();
+  function formValues(): Map<string, { value: string; checked: boolean }> {
+    const values = new Map<string, { value: string; checked: boolean }>();
+    for (const node of controls.querySelectorAll<HTMLElement>("[data-keep]")) {
+      if (node.tagName !== "DETAILS") { const input = node as HTMLInputElement; values.set(node.dataset.keep!, { value: input.value, checked: !!input.checked }); }
+    }
+    return values;
+  }
   function captureForm(): Kept {
     const values = new Map<string, { value: string; checked: boolean }>(), open = new Set<string>();
-    for (const node of controls.querySelectorAll<HTMLElement>("[data-keep]")) {
-      const key = node.dataset.keep!;
-      if (node.tagName === "DETAILS") { if ((node as HTMLDetailsElement).open) open.add(key); }
-      else { const input = node as HTMLInputElement; values.set(key, { value: input.value, checked: !!input.checked }); }
+    for (const node of controls.querySelectorAll<HTMLElement>("details[data-keep]")) if ((node as HTMLDetailsElement).open) open.add(node.dataset.keep!);
+    for (const [key, now] of formValues()) {
+      const was = rendered.get(key);
+      if (!was || was.value !== now.value || was.checked !== now.checked) values.set(key, now);
     }
     const active = document.activeElement as HTMLInputElement | null;
     const focus = active?.dataset?.keep && controls.contains(active)
       ? { key: active.dataset.keep, start: active.selectionStart ?? null, end: active.selectionEnd ?? null } : undefined;
-    return { values, open, focus };
+    return { values, open, url: urlField()?.value, focus };
   }
+  const urlField = () => controls.querySelector<HTMLInputElement>('[data-keep="url"]');
   function restoreForm(kept: Kept): void {
+    // A typed key belongs to the URL shown beside it. If the URL this restore leaves in
+    // the field differs (for example, an untouched field adopted a newly saved URL), drop it.
+    const finalUrl = kept.values.get("url")?.value ?? urlField()?.value;
+    if (endpoint(finalUrl) !== endpoint(kept.url)) { kept.values.delete("api-key"); kept.values.delete("clear-key"); }
     for (const node of controls.querySelectorAll<HTMLElement>("[data-keep]")) {
       const key = node.dataset.keep!;
       if (node.tagName === "DETAILS") { (node as HTMLDetailsElement).open = kept.open.has(key); continue; }
       const saved = kept.values.get(key), input = node as HTMLInputElement;
-      if (!saved) continue;
+      // Read-only fields (for example a card sent from another view) show saved data only.
+      if (!saved || input.readOnly) continue;
       if (input.type === "checkbox") input.checked = saved.checked;
       else if (input.value !== saved.value) { input.value = saved.value; const view = input.ownerDocument.defaultView as (Window & typeof globalThis) | null; input.dispatchEvent(new (view?.Event ?? Event)("input")); }
     }
@@ -194,16 +252,19 @@ function mount(ctx: PluginFrontendContext, container: HTMLElement, signal: Abort
   async function snapshotAction(name: string, input?: unknown): Promise<void> {
     try {
       const next = await ctx.call<Snapshot>(name, input);
-      if (alive()) { state = next; await sessionPanel?.refresh(); await draftingPanel?.refresh(); }
+      if (name === "pair" || name === "settings") for (const peer of peers) if (peer !== refreshFromPeer) peer();
+      if (alive()) { setState(next); await sessionPanel?.refresh(); await draftingPanel?.refresh(); }
     } catch (error) {
       if (name === "send" && alive()) {
         // A failed send may still have persisted per-card results.
-        try { const fresh = await ctx.call<Snapshot>("snapshot"); if (alive()) { state = fresh; render(); await sessionPanel?.refresh(); await draftingPanel?.refresh(); } } catch { /* Preserve the send error. */ }
+        try { const fresh = await ctx.call<Snapshot>("snapshot"); if (alive()) { setState(fresh); render(); await sessionPanel?.refresh(); await draftingPanel?.refresh(); } } catch { /* Preserve the send error. */ }
       }
       throw error;
     }
   }
   async function refresh(): Promise<void> { await snapshotAction("snapshot"); }
+  // Background path: keeps unsaved form input and queues itself if this view is busy.
+  function refreshFromPeer(): void { void backgroundRefresh(); }
   async function checkConnection(): Promise<void> {
     connection = undefined;
     render();
@@ -211,6 +272,10 @@ function mount(ctx: PluginFrontendContext, container: HTMLElement, signal: Abort
     if (alive()) { connection = next; render(); }
   }
   function render(): void {
+    renderControls();
+    if (alive()) rendered = formValues();
+  }
+  function renderControls(): void {
     if (!alive()) return;
     disposePreviews();
     editors.clear();
@@ -219,6 +284,9 @@ function mount(ctx: PluginFrontendContext, container: HTMLElement, signal: Abort
       controls.append(button("Retry loading", refresh));
       return;
     }
+    // Sends carry the destination this view shows, so the backend rejects a stale view.
+    const shown = state.destination;
+    const atShown = (card: Card) => !!shown && card.destination?.url === shown.url && card.destination.profile === shown.profile;
     if (state.recoveryError) controls.append(element("p", `Recovery error: ${state.recoveryError}`));
     const url = textInput(state.settings.url || "http://127.0.0.1:8765");
     keep(url, "url");
@@ -229,18 +297,33 @@ function mount(ctx: PluginFrontendContext, container: HTMLElement, signal: Abort
     const clearKey = keep(element("input"), "clear-key");
     clearKey.type = "checkbox";
     const urlWarning = element("p");
-    const warn = () => { urlWarning.textContent = /localhost/i.test(url.value) ? "Use 127.0.0.1 instead of localhost to avoid IPv6 connection failures." : "Use the AnkiConnect root URL, not an API path."; };
-    url.oninput = warn;
+    const savedUrl = endpoint(state.settings.url), hadKey = state.settings.hasApiKey;
+    let previousEndpoint = endpoint(url.value);
+    const warn = () => {
+      const base = /localhost/i.test(url.value) ? "Use 127.0.0.1 instead of localhost to avoid IPv6 connection failures." : "Use the AnkiConnect root URL, not an API path.";
+      urlWarning.textContent = hadKey && endpoint(url.value) !== savedUrl ? `${base} Saving a different URL clears the saved API key. Enter it again if the new endpoint needs one.` : base;
+    };
+    function clearCredentialsOnEndpointChange(): void {
+      const current = endpoint(url.value);
+      if (current !== previousEndpoint) {
+        key.value = "";
+        clearKey.checked = false;
+        previousEndpoint = current;
+      }
+    }
+    url.oninput = () => { clearCredentialsOnEndpointChange(); warn(); };
     warn();
     controls.append(element("h3", "Connection"), field("AnkiConnect root URL", url), urlWarning,
       field("API key", key), field("Clear saved API key", clearKey),
       element("p", "The API key is stored in plain text in the plugin's data folder."),
       button("Save connection settings", async () => {
+        clearCredentialsOnEndpointChange();
         const input: { url: string; apiKey?: string } = { url: url.value };
         if (clearKey.checked) input.apiKey = "";
         else if (key.value) input.apiKey = key.value;
         connection = undefined;
         await snapshotAction("settings", input);
+        consumed.push("url", "api-key", "clear-key");
       }), button("Test connection", checkConnection));
     controls.append(element("p", connection ? (connection.profile === null ? "Connected. Open a profile in Anki." : `Connected profile: ${connection.profile}`) : "Connection not tested. Test again after switching profiles in Anki."));
     if (connection) controls.append(element("p", `Decks: ${connection.decks.join(", ") || "none"}`));
@@ -261,15 +344,17 @@ function mount(ctx: PluginFrontendContext, container: HTMLElement, signal: Abort
     controls.append(element("h3", "Note type maintenance"),
       element("p", "Repairs apply only to the plugin-owned LearnHarness Basic note type. They do not edit note content."),
       button("Add missing fields", async () => {
-        if (await confirmAction(ctx, signal, "Add missing fields", "Add missing fields to LearnHarness Basic in the paired profile? Existing templates are not changed.")) {
+        const target = shown;
+        if (await confirmAction(ctx, signal, "Add missing fields", `Add missing fields to LearnHarness Basic in ${target ? `profile ${target.profile} at ${target.url}` : "the paired profile"}? Existing templates are not changed.`)) {
           if (!alive()) return;
-          await ctx.call("repairFields");
+          await ctx.call("repairFields", { expectedDestination: target });
           await refresh();
         }
       }), button("Update note type styling", async () => {
-        if (await confirmAction(ctx, signal, "Replace styling and templates", "This replaces LearnHarness Basic styling and templates. Your Anki-side template edits will be lost. Note content and review history are not changed.")) {
+        const target = shown;
+        if (await confirmAction(ctx, signal, "Replace styling and templates", `This replaces LearnHarness Basic styling and templates in ${target ? `profile ${target.profile} at ${target.url}` : "the paired profile"}. Your Anki-side template edits will be lost. Note content and review history are not changed.`)) {
           if (!alive()) return;
-          await ctx.call("updateStyling", { confirmed: true });
+          await ctx.call("updateStyling", { confirmed: true, expectedDestination: target });
           await refresh();
         }
       }));
@@ -285,6 +370,7 @@ function mount(ctx: PluginFrontendContext, container: HTMLElement, signal: Abort
     manual.append(field("Front", front), field("Back", back), field("Extra, optional", extra), field("Kind", kind),
       button("Create draft", async () => {
         await snapshotAction("draft", { front: front.value, back: back.value, extra: extra.value, kind: kind.value });
+        consumed.push("manual-front", "manual-back", "manual-extra", "manual-kind");
       }));
     controls.append(manual);
     controls.append(element("h3", "Review and send"));
@@ -312,13 +398,14 @@ function mount(ctx: PluginFrontendContext, container: HTMLElement, signal: Abort
     if (approved.length) bulk.append(button(`Send approved cards, ${approved.length}`, async () => {
       checkEditors();
       if (!deck.value.trim()) throw new Error("Choose a destination deck first.");
-      await snapshotAction("send", { ids: approved.map(card => card.id), deck: deck.value.trim() });
+      await snapshotAction("send", { ids: approved.map(card => card.id), deck: deck.value.trim(), expectedDestination: shown });
     }));
-    const sent = state.cards.filter(card => card.status === "sent");
+    // Only cards sent to the current pairing can be shown; older ones stay as history.
+    const sent = state.cards.filter(card => card.status === "sent" && atShown(card));
     if (sent.length) bulk.append(button("Show sent cards in Anki", async () => { await ctx.call("show", { ids: sent.map(card => card.id) }); }));
     controls.append(bulk);
     if (!state.cards.some(card => card.status !== "dropped")) controls.append(element("p", "No cards to review yet. Select graph nodes above, or write a card by hand."));
-    for (const card of state.cards.filter(card => card.status !== "dropped")) {
+    const renderCard = (card: Card, parent: HTMLElement) => {
       const row = element("article");
       if (card.nodeId && isWaitingCard(card)) {
         row.dataset.waitingNode = card.nodeId;
@@ -327,12 +414,13 @@ function mount(ctx: PluginFrontendContext, container: HTMLElement, signal: Abort
       row.append(element("h4", `${card.kind} · ${card.status}`));
       if (card.nodeName || card.sessionName) row.append(element("p", [card.nodeName, card.sessionName].filter(Boolean).join(" / ")));
       if (card.lastError) row.append(element("p", `Error: ${card.lastError}`));
-      if (card.destination) row.append(element("p", `Sent destination: ${card.destination.profile} at ${card.destination.url}`));
+      if (card.destination) row.append(element("p", `${card.status === "sent" ? "Sent destination" : card.status === "sending" ? "Delivery unconfirmed" : "Last delivery attempt"}: ${card.destination.profile} at ${card.destination.url}`));
       if (card.deck) row.append(element("p", `Deck: ${card.deck}`));
       if (card.presence) row.append(element("p", `Anki presence: ${card.presence}`));
       if (card.noteId !== undefined) row.append(element("p", `Anki note ID: ${card.noteId}`));
       const editable = ["draft", "approved", "failed"].includes(card.status) && card.noteId === undefined;
-      const cached = edits.get(card.id) ?? card;
+      if (!editable) edits.delete(card.id);
+      const cached = (editable && edits.get(card.id)) || card;
       const cardFront = keep(textArea(cached.front), `card-${card.id}-front`), cardBack = keep(textArea(cached.back), `card-${card.id}-back`), cardExtra = keep(textArea(cached.extra), `card-${card.id}-extra`);
       cardFront.readOnly = cardBack.readOnly = cardExtra.readOnly = !editable;
       const columns = element("div");
@@ -349,49 +437,92 @@ function mount(ctx: PluginFrontendContext, container: HTMLElement, signal: Abort
       editor.append(field("Front", cardFront), field("Back", cardBack), field("Extra", cardExtra));
       const preview = element("div");
       preview.className = "anki-bridge-preview";
-      preview.append(element("h5", "Preview"));
+      preview.append(element("h5", "LearnHarness preview"));
       const length = element("p");
+      const deliveryPreview = element("details");
+      deliveryPreview.append(element("summary", "Preview Anki field formatting"), element("p", "Shows the HTML Anki receives for Front, Back and Extra. Anki applies its own styling and renders the TeX shown here."));
+      const frame = element("iframe");
+      frame.title = "Anki field formatting";
+      frame.setAttribute("sandbox", "");
+      frame.style.width = "100%";
+      const formatError = element("p");
+      formatError.setAttribute("role", "status");
+      deliveryPreview.append(formatError, frame);
+      const showDelivery = () => {
+        if (!deliveryPreview.open) return;
+        try {
+          const fields = [cardFront, cardBack, cardExtra].map((input, index) =>
+            `<h2>${["Front", "Back", "Extra"][index]}</h2>${renderMarkdown(input.value)}`);
+          // No script, resources or interaction in this isolated view. The field HTML
+          // comes from the same renderer as delivery, not from the host Markdown UI.
+          frame.setAttribute("srcdoc", `<!doctype html><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'"><main inert>${fields.join("")}</main>`);
+          formatError.textContent = "";
+          frame.hidden = false;
+        } catch (error) {
+          frame.removeAttribute("srcdoc");
+          frame.hidden = true;
+          formatError.textContent = error instanceof Error ? error.message : String(error);
+        }
+      };
+      deliveryPreview.ontoggle = showDelivery;
       const parts = [cardFront, cardBack, cardExtra].map(input => {
         const target = element("div"); preview.append(target);
         const handle = ctx.ui.mountMarkdown(target, { text: input.value }, { signal });
         previews.push(handle);
         return { input, handle };
       });
-      const updatePreview = () => {
+      const updatePreview = (typed = true) => {
         parts.forEach(({ input, handle }) => handle.update({ text: input.value }));
+        showDelivery();
         const words = (text: string) => text.trim().split(/\s+/u).filter(Boolean).length;
         const f = words(cardFront.value), b = words(cardBack.value);
         length.textContent = f > 30 || b > 15 ? `Long card: ${f} front words, ${b} back words. Targets are about 30 and 15. Keep enough context for correctness.` : "";
-        if (editable) edits.set(card.id, { front: cardFront.value, back: cardBack.value, extra: cardExtra.value });
+        if (editable && typed) edits.set(card.id, { front: cardFront.value, back: cardBack.value, extra: cardExtra.value });
       };
-      parts.forEach(({ input }) => { input.oninput = updatePreview; });
-      updatePreview();
-      editor.append(length, preview);
+      parts.forEach(({ input }) => { input.oninput = () => updatePreview(); });
+      updatePreview(false);
+      editor.append(length, preview, deliveryPreview);
       columns.append(editor);
       row.append(columns);
       if (editable) {
         row.append(button("Save edits", async () => {
           await snapshotAction("edit", { id: card.id, front: cardFront.value, back: cardBack.value, extra: cardExtra.value });
-          edits.delete(card.id);
+          edits.delete(card.id); consumed.push(`card-${card.id}-front`, `card-${card.id}-back`, `card-${card.id}-extra`);
         }));
         // Never approve or send different content from the visible editor.
         const requireSaved = () => {
           if (cardFront.value !== card.front || cardBack.value !== card.back || cardExtra.value !== card.extra) throw new Error("Save edits before approving or sending this card.");
         };
         editors.set(card.id, requireSaved);
-        row.append(button("Drop card", async () => { await snapshotAction("drop", { ids: [card.id] }); edits.delete(card.id); }));
+        row.append(button("Drop card", async () => { await snapshotAction("drop", { ids: [card.id] }); edits.delete(card.id); consumed.push(`card-${card.id}-front`, `card-${card.id}-back`, `card-${card.id}-extra`); }));
         if (card.status === "draft") row.append(button("Approve card", async () => { requireSaved(); await snapshotAction("approve", { ids: [card.id] }); }));
         if (card.status === "approved" || card.status === "failed") row.append(button(card.status === "failed" ? "Retry approved card" : "Send approved card", async () => {
           requireSaved();
           if (!deck.value.trim()) throw new Error("Choose a destination deck first.");
-          await snapshotAction("send", { ids: [card.id], deck: deck.value.trim() });
+          await snapshotAction("send", { ids: [card.id], deck: deck.value.trim(), expectedDestination: shown });
         }));
       }
-      if (card.status === "sent") row.append(button("Show in Anki", async () => { await ctx.call("show", { ids: [card.id] }); }));
-      controls.append(row);
+      if (card.status === "sent" && atShown(card)) row.append(button("Show in Anki", async () => { await ctx.call("show", { ids: [card.id] }); }));
+      parent.append(row);
+    };
+    for (const card of state.cards) {
+      if (card.status === "sent") edits.delete(card.id);
+      else if (card.status !== "dropped") renderCard(card, controls);
+    }
+    const history = state.cards.filter(card => card.status === "sent");
+    if (history.length) {
+      const section = keep(element("details"), "sent-history");
+      section.append(element("summary", `Sent history (${history.length})`));
+      section.addEventListener("toggle", () => {
+        if (!section.open || !alive() || !controls.contains(section) || section.childElementCount > 1) return;
+        for (const card of history) renderCard(card, section);
+      });
+      controls.append(section);
     }
   }
-  const unsubscribe = ctx.onResync(() => { void run(refresh); });
+  // After the first load, resync uses the background path so typing survives a reconnect.
+  const unsubscribe = ctx.onResync(() => { void (state ? backgroundRefresh() : run(refresh)); });
+  peers.add(refreshFromPeer);
   void run(refresh);
   const reviewWaiting = async (nodeId: string) => {
     const focusWaiting = () => {
@@ -404,9 +535,9 @@ function mount(ctx: PluginFrontendContext, container: HTMLElement, signal: Abort
     const waitMessage = "Wait for the current card action to finish, then try again.";
     if (busy) { feedback.textContent = waitMessage; return; }
     try {
-      const fresh = await ctx.call<Snapshot>("snapshot");
+      const fresh = await readSnapshot();
       if (!alive()) return;
-      if (busy) { feedback.textContent = waitMessage; return; }
+      if (fresh === "busy") { feedback.textContent = waitMessage; return; }
       applyReviewSnapshot(fresh);
       feedback.textContent = focusWaiting() ? "" : "No waiting cards for this node in the review list.";
     } catch (error) {
@@ -424,14 +555,14 @@ function mount(ctx: PluginFrontendContext, container: HTMLElement, signal: Abort
       if (alive()) { drafting.scrollIntoView?.({ block: "start" }); drafting.querySelector<HTMLElement>("button, input")?.focus(); }
     },
   }) : undefined;
-  return () => { disposed = true; unsubscribe(); sessionPanel?.(); draftingPanel?.dispose(); disposePreviews(); root.remove(); };
+  return () => { disposed = true; peers.delete(refreshFromPeer); unsubscribe(); sessionPanel?.(); draftingPanel?.dispose(); disposePreviews(); root.remove(); };
 }
 
 export function activate(ctx: PluginFrontendContext): void {
-  const requests = new SessionRequests();
-  ctx.cleanup(ctx.registerView({ id: "bridge", name: "Anki Bridge", mount: (container, signal) => mount(ctx, container, signal, false, requests) }));
+  const requests = new SessionRequests(), peers: Peers = new Set();
+  ctx.cleanup(ctx.registerView({ id: "bridge", name: "Anki Bridge", mount: (container, signal) => mount(ctx, container, signal, false, requests, peers) }));
   registerSessionActions(ctx, requests);
   ctx.cleanup(ctx.registerAction({ id: "open-bridge", name: "Anki Bridge", run: () => ctx.app.openView("bridge") }));
   ctx.cleanup(ctx.placeAction({ id: "bridge-sidebar", actionId: "open-bridge", location: "sidebar" }));
-  ctx.cleanup(ctx.registerSettings((container, signal) => mount(ctx, container, signal, true)));
+  ctx.cleanup(ctx.registerSettings((container, signal) => mount(ctx, container, signal, true, undefined, peers)));
 }

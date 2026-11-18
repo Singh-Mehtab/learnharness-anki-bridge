@@ -1,6 +1,6 @@
 # Install Anki Bridge
 
-Anki Bridge 0.6.0 is a personal-use candidate, not a public release. You need the `anki-bridge-v0.6.0.zip` install archive, not GitHub's automatically generated source zip. The archive contains built plugin code. You don't need Node.js or npm to install it.
+Anki Bridge 0.6.1 is a personal-use candidate, not a public release. You need the `anki-bridge-v0.6.1.zip` install archive, not GitHub's automatically generated source zip. The archive contains built plugin code. You don't need Node.js or npm to install it.
 
 ## Requirements
 
@@ -24,12 +24,12 @@ LearnHarness community plugins run local code with your app's permissions. Only 
 
 If there is no `dist/` or you find `dist/data/`, stop before moving anything.
 
-To roll back from 0.6.0 to 0.5.0, quit LearnHarness and put back only the old `dist/`. Keep the current `data/`. Both versions use the same state format. Use the pre-upgrade data backup only if the current data is missing or damaged. If possible, keep a private copy of the current data first. Restoring the backup loses any newer drafts, settings and delivery records. It does not undo cards already sent to Anki.
+To roll back to 0.6.0 or 0.5.0, quit LearnHarness and put back only the old `dist/`. Keep the current `data/`. These versions use the same state format. Use the pre-upgrade data backup only if the current data is missing or damaged. If possible, keep a private copy of the current data first. Restoring the backup loses any newer drafts, settings and delivery records. It does not undo cards already sent to Anki.
 
 ## Connect and send a card
 
 1. Open Anki Desktop in the intended profile. For a trial, use a throwaway profile and an isolated AnkiConnect endpoint. If switching from your normal profile, wait for any sends to finish first.
-2. In Anki Bridge, save the actual AnkiConnect URL and optional API key. The default is `http://127.0.0.1:8765`, but your AnkiConnect may use another port. Use loopback and a trusted local service. The key is stored in plain text in `anki-bridge/data/`. Never share that directory. A blank key input leaves the saved key in place; the clear checkbox removes it.
+2. In Anki Bridge, save the actual AnkiConnect URL and optional API key. The default is `http://127.0.0.1:8765`, but your AnkiConnect may use another port. Use loopback and a trusted local service. The key is stored in plain text in `anki-bridge/data/`. Never share that directory. A blank key input keeps the saved key only while the URL stays the same. Saving a different URL clears it, so enter the key again if the new endpoint needs one. The clear checkbox removes it.
 3. Test the connection and pair the reported profile. Pairing is specific to the URL and profile, not the deck. Do not switch profiles during a send. AnkiConnect cannot make a profile check and a write atomic.
 4. Select graph ideas, or use **Flag for Anki** in a teaching session and then **Make cards**. A flag covers all ideas LearnHarness extracts from the latest teaching reply, not a single sentence. Select a model, check the estimate and confirm only if you want it to generate. Review and approve the cards you want, then pick a deck and send. The bridge doesn't update or delete existing Anki notes or change their scheduling.
 
@@ -52,4 +52,4 @@ npm ci
 npm run package:plugin
 ```
 
-This rebuilds `dist/` and writes `anki-bridge-v0.6.0.zip` at the repo root. The archive contains only the manifest, bundled code, stylesheet and license notices. It excludes plugin data, credentials, bench results and agent files.
+This rebuilds `dist/` and writes `anki-bridge-v0.6.1.zip` at the repo root. The archive contains only the manifest, bundled code, stylesheet and license notices. It excludes plugin data, credentials, bench results and agent files.

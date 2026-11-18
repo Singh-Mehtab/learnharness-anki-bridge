@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { Window } from "happy-dom";
 import { activate } from "../src/main.ts";
+import { renderMarkdown } from "../src/anki/render.ts";
 import type { PluginFrontendContext, PluginView } from "../sdk/index.d.ts";
 
 const tick = () => new Promise(resolve => setTimeout(resolve, 0));
@@ -59,6 +60,18 @@ test("review shows source beside safe preview, live length warning, and preserve
     editor.dispatchEvent(new f.window.Event("input") as unknown as Event);
     assert.match(f.container.textContent!, /Long card: 32 front words/);
     assert.match(f.container.querySelector(".anki-bridge-preview")!.textContent!, /word word/);
+    const frame = f.container.querySelector('iframe[title="Anki field formatting"]')!;
+    const formatting = frame.parentElement!;
+    formatting.setAttribute("open", "");
+    formatting.dispatchEvent(new f.window.Event("toggle"));
+    assert.equal(frame.getAttribute("sandbox"), "");
+    assert.ok(frame.getAttribute("srcdoc")?.includes(renderMarkdown(editor.value)));
+    editor.value = "    # Indented front";
+    editor.dispatchEvent(new f.window.Event("input") as unknown as Event);
+    assert.ok(frame.getAttribute("srcdoc")?.includes(renderMarkdown(editor.value)));
+    assert.doesNotMatch(frame.getAttribute("srcdoc")!, /<h1>/);
+    editor.value = "word ".repeat(32);
+    editor.dispatchEvent(new f.window.Event("input") as unknown as Event);
     f.button("Refresh cards").click(); await tick();
     assert.equal((f.container.querySelector("article textarea")! as unknown as HTMLTextAreaElement).value, "word ".repeat(32));
     assert.ok(f.disposals() >= 6);
@@ -83,7 +96,7 @@ test("review drops unsent cards and bulk send excludes dropped cards", async () 
     assert.deepEqual(f.calls.find(c => c.name === "drop")!.input, { ids: ["one"] });
     f.button("Approve card").click(); await tick();
     f.button("Send approved cards, 1").click(); await tick();
-    assert.deepEqual(f.calls.find(c => c.name === "send")!.input, { ids: ["two"], deck: "Scratch" });
+    assert.deepEqual(f.calls.find(c => c.name === "send")!.input, { ids: ["two"], deck: "Scratch", expectedDestination: null });
   } finally { await f.close(); }
 });
 

@@ -75,7 +75,7 @@ test('session selection reaches drafting, clears estimates, and stays current wi
     cap.value = '4'; cap.dispatchEvent(new window.Event('input'));
     button('Estimate generation').click();
     await until(() => [...container.querySelectorAll('button')].some(b => b.textContent === 'Confirm and generate'), 'unsaved cap estimate with an active session');
-    assert.match(container.textContent!, /up to 8 cards in 1 model call/);
+    assert.match(container.textContent!, /up to 8 cards in 1 batch, up to 3 model turns if validation retries/);
     button('Save drafting defaults').click();
     await until(() => ![...container.querySelectorAll('button')].some(b => b.textContent === 'Confirm and generate'), 'saved defaults invalidate the prior estimate');
     await until(() => container.textContent!.includes('Select all uncarded: 2 ideas, up to 8 cards'), 'session cap refresh');

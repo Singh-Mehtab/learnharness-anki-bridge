@@ -12,6 +12,7 @@ function fixture() {
     cards: [] as Array<Record<string, unknown>>,
   };
 }
+const paired = () => ({ url: "http://127.0.0.1:8765/", profile: "Throwaway" });
 const tick = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
 async function setup(handler?: (name: string, input: unknown) => unknown | Promise<unknown>) {
@@ -63,13 +64,19 @@ async function setup(handler?: (name: string, input: unknown) => unknown | Promi
   window.document.body.append(container);
   const cleanup = await view.mount(container as unknown as HTMLElement, controller.signal);
   await tick();
+  const openHistory = () => {
+    const section = container.querySelector('details[data-keep="sent-history"]');
+    assert.ok(section);
+    section.setAttribute("open", "");
+    section.dispatchEvent(new window.Event("toggle"));
+  };
   const button = (label: string, parent = container) => {
     const found = Array.from(parent.querySelectorAll("button")).find((node) => node.textContent === label);
     assert.ok(found, `button ${label}`);
     return found;
   };
   return {
-    window, controller, activation, calls, state, container, button, settings, ctx,
+    window, controller, activation, calls, state, container, button, settings, ctx, openHistory,
     dialog: () => dialog,
     dialogDisposals: () => dialogDisposals,
     openSidebar: () => {
@@ -115,7 +122,8 @@ test("Review waiting cards fetches a newly visible draft without discarding unsa
 
 test("a background review refresh is retried when a card action finishes as its snapshot arrives", async () => {
   const state = fixture();
-  state.cards = [{ id: 'sent', nodeId: 'target:id', kind: 'recall', status: 'sent', front: 'Sent card', back: 'Answer', extra: '' }];
+  state.destination = paired();
+  state.cards = [{ id: 'sent', nodeId: 'target:id', kind: 'recall', status: 'sent', destination: paired(), front: 'Sent card', back: 'Answer', extra: '' }];
   let reads = 0, releaseSnapshot!: (value: typeof state) => void, finishShow!: () => void;
   const heldSnapshot = new Promise<typeof state>(resolve => { releaseSnapshot = resolve; });
   const shown = new Promise<void>(resolve => { finishShow = resolve; });
@@ -129,6 +137,7 @@ test("a background review refresh is retried when a card action finishes as its 
   try {
     f.button('Refresh generation').click(); await tick();
     assert.equal(reads, 2);
+    f.openHistory();
     f.button('Show in Anki').click();
     const older = structuredClone(state);
     state.cards.push({ id: 'new', nodeId: 'target:id', kind: 'recall', status: 'draft', front: 'New draft', back: 'Answer', extra: '' });
@@ -140,7 +149,8 @@ test("a background review refresh is retried when a card action finishes as its 
 
 test("a deferred graph refresh does not overwrite the saved dismissal acknowledgement", async () => {
   const state = fixture();
-  state.cards = [{ id: 'sent', nodeId: 'other:id', kind: 'recall', status: 'sent', front: 'Sent card', back: 'Answer', extra: '' }];
+  state.destination = paired();
+  state.cards = [{ id: 'sent', nodeId: 'other:id', kind: 'recall', status: 'sent', destination: paired(), front: 'Sent card', back: 'Answer', extra: '' }];
   let saved = false, failedReads = 0, finishShow!: () => void;
   const shown = new Promise<void>(resolve => { finishShow = resolve; });
   const f = await setup(name => {
@@ -156,6 +166,7 @@ test("a deferred graph refresh does not overwrite the saved dismissal acknowledg
     return structuredClone(state);
   });
   try {
+    f.openHistory();
     f.button('Show in Anki').click();
     f.button("Don't card this").click(); await tick();
     assert.equal(failedReads, 1);
@@ -194,6 +205,44 @@ test("plugin UI registers sidebar/view/settings, saves password without exposing
   } finally { await f.dispose(); }
 });
 
+test("changing a URL in either mount clears a key typed for the previous endpoint", async (t) => {
+  for (const settingsOnly of [false, true]) await t.test(settingsOnly ? "settings dialog" : "review view", async () => {
+    const f = await setup();
+    const mount = settingsOnly ? f.window.document.createElement("div") : f.container;
+    let cleanup: Awaited<ReturnType<typeof f.settings>> | undefined;
+    try {
+      if (settingsOnly) {
+        cleanup = await f.settings(mount as unknown as HTMLElement, f.controller.signal);
+        await tick();
+      }
+      const input = (name: string) => mount.querySelector(`[data-keep="${name}"]`) as unknown as HTMLInputElement;
+      const type = (name: string, value: string) => {
+        const field = input(name);
+        field.value = value;
+        field.dispatchEvent(new f.window.Event("input") as never);
+      };
+      const a = input("url").value;
+      const b = "http://127.0.0.1:18766/";
+      type("api-key", "test-only-key-a");
+      type("url", a.endsWith("/") ? a.slice(0, -1) : `${a}/`);
+      assert.equal(input("api-key").value, "test-only-key-a", "same normalized endpoint retains pending input");
+      input("clear-key").checked = true;
+      type("url", b);
+      assert.equal(input("api-key").value, "");
+      assert.equal(input("clear-key").checked, false);
+      f.state.settings.url = b; // What the mocked backend returns after saving B.
+      f.button("Save connection settings", mount).click(); await tick();
+      assert.deepEqual(f.calls.filter(c => c.name === "settings").at(-1)?.input, { url: b });
+      type("api-key", "test-only-key-b");
+      f.button("Save connection settings", mount).click(); await tick();
+      assert.deepEqual(f.calls.filter(c => c.name === "settings").at(-1)?.input, { url: b, apiKey: "test-only-key-b" });
+    } finally {
+      if (typeof cleanup === "function") await cleanup();
+      await f.dispose();
+    }
+  });
+});
+
 test("plugin UI pairing and destructive styling changes require host dialog confirmation", async () => {
   const f = await setup();
   try {
@@ -218,6 +267,165 @@ test("plugin UI pairing and destructive styling changes require host dialog conf
     f.controller.abort(); await tick();
     assert.equal(f.dialog(), undefined);
     assert.equal(f.calls.some((c) => c.name === "repairFields"), false);
+  } finally { await f.dispose(); }
+});
+
+test("re-pairing in settings refreshes the mounted review view and maintenance names the shown profile", async () => {
+  const f = await setup();
+  try {
+    f.state.destination = paired();
+    f.state.cards = [
+      { id: "sent", nodeId: "n", kind: "recall", status: "sent", noteId: 1, destination: paired(), front: "Sent", back: "A", extra: "" },
+      { id: "failed", nodeId: "n", kind: "recall", status: "failed", destination: paired(), front: "Failed", back: "A", extra: "" },
+      { id: "pending", nodeId: "n", kind: "recall", status: "sending", destination: paired(), front: "Pending", back: "A", extra: "" },
+    ];
+    f.resync(); await tick();
+    assert.match(f.container.textContent!, /Last delivery attempt: Throwaway/);
+    assert.match(f.container.textContent!, /Delivery unconfirmed: Throwaway/);
+    assert.ok(f.button("Show sent cards in Anki"));
+    f.button("Update note type styling").click(); await tick();
+    assert.match(f.dialog()!.textContent!, /profile Throwaway at http:\/\/127\.0\.0\.1:8765\//);
+    f.dialog()!.querySelectorAll("button")[1]!.click(); await tick();
+    assert.deepEqual(f.calls.find(c => c.name === "updateStyling"), { name: "updateStyling", input: { confirmed: true, expectedDestination: paired() } });
+    const url = f.container.querySelector('input[type=text]') as unknown as HTMLInputElement;
+    url.value = "http://127.0.0.1:8766/"; url.dispatchEvent(new f.window.Event("input") as unknown as Event);
+    assert.match(f.container.textContent!, /Saving a different URL clears the saved API key/);
+    url.value = "http://127.0.0.1:8765/"; url.dispatchEvent(new f.window.Event("input") as unknown as Event);
+    assert.doesNotMatch(f.container.textContent!, /clears the saved API key/);
+    url.value = "http://127.0.0.1:9999/"; // unsaved input must survive the peer refresh
+    (f.container.querySelector('details[data-keep="manual"]') as unknown as HTMLDetailsElement).open = true;
+    (f.container.querySelector('[data-keep="manual-front"]') as unknown as HTMLTextAreaElement).value = "Half-written front";
+
+    const settingsContainer = f.window.document.createElement("div");
+    f.window.document.body.append(settingsContainer);
+    const cleanup = await f.settings(settingsContainer as unknown as HTMLElement, f.controller.signal); await tick();
+    f.button("Test connection", settingsContainer as unknown as typeof f.container).click(); await tick();
+    f.button("Re-pair destination", settingsContainer as unknown as typeof f.container).click(); await tick();
+    f.state.destination = { url: "http://127.0.0.1:8765/", profile: "Other" };
+    f.dialog()!.querySelectorAll("button")[1]!.click(); await tick(); await tick();
+    assert.match(f.container.textContent!, /Paired destination: Other/);
+    assert.equal((f.container.querySelector('input[type=text]') as unknown as HTMLInputElement).value, "http://127.0.0.1:9999/");
+    assert.equal((f.container.querySelector('details[data-keep="manual"]') as unknown as HTMLDetailsElement).open, true);
+    assert.equal((f.container.querySelector('[data-keep="manual-front"]') as unknown as HTMLTextAreaElement).value, "Half-written front");
+    assert.equal(Array.from(f.container.querySelectorAll("button")).some(b => /^Show/.test(b.textContent!)), false);
+    if (typeof cleanup === "function") await cleanup();
+  } finally { await f.dispose(); }
+});
+
+test("refreshes adopt untouched saved settings and keep typing through a host reconnect", async () => {
+  const f = await setup();
+  try {
+    const viewUrl = () => (f.container.querySelector('input[type=text]') as unknown as HTMLInputElement).value;
+    const settingsContainer = f.window.document.createElement("div");
+    f.window.document.body.append(settingsContainer);
+    const cleanup = await f.settings(settingsContainer as unknown as HTMLElement, f.controller.signal); await tick();
+    const viewKey = () => f.container.querySelector('[data-keep="api-key"]') as unknown as HTMLInputElement;
+    viewKey().value = "[REDACTED:Generic Password Field]";
+    const settingsUrl = settingsContainer.querySelector('input[type=text]') as unknown as HTMLInputElement;
+    settingsUrl.value = "http://127.0.0.1:8766/";
+    f.state.settings.url = "http://127.0.0.1:8766/";
+    f.button("Save connection settings", settingsContainer as unknown as typeof f.container).click(); await tick(); await tick();
+    assert.equal(viewUrl(), "http://127.0.0.1:8766/", "an untouched field adopts the newly saved URL");
+    assert.equal(viewKey().value, "", "a key typed for the old URL does not follow the new one");
+    f.button("Save connection settings").click(); await tick();
+    assert.deepEqual(f.calls.filter(c => c.name === "settings").at(-1), { name: "settings", input: { url: "http://127.0.0.1:8766/" } });
+    if (typeof cleanup === "function") await cleanup();
+
+    (f.container.querySelector('details[data-keep="manual"]') as unknown as HTMLDetailsElement).open = true;
+    (f.container.querySelector('[data-keep="manual-front"]') as unknown as HTMLTextAreaElement).value = "Typed before reconnect";
+    f.resync(); await tick(); await tick();
+    assert.equal((f.container.querySelector('details[data-keep="manual"]') as unknown as HTMLDetailsElement).open, true);
+    assert.equal((f.container.querySelector('[data-keep="manual-front"]') as unknown as HTMLTextAreaElement).value, "Typed before reconnect");
+  } finally { await f.dispose(); }
+});
+
+test("unrelated actions keep hand-card typing; Create draft consumes it; untouched card text refreshes", async () => {
+  const f = await setup();
+  try {
+    const manual = () => f.container.querySelector('details[data-keep="manual"]') as unknown as HTMLDetailsElement;
+    const front = () => f.container.querySelector('[data-keep="manual-front"]') as unknown as HTMLTextAreaElement;
+    manual().open = true; front().value = "Half-written";
+    f.state.cards.push({ id: "c", nodeId: "n", kind: "recall", status: "draft", front: "Question", back: "Answer", extra: "" });
+    f.button("Refresh cards").click(); await tick();
+    assert.equal(manual().open, true); assert.equal(front().value, "Half-written");
+    const editor = () => f.container.querySelector('[data-keep="card-c-front"]') as unknown as HTMLTextAreaElement;
+    assert.equal(editor().value, "Question");
+    f.state.cards[0]!.front = "Changed elsewhere";
+    f.resync(); await tick(); await tick();
+    assert.equal(editor().value, "Changed elsewhere", "an untouched editor shows the fresh card text");
+    (f.container.querySelectorAll("textarea")[1] as unknown as HTMLTextAreaElement).value = "Back";
+    f.button("Create draft").click(); await tick();
+    assert.equal(front().value, "", "a created draft clears the hand-card form");
+  } finally { await f.dispose(); }
+});
+
+test("an action that brings a new saved URL drops a key typed for the old one", async () => {
+  const f = await setup();
+  try {
+    const key = () => f.container.querySelector('[data-keep="api-key"]') as unknown as HTMLInputElement;
+    const url = () => f.container.querySelector('[data-keep="url"]') as unknown as HTMLInputElement;
+    key().value = "typed-for-a";
+    f.state.settings.url = "http://127.0.0.1:8766/";
+    f.button("Refresh cards").click(); await tick();
+    assert.equal(url().value, "http://127.0.0.1:8766/");
+    assert.equal(key().value, "", "the key typed beside the old URL is dropped");
+    key().value = "typed-for-b";
+    f.button("Refresh cards").click(); await tick();
+    assert.equal(key().value, "typed-for-b", "a key typed beside the current URL survives");
+  } finally { await f.dispose(); }
+});
+
+test("a failed action keeps typing, and read-only cards show saved text", async () => {
+  let failConnection = true;
+  const state = fixture();
+  const f = await setup((name) => {
+    if (name === "coverageContext") return undefined;
+    if (name === "sessions") return { sessions: [], unresolved: [] };
+    if (name === "connection") { if (failConnection) throw new Error("Anki is not running"); return { profile: "Throwaway <test>", decks: ["Scratch"] }; }
+    return structuredClone(state);
+  });
+  try {
+    const manual = () => f.container.querySelector('details[data-keep="manual"]') as unknown as HTMLDetailsElement;
+    const front = () => f.container.querySelector('[data-keep="manual-front"]') as unknown as HTMLTextAreaElement;
+    manual().open = true; front().value = "Half-written";
+    f.button("Test connection").click(); await tick(); await tick();
+    assert.match(f.container.textContent!, /Anki is not running/);
+    assert.equal(manual().open, true); assert.equal(front().value, "Half-written");
+    failConnection = false;
+
+    state.cards.push({ id: "c", nodeId: "n", kind: "recall", status: "draft", front: "Saved", back: "Answer", extra: "" });
+    f.button("Refresh cards").click(); await tick();
+    const editor = () => f.container.querySelector('[data-keep="card-c-front"]') as unknown as HTMLTextAreaElement;
+    editor().value = "Unsaved local edit"; editor().dispatchEvent(new f.window.Event("input"));
+    state.cards[0]!.status = "sent"; state.cards[0]!.destination = paired();
+    f.resync(); await tick(); await tick();
+    f.openHistory();
+    assert.equal(editor().readOnly, true);
+    assert.equal(editor().value, "Saved", "a card sent elsewhere shows the text that was sent");
+  } finally { await f.dispose(); }
+});
+
+test("a background snapshot taken before an action cannot overwrite that action's result", async () => {
+  const state = fixture();
+  state.cards = [{ id: "one", nodeId: "n", kind: "recall", status: "draft", front: "Front", back: "Back", extra: "" }];
+  let holding = false, release: (() => void) | undefined;
+  const f = await setup((name) => {
+    if (name === "coverageContext") return undefined;
+    if (name === "connection") return { profile: "Throwaway <test>", decks: ["Scratch"] };
+    if (name === "sessions") return { sessions: [], unresolved: [] };
+    if (name === "approve") state.cards[0]!.status = "approved";
+    const snap = structuredClone(state);
+    if (name === "snapshot" && holding) return new Promise((resolve) => { release = () => resolve(snap); });
+    return snap;
+  });
+  try {
+    holding = true;
+    f.resync(); await tick();
+    assert.ok(release, "background snapshot is in flight");
+    holding = false;
+    f.button("Approve card").click(); await tick(); await tick();
+    release!(); await tick(); await tick(); await tick();
+    assert.equal(Array.from(f.container.querySelectorAll("button")).some((b) => b.textContent === "Approve card"), false);
   } finally { await f.dispose(); }
 });
 
@@ -248,7 +456,7 @@ test("plugin UI hand-written draft, saved edits, explicit approval and deck send
     const deck = f.container.querySelector('input[list]')! as unknown as HTMLInputElement;
     deck.value = "Brand new::Deck"; deck.dispatchEvent(new f.window.Event("input") as unknown as Event);
     f.button("Send approved card").click(); await tick();
-    assert.deepEqual(f.calls.at(-1), { name: "send", input: { ids: ["test-id"], deck: "Brand new::Deck" } });
+    assert.deepEqual(f.calls.at(-1), { name: "send", input: { ids: ["test-id"], deck: "Brand new::Deck", expectedDestination: null } });
     assert.equal(f.container.querySelector("img"), null);
   } finally { await f.dispose(); }
 });
@@ -256,14 +464,23 @@ test("plugin UI hand-written draft, saved edits, explicit approval and deck send
 test("plugin UI never offers resend for sent, deleted or uncertain cards and exposes recovery operations", async () => {
   const f = await setup();
   try {
+    f.state.destination = paired();
     f.state.cards.push(
-      { id: "sent", status: "sent", presence: "deleted", noteId: 123, front: "F", back: "B", extra: "", kind: "why" },
+      { id: "sent", status: "sent", presence: "deleted", noteId: 123, destination: paired(), front: "F", back: "B", extra: "", kind: "why" },
+      { id: "old", status: "sent", noteId: 99, destination: { url: "http://127.0.0.1:8765/", profile: "Previous" }, front: "F0", back: "B0", extra: "", kind: "why" },
       { id: "uncertain", status: "sending", front: "F2", back: "B2", extra: "", kind: "why" },
     );
     f.button("Refresh cards").click(); await tick();
+    assert.match(f.container.textContent!, /Sent history \(2\)/);
+    assert.equal(f.container.querySelectorAll("article").length, 1, "only unresolved cards mount before opening history");
+    f.openHistory();
+    // Only the current pairing offers Show. Older history stays read-only.
     assert.equal(f.container.querySelectorAll("article button").length, 1);
     assert.match(f.container.textContent!, /Anki presence: deleted/);
+    assert.match(f.container.textContent!, /Sent destination: Previous/);
     f.button("Show in Anki").click(); await tick();
+    assert.deepEqual(f.calls.at(-1), { name: "show", input: { ids: ["sent"] } });
+    f.button("Show sent cards in Anki").click(); await tick();
     assert.deepEqual(f.calls.at(-1), { name: "show", input: { ids: ["sent"] } });
     f.button("Reconcile uncertain sends").click(); await tick();
     assert.equal(f.calls.at(-1)!.name, "reconcile");
