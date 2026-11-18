@@ -409,6 +409,40 @@ test("session coverage mutations invalidate drafting immediately and refresh bot
   } finally { await f.close(); }
 });
 
+test("session coverage reports a saved mutation separately from a failed refresh", async () => {
+  const flow: any = flowFixture();
+  const node = { ...flow.nodes[1], statementHash: "a".repeat(64), coverage: { state: "no-cards", base: "no-cards", selectable: true,
+    uncarded: true, canDismiss: true, dismissed: false, generating: false, unresolved: 0, olderSourceCards: 0, unknownSourceCards: 0, deletedNotes: 0 } };
+  flow.nodes = [node];
+  let fail = false;
+  const f = setup(name => {
+    if (name === "sessions") return { sessions: [], unresolved: [] };
+    if (name === "dismissNode" || name === "restoreNode") {
+      const dismissed = name === "dismissNode";
+      Object.assign(node.coverage, { state: dismissed ? "dismissed" : "no-cards", base: dismissed ? "dismissed" : "no-cards",
+        selectable: !dismissed, canDismiss: !dismissed, dismissed });
+      fail = true;
+    } else if (fail) throw new Error("Graph read failed");
+    return flow;
+  });
+  try {
+    const requests = new SessionRequests(); requests.request("s1");
+    const container = f.window.document.createElement("div") as unknown as HTMLElement;
+    const panel = mountSessionFlow(f.ctx, container, f.ctx.signal, { requests, onDraft: () => {} });
+    await tick();
+    for (const [action, result] of [["Don't card this", /Dismissal saved/], ["Restore", /Restoration saved/]] as const) {
+      f.buttonIn(container, action).click(); await tick();
+      assert.match(container.textContent!, result);
+      assert.match(container.textContent!, /refresh failed.*Graph read failed/i);
+      assert.match(container.textContent!, /Coverage is stale/);
+      assert.equal(f.buttonIn(container, action).disabled, true);
+      fail = false; await panel.refresh();
+      assert.doesNotMatch(container.textContent!, /Coverage is stale/);
+    }
+    panel();
+  } finally { await f.close(); }
+});
+
 test("session graph failure retains coverage marked stale and disables drafting until a successful refresh", async () => {
   const flow = flowFixture(); let fail = false;
   const f = setup(name => {

@@ -135,21 +135,24 @@ function mount(ctx: PluginFrontendContext, container: HTMLElement, signal: Abort
       if (refreshPending && alive()) void backgroundRefresh();
     }
   }
-  /** Background drafts arrive while the user may be typing. Never skip a refresh, and never
-   * drop unsaved form input, open sections or the caret when re-rendering for one. */
+  // A snapshot can arrive while the learner is editing. Keep unsaved inputs,
+  // open sections, and the caret when updating the review list.
+  async function refreshReviewCards(): Promise<boolean> {
+    if (!alive() || busy) return false;
+    const fresh = await ctx.call<Snapshot>("snapshot");
+    if (!alive() || busy) return false;
+    state = fresh;
+    const kept = captureForm();
+    render();
+    restoreForm(kept);
+    return true;
+  }
   let refreshPending = false;
   async function backgroundRefresh(): Promise<void> {
     if (!alive()) return;
-    if (busy) { refreshPending = true; return; }
     refreshPending = false;
     try {
-      const fresh = await ctx.call<Snapshot>("snapshot");
-      if (!alive()) return;
-      if (busy) { refreshPending = true; return; }
-      state = fresh;
-      const kept = captureForm();
-      render();
-      restoreForm(kept);
+      if (!await refreshReviewCards()) { refreshPending = true; return; }
       await sessionPanel?.refresh(); await draftingPanel?.refresh();
     } catch { refreshPending = true; }
   }
@@ -389,10 +392,23 @@ function mount(ctx: PluginFrontendContext, container: HTMLElement, signal: Abort
   }
   const unsubscribe = ctx.onResync(() => { void run(refresh); });
   void run(refresh);
-  const reviewWaiting = (nodeId: string) => {
-    const row = [...controls.querySelectorAll<HTMLElement>("[data-waiting-node]")].find(row => row.dataset.waitingNode === nodeId);
-    if (row) { row.scrollIntoView?.({ block: "start" }); row.focus(); }
-    else feedback.textContent = "No waiting cards for this node in the review list. Refresh cards to check again.";
+  const reviewWaiting = async (nodeId: string) => {
+    const focusWaiting = () => {
+      const row = [...controls.querySelectorAll<HTMLElement>("[data-waiting-node]")].find(row => row.dataset.waitingNode === nodeId);
+      if (!row) return false;
+      row.scrollIntoView?.({ block: "start" }); row.focus();
+      return true;
+    };
+    if (!alive() || focusWaiting()) return;
+    try {
+      const refreshed = await refreshReviewCards();
+      if (!alive()) return;
+      if (!refreshed) feedback.textContent = "Wait for the current card action to finish, then try again.";
+      else if (!focusWaiting()) feedback.textContent = "No waiting cards for this node in the review list.";
+      else feedback.textContent = "";
+    } catch (error) {
+      if (alive()) feedback.textContent = `Could not refresh the review list: ${error instanceof Error ? error.message : String(error)}`;
+    }
   };
   const draftingPanel = settingsOnly ? undefined : mountDrafting(ctx, drafting, signal, backgroundRefresh, reviewWaiting);
   sessionPanel = !settingsOnly && requests && draftingPanel ? mountSessionFlow(ctx, sessionHost, signal, {

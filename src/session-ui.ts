@@ -176,7 +176,10 @@ export function mountSessionFlow(ctx: PluginFrontendContext, container: HTMLElem
     mutate: (name, node) => { void run(async () => {
       try { await ctx.call(name, { nodeId: node.id, statementHash: node.statementHash }); }
       catch (error) { if (alive()) coverage.markStale(); throw error; }
-      await load();
+      try { await load(); }
+      catch (error) {
+        throw new Error(`${name === "dismissNode" ? "Dismissal" : "Restoration"} saved, but the session refresh failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
     }); },
   });
   let draft: HTMLButtonElement | undefined;

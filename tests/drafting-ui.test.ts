@@ -20,6 +20,7 @@ function setup(options: { catalogUnavailable?: boolean; initialGraphFailure?: bo
   const state: any = { generationSettings: { cardsPerNode: 2, enabledKinds: ["recall", "why", "compose", "discriminate"], model: null }, generations: [] };
   let model: ((v: { provider: string; id: string }) => void | Promise<void>) | undefined;
   let failNextCoverage = options.initialGraphFailure;
+  let mutationGate: Promise<void> | undefined;
   let refreshed = 0, knowledgeMounts = 0, hold: Promise<void> | undefined, graphHold: Promise<void> | undefined, settingsHold: Promise<void> | undefined;
   const widget = () => ({ update: () => {}, dispose: () => {} });
   const ctx = {
@@ -29,6 +30,7 @@ function setup(options: { catalogUnavailable?: boolean; initialGraphFailure?: bo
       if (name === "coverageContext") { if (failNextCoverage) { failNextCoverage = false; throw new Error("Initial graph read failed"); } const result = structuredClone(graph); await graphHold; return result; }
       if (name === "generationContext") throw new Error("Catalog unavailable");
       if (name === "dismissNode" || name === "restoreNode") {
+        await mutationGate;
         const node = graph.nodes.find((n: any) => n.id === input.nodeId);
         const dismissed = name === "dismissNode";
         Object.assign(node.coverage, { dismissed, selectable: !dismissed, uncarded: !dismissed, canDismiss: !dismissed,
@@ -65,6 +67,7 @@ function setup(options: { catalogUnavailable?: boolean; initialGraphFailure?: bo
       graphHold = new Promise<void>((yes, no) => { resolve = yes; reject = no; });
       return { allowFollowingReads: () => { graphHold = undefined; }, resolve: () => { graphHold = undefined; resolve(); }, reject: () => { graphHold = undefined; reject(new Error("Graph reload failed")); } };
     },
+    holdMutation: () => { let reject!: (e: Error) => void; mutationGate = new Promise<void>((_, no) => { reject = no; }); return () => { mutationGate = undefined; reject(new Error("Graph read failed")); }; },
     refreshed: () => refreshed, knowledgeMounts: () => knowledgeMounts, panel, holdEstimates: () => { let release!: () => void; hold = new Promise(r => { release = r; }); return () => { hold = undefined; release(); }; }, close: async () => { panel.dispose(); controller.abort(); await window.happyDOM.close(); } };
 }
 
@@ -230,6 +233,20 @@ test("dismiss and restore send the current hash, invalidate confirmation, and re
     assert.deepEqual(f.calls.find(c => c.name === "restoreNode")!.input, { nodeId: "n_a", statementHash: "a".repeat(64) });
     const box = f.container.querySelector('li input[type=checkbox]') as any;
     assert.equal(box.disabled, false); assert.equal(box.checked, false);
+  } finally { await f.close(); }
+});
+
+test("a queued dismissal does not run after the first dismissal marks coverage stale", async () => {
+  const f = setup();
+  try {
+    await tick();
+    const reject = f.holdMutation();
+    const action = f.button("Don't card this");
+    action.click(); action.click(); await tick();
+    assert.equal(f.calls.filter(c => c.name === "dismissNode").length, 1);
+    reject(); await tick();
+    assert.equal(f.calls.filter(c => c.name === "dismissNode").length, 1);
+    assert.match(f.container.textContent!, /Coverage is stale/);
   } finally { await f.close(); }
 });
 

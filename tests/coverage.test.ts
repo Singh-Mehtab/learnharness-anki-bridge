@@ -152,11 +152,19 @@ test('generation acknowledgement does not read the graph after validation and st
   assert.equal(reads, validationReads); assert.equal(host.workers.starts.length, 1);
 }));
 
-test('delivery mutation succeeds when graph source warnings cannot be refreshed', () => fixture(async (_host, c) => {
+test('delivery mutation succeeds when warnings for a saved source cannot be refreshed', () => fixture(async (host, c) => {
+  await c.call('generationSettings', { model: { provider: 'scratch', id: 'writer' } });
+  const p = await c.call('preflight', { nodeIds: [node.id] }); await c.call('generate', { preflightId: p.preflightId });
+  await until(() => host.workers.starts.length === 1);
+  host.workers.succeed('task-1', { targets: [{ nodeId: node.id, cards: [{ kind: 'recall', front: 'Which condition makes this fixture result valid?', back: 'Assumption A.' }] }] });
+  await until(async () => (await c.call('generationStatus')).generations[0].status === 'completed');
+  const [generated] = (await c.call('snapshot')).cards;
   c.ctx.learning.graph = () => { throw new Error('Graph unavailable'); };
-  const result = await c.call('draft', { nodeId: node.id, front: 'Question', back: 'Answer' });
-  assert.equal(result.cards[0].status, 'draft');
-  assert.equal((await c.call('snapshot')).cards.length, 1);
+  const result = await c.call('approve', { ids: [generated.id] });
+  for (const [item] of [result.cards, (await c.call('snapshot')).cards]) {
+    assert.equal(item.status, 'approved'); assert.equal(item.sourceStatement, node.statement);
+    assert.equal(item.sourceUnavailable, true); assert.equal(item.sourceMissing, undefined); assert.equal(item.sourceChanged, undefined);
+  }
   await assert.rejects(c.call('coverageContext'), /Graph unavailable/);
 }));
 

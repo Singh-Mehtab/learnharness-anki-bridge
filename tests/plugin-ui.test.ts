@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { Window } from "happy-dom";
+import { Window, type HTMLTextAreaElement } from "happy-dom";
 import { activate } from "../src/main.ts";
 import type { PluginFrontendContext, PluginView } from "../sdk/index.d.ts";
 
@@ -89,6 +89,27 @@ test("Review waiting cards focuses the exact node, not another card with the sam
   try {
     f.button('Review waiting cards').click();
     assert.equal(f.window.document.activeElement?.getAttribute('data-waiting-node'), 'target:id');
+  } finally { await f.dispose(); }
+});
+
+test("Review waiting cards fetches a newly visible draft without discarding unsaved input", async () => {
+  const state = fixture();
+  state.cards = [{ id: 'existing', nodeId: 'other:id', kind: 'recall', status: 'draft', front: 'Original', back: 'Answer', extra: '' }];
+  let waiting = 0;
+  const f = await setup(name => name === 'coverageContext' ? { nodes: [{ id: 'target:id', name: 'Target', statement: 'Statement', cards: { waiting, sent: 1, sentElsewhere: 0 } }], missing: [], paired: true, cardsPerNode: 2 }
+    : name === 'sessions' ? { sessions: [], unresolved: [] } : structuredClone(state));
+  try {
+    const front = f.container.querySelector<HTMLTextAreaElement>('textarea[data-keep]')!;
+    front.value = 'Unsaved front'; front.dispatchEvent(new f.window.Event('input'));
+    waiting = 1;
+    state.cards.push({ id: 'new', nodeId: 'target:id', kind: 'recall', status: 'draft', front: 'New draft', back: 'Answer', extra: '' });
+    f.button('Refresh graph').click(); await tick();
+    assert.equal(f.container.querySelector('[data-waiting-node="target:id"]'), null);
+    const reads = f.calls.filter(c => c.name === 'snapshot').length;
+    f.button('Review waiting cards').click(); await tick();
+    assert.equal(f.calls.filter(c => c.name === 'snapshot').length, reads + 1);
+    assert.equal(f.window.document.activeElement?.getAttribute('data-waiting-node'), 'target:id');
+    assert.equal(f.container.querySelector<HTMLTextAreaElement>('textarea[data-keep]')!.value, 'Unsaved front');
   } finally { await f.dispose(); }
 });
 

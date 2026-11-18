@@ -51,9 +51,14 @@ export function mountDrafting(ctx: PluginFrontendContext, container: HTMLElement
     reviewWaiting,
     changed: source => { if (source === "user") choiceRevision++; invalidate(); renderPreflight(); if (estimateButton) estimateButton.disabled = picker.isStale; },
     mutate: (name, node) => { invalidate(); renderPreflight(); void run(async () => {
+      if (picker.isStale) throw new Error("Refresh graph before changing coverage.");
       try { await ctx.call(name, { nodeId: node.id, statementHash: node.statementHash }); }
       catch (error) { if (alive()) { coverageRequest++; picker.markStale(); } throw error; }
-      await refresh(); await onCardsChanged();
+      try { await refreshCoverage(); }
+      catch (error) {
+        throw new Error(`${name === "dismissNode" ? "Dismissal" : "Restoration"} saved, but the graph refresh failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      await onCardsChanged();
     }); },
   });
   root.insertBefore(picker.root, controls);
