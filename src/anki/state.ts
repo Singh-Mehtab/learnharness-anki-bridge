@@ -110,7 +110,16 @@ export class StateStore {
     };
     const owner = async (): Promise<{ pid: number; token?: unknown }> => {
       let previous: { pid: number; token?: unknown };
-      try { previous = JSON.parse(await readFile(lock, 'utf8')); }
+      let text: string;
+      try { text = await readFile(lock, 'utf8'); }
+      catch (e) {
+        // Missing means another backend is mid-recovery; it will own the lock shortly.
+        if ((e as NodeJS.ErrnoException).code === 'ENOENT') throw new Error('Another Anki Bridge backend owns this data directory.');
+        throw e;
+      }
+      // An empty lock was just created by another opener that has not written it yet.
+      if (!text) throw new Error('Another Anki Bridge backend owns this data directory.');
+      try { previous = JSON.parse(text); }
       catch { throw new Error('Anki Bridge state lock is unreadable. Do not remove it while a backend might be running.'); }
       if (!Number.isSafeInteger(previous.pid) || previous.pid <= 0) throw new Error('Invalid Anki Bridge state lock.');
       return previous;

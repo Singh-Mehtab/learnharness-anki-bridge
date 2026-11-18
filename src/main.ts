@@ -91,7 +91,10 @@ function confirmAction(ctx: PluginFrontendContext, signal: AbortSignal, title: s
   });
 }
 
-function mount(ctx: PluginFrontendContext, container: HTMLElement, signal: AbortSignal, settingsOnly = false, requests?: SessionRequests): () => void {
+/** Live mounts of this activation. Pairing or settings changes in one refresh the others,
+ * so the review view cannot keep showing a destination the settings dialog replaced. */
+type Peers = Set<() => void>;
+function mount(ctx: PluginFrontendContext, container: HTMLElement, signal: AbortSignal, settingsOnly = false, requests?: SessionRequests, peers: Peers = new Set()): () => void {
   const root = element("section");
   root.className = "anki-bridge";
   const feedback = element("p");
@@ -194,6 +197,7 @@ function mount(ctx: PluginFrontendContext, container: HTMLElement, signal: Abort
   async function snapshotAction(name: string, input?: unknown): Promise<void> {
     try {
       const next = await ctx.call<Snapshot>(name, input);
+      if (name === "pair" || name === "settings") for (const peer of peers) if (peer !== refreshFromPeer) peer();
       if (alive()) { state = next; await sessionPanel?.refresh(); await draftingPanel?.refresh(); }
     } catch (error) {
       if (name === "send" && alive()) {
@@ -204,6 +208,7 @@ function mount(ctx: PluginFrontendContext, container: HTMLElement, signal: Abort
     }
   }
   async function refresh(): Promise<void> { await snapshotAction("snapshot"); }
+  function refreshFromPeer(): void { void run(refresh); }
   async function checkConnection(): Promise<void> {
     connection = undefined;
     render();
@@ -338,7 +343,7 @@ function mount(ctx: PluginFrontendContext, container: HTMLElement, signal: Abort
       row.append(element("h4", `${card.kind} · ${card.status}`));
       if (card.nodeName || card.sessionName) row.append(element("p", [card.nodeName, card.sessionName].filter(Boolean).join(" / ")));
       if (card.lastError) row.append(element("p", `Error: ${card.lastError}`));
-      if (card.destination) row.append(element("p", `${card.status === "sent" || card.status === "sending" ? "Sent destination" : "Last delivery attempt"}: ${card.destination.profile} at ${card.destination.url}`));
+      if (card.destination) row.append(element("p", `${card.status === "sent" ? "Sent destination" : card.status === "sending" ? "Delivery unconfirmed" : "Last delivery attempt"}: ${card.destination.profile} at ${card.destination.url}`));
       if (card.deck) row.append(element("p", `Deck: ${card.deck}`));
       if (card.presence) row.append(element("p", `Anki presence: ${card.presence}`));
       if (card.noteId !== undefined) row.append(element("p", `Anki note ID: ${card.noteId}`));
@@ -403,6 +408,7 @@ function mount(ctx: PluginFrontendContext, container: HTMLElement, signal: Abort
     }
   }
   const unsubscribe = ctx.onResync(() => { void run(refresh); });
+  peers.add(refreshFromPeer);
   void run(refresh);
   const reviewWaiting = async (nodeId: string) => {
     const focusWaiting = () => {
@@ -435,14 +441,14 @@ function mount(ctx: PluginFrontendContext, container: HTMLElement, signal: Abort
       if (alive()) { drafting.scrollIntoView?.({ block: "start" }); drafting.querySelector<HTMLElement>("button, input")?.focus(); }
     },
   }) : undefined;
-  return () => { disposed = true; unsubscribe(); sessionPanel?.(); draftingPanel?.dispose(); disposePreviews(); root.remove(); };
+  return () => { disposed = true; peers.delete(refreshFromPeer); unsubscribe(); sessionPanel?.(); draftingPanel?.dispose(); disposePreviews(); root.remove(); };
 }
 
 export function activate(ctx: PluginFrontendContext): void {
-  const requests = new SessionRequests();
-  ctx.cleanup(ctx.registerView({ id: "bridge", name: "Anki Bridge", mount: (container, signal) => mount(ctx, container, signal, false, requests) }));
+  const requests = new SessionRequests(), peers: Peers = new Set();
+  ctx.cleanup(ctx.registerView({ id: "bridge", name: "Anki Bridge", mount: (container, signal) => mount(ctx, container, signal, false, requests, peers) }));
   registerSessionActions(ctx, requests);
   ctx.cleanup(ctx.registerAction({ id: "open-bridge", name: "Anki Bridge", run: () => ctx.app.openView("bridge") }));
   ctx.cleanup(ctx.placeAction({ id: "bridge-sidebar", actionId: "open-bridge", location: "sidebar" }));
-  ctx.cleanup(ctx.registerSettings((container, signal) => mount(ctx, container, signal, true)));
+  ctx.cleanup(ctx.registerSettings((container, signal) => mount(ctx, container, signal, true, undefined, peers)));
 }

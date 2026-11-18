@@ -224,6 +224,40 @@ test("plugin UI pairing and destructive styling changes require host dialog conf
   } finally { await f.dispose(); }
 });
 
+test("re-pairing in settings refreshes the mounted review view and maintenance names the shown profile", async () => {
+  const f = await setup();
+  try {
+    f.state.destination = paired();
+    f.state.cards = [
+      { id: "sent", nodeId: "n", kind: "recall", status: "sent", noteId: 1, destination: paired(), front: "Sent", back: "A", extra: "" },
+      { id: "failed", nodeId: "n", kind: "recall", status: "failed", destination: paired(), front: "Failed", back: "A", extra: "" },
+    ];
+    f.resync(); await tick();
+    assert.match(f.container.textContent!, /Last delivery attempt: Throwaway/);
+    assert.ok(f.button("Show sent cards in Anki"));
+    f.button("Update note type styling").click(); await tick();
+    assert.match(f.dialog()!.textContent!, /profile Throwaway at http:\/\/127\.0\.0\.1:8765\//);
+    f.dialog()!.querySelectorAll("button")[1]!.click(); await tick();
+    assert.deepEqual(f.calls.find(c => c.name === "updateStyling"), { name: "updateStyling", input: { confirmed: true, expectedDestination: paired() } });
+    const url = f.container.querySelector('input[type=text]') as unknown as HTMLInputElement;
+    url.value = "http://127.0.0.1:8766/"; url.dispatchEvent(new f.window.Event("input") as unknown as Event);
+    assert.match(f.container.textContent!, /Saving a different URL clears the saved API key/);
+    url.value = "http://127.0.0.1:8765/"; url.dispatchEvent(new f.window.Event("input") as unknown as Event);
+    assert.doesNotMatch(f.container.textContent!, /clears the saved API key/);
+
+    const settingsContainer = f.window.document.createElement("div");
+    f.window.document.body.append(settingsContainer);
+    const cleanup = await f.settings(settingsContainer as unknown as HTMLElement, f.controller.signal); await tick();
+    f.button("Test connection", settingsContainer as unknown as typeof f.container).click(); await tick();
+    f.button("Re-pair destination", settingsContainer as unknown as typeof f.container).click(); await tick();
+    f.state.destination = { url: "http://127.0.0.1:8765/", profile: "Other" };
+    f.dialog()!.querySelectorAll("button")[1]!.click(); await tick(); await tick();
+    assert.match(f.container.textContent!, /Paired destination: Other/);
+    assert.equal(Array.from(f.container.querySelectorAll("button")).some(b => /^Show/.test(b.textContent!)), false);
+    if (typeof cleanup === "function") await cleanup();
+  } finally { await f.dispose(); }
+});
+
 test("plugin UI hand-written draft, saved edits, explicit approval and deck send use named RPCs", async () => {
   const f = await setup();
   try {
