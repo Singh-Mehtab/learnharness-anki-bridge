@@ -5,6 +5,8 @@ import { defaultGenerationSettings, validateGenerations, validSource } from '../
 import type { Generation, GenerationSettings, SourceSnapshot } from '../generation/types.ts';
 import { validateFlags } from '../session/flow.ts';
 import type { Flag } from '../session/flow.ts';
+import { validateDismissals } from '../coverage/flow.ts';
+import type { Dismissal } from '../coverage/flow.ts';
 
 export interface Destination { url: string; profile: string }
 export type CardStatus = 'draft' | 'approved' | 'sending' | 'sent' | 'failed' | 'dropped';
@@ -31,33 +33,36 @@ export interface Card {
   requestId?: string;
 }
 export interface State {
-  schemaVersion: 3;
+  schemaVersion: 4;
   generationSettings: GenerationSettings;
   generations: Generation[];
   flags: Flag[];
+  dismissals: Dismissal[];
   settings: { url: string; apiKey: string; lastDeck: string };
   destination: Destination | null;
   cards: Card[];
 }
 export const initialState = (): State => ({
-  schemaVersion: 3,
+  schemaVersion: 4,
   generationSettings: defaultGenerationSettings(),
   generations: [],
   flags: [],
+  dismissals: [],
   settings: { url: 'http://127.0.0.1:8765/', apiKey: '', lastDeck: '' },
   destination: null,
   cards: [],
 });
 const object = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 const text = (v: unknown): v is string => typeof v === 'string';
-export const sameDestination = (a: Destination | null | undefined, b: Destination | null | undefined): boolean => !!a && !!b && a.url === b.url && a.profile === b.profile;
+export { sameDestination } from './destination.ts';
 function destination(v: unknown): v is Destination {
   return object(v) && text(v.url) && !!v.url && text(v.profile) && !!v.profile;
 }
 export function validateState(value: unknown): asserts value is State {
-  if (!object(value) || value.schemaVersion !== 3) throw new Error('Unsupported state format. Keep state.json intact and use a compatible Anki Bridge version.');
+  if (!object(value) || value.schemaVersion !== 4) throw new Error('Unsupported state format. Keep state.json intact and use a compatible Anki Bridge version.');
   validateGenerations(value.generationSettings, value.generations);
   validateFlags(value.flags);
+  validateDismissals(value.dismissals);
   const settings = value.settings;
   if (!object(settings) || !['url', 'apiKey', 'lastDeck'].every(k => text(settings[k])) || !(value.destination === null || destination(value.destination)) || !Array.isArray(value.cards)) throw new Error('Invalid Anki Bridge state. The file has not been reset.');
   const ids = new Set<string>();
@@ -73,13 +78,14 @@ export function validateState(value: unknown): asserts value is State {
   }
 }
 
-/** Upgrade older snapshots one step per version (1 -> 2 -> 3), then validate the result.
+/** Upgrade older snapshots one step per version (1 -> 2 -> 3 -> 4), then validate the result.
  * StateStore.open writes only after validation passes, so malformed or newer data is
  * refused and the file is left as it was. */
 export function migrateState(raw: unknown): State {
   let value = raw;
   if (object(value) && value.schemaVersion === 1) value = { ...value, schemaVersion: 2, generationSettings: defaultGenerationSettings(), generations: [] };
   if (object(value) && value.schemaVersion === 2) value = { ...value, schemaVersion: 3, flags: [] };
+  if (object(value) && value.schemaVersion === 3) value = { ...value, schemaVersion: 4, dismissals: [] };
   validateState(value);
   return value;
 }

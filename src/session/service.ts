@@ -1,8 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import type { PluginBackendContext } from '../../sdk/index.d.ts';
 import type { DeliveryService } from '../anki/delivery.ts';
-import { sameDestination } from '../anki/state.ts';
-import type { State, StateStore } from '../anki/state.ts';
+import type { StateStore } from '../anki/state.ts';
+import { graphCoverage } from '../coverage/service.ts';
+import type { Coverage, CoverageNode } from '../coverage/flow.ts';
 import { extractedMessageIds } from './extraction.ts';
 import {
   failedOutputCallIds, flagNotesByNode, matchFlag, MAX_FLAG_MESSAGES, MAX_FLAGS, normalizeNote, sessionNodeIds, teacherProse,
@@ -20,13 +21,16 @@ export type FlagStatus = 'matched' | 'waiting' | 'no-nodes' | 'missing';
 export interface FlagView extends Flag { status: FlagStatus; nodeIds: string[] }
 /** `created` is false when the call updated an existing flag, so Undo must not remove it. */
 export interface FlagResult extends FlagView { created: boolean }
-export interface SessionNode { id: string; name: string; statement: string; flagged: boolean; flagNotes: string[]; cards: CardCounts }
+export interface SessionNode { id: string; name: string; statement: string; flagged: boolean; flagNotes: string[]; cards: CardCounts; statementHash: string; coverage: Coverage }
 export interface SessionFlow {
   session: { id: string; title: string; exists: boolean };
   nodes: SessionNode[];
   flags: FlagView[];
   cardsPerNode: number;
   paired: boolean;
+  missing: CoverageNode[];
+  pairingWarning: boolean;
+  pairingKey: string;
 }
 export interface SessionSummary { id: string; title: string; updatedAt: string; nodeCount: number; flagCount: number; waitingCount: number }
 export interface SessionList { sessions: SessionSummary[]; unresolved: FlagView[] }
@@ -95,19 +99,6 @@ export class SessionService {
       const extracted = extractedMessageIds(record.messages, covered, flag.messageIds);
       return { ...flag, status: flag.messageIds.every(id => extracted.has(id)) ? 'no-nodes' : 'waiting', nodeIds };
     });
-  }
-
-  private counts(state: State): Map<string, CardCounts> {
-    const out = new Map<string, CardCounts>();
-    for (const card of state.cards) {
-      if (card.status === 'dropped' || !card.nodeId) continue;
-      const c = out.get(card.nodeId) ?? { waiting: 0, sent: 0, sentElsewhere: 0 };
-      if (card.status === 'sent') {
-        if (sameDestination(card.destination, state.destination)) c.sent++; else c.sentElsewhere++;
-      } else c.waiting++;
-      out.set(card.nodeId, c);
-    }
-    return out;
   }
 
   private async flag(input: Record<string, unknown>): Promise<FlagResult> {
@@ -185,14 +176,14 @@ export class SessionService {
     const flags = this.views(state.flags.filter(f => f.sessionId === sessionId), graph);
     const ids = sessionNodeIds(graph, sessionId, (record?.messages ?? []).map(m => String(m.id)));
     for (const id of flags.flatMap(f => f.nodeIds)) if (!ids.includes(id)) ids.push(id);
-    const byId = new Map(graph.propositions.map(n => [n.id, n] as const)), counts = this.counts(state);
+    const coverage = graphCoverage(graph, state), byId = new Map(coverage.nodes.map(n => [n.id, n] as const));
     const nodes = ids.map(id => {
       const n = byId.get(id)!, mine = flags.filter(f => f.nodeIds.includes(id));
-      return { id, name: n.name, statement: n.statement, flagged: mine.length > 0, flagNotes: [...new Set(mine.map(f => f.note).filter(Boolean))],
-        cards: counts.get(id) ?? { waiting: 0, sent: 0, sentElsewhere: 0 } };
+      return { ...n, flagged: mine.length > 0, flagNotes: [...new Set(mine.map(f => f.note).filter(Boolean))] };
     });
     const title = record?.title || flags[0]?.sessionTitle || graph.sessions?.[sessionId] || '';
-    return { session: { id: sessionId, title, exists: !!record }, nodes, flags, cardsPerNode: this.cardsPerNode(), paired: !!state.destination };
+    return { session: { id: sessionId, title, exists: !!record }, nodes, flags, cardsPerNode: this.cardsPerNode(), paired: !!state.destination,
+      missing: coverage.missing.filter(n => state.cards.some(c => c.nodeId === n.id && c.sessionId === sessionId)), pairingWarning: coverage.pairingWarning, pairingKey: coverage.pairingKey };
   }
 
   async command(name: string, input: unknown = {}): Promise<unknown> {

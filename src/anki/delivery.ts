@@ -9,7 +9,7 @@ import type { Generation, GenerationSettings } from '../generation/types.ts';
 export interface PublicSnapshot {
   settings: { url: string; lastDeck: string; hasApiKey: boolean };
   destination: Destination | null;
-  cards: (Card & { sourceStatement?: string; sourceChanged?: boolean; sourceMissing?: boolean })[];
+  cards: (Card & { sourceStatement?: string; sourceChanged?: boolean; sourceMissing?: boolean; sourceUnavailable?: boolean })[];
   generationSettings: GenerationSettings;
   generations: Generation[];
   recoveryError?: string;
@@ -71,12 +71,18 @@ export class DeliveryService {
     return key ? message.split(key).join('[API key hidden]') : message;
   }
   reportRecoveryError(error: unknown): void { this.recoveryError = this.message(error); }
-  snapshot(): PublicSnapshot {
+  snapshot(includeSource = true): PublicSnapshot {
     const { settings, destination, cards, generationSettings, generations } = this.store.snapshot();
-    const current = this.sourceStatements?.();
+    let current: Map<string, string> | undefined, sourceUnavailable = false;
+    // Source warnings are advisory. A graph read must not make a saved write look like a failure.
+    if (includeSource && cards.some(card => card.sourceSnapshot)) {
+      try { current = this.sourceStatements?.(); } catch { sourceUnavailable = true; }
+    }
     const publicCards = cards.map(card => card.sourceSnapshot ? { ...card, sourceStatement: card.sourceSnapshot.statement,
-      sourceMissing: current ? !current.has(card.nodeId) : false,
-      sourceChanged: current?.has(card.nodeId) ? current.get(card.nodeId) !== card.sourceSnapshot.statement : false } : card);
+      ...(sourceUnavailable ? { sourceUnavailable } : {
+        sourceMissing: current ? !current.has(card.nodeId) : false,
+        sourceChanged: current?.has(card.nodeId) ? current.get(card.nodeId) !== card.sourceSnapshot.statement : false,
+      }) } : card);
     return { generationSettings, generations, settings: { url: settings.url, lastDeck: settings.lastDeck, hasApiKey: !!settings.apiKey }, destination, cards: publicCards, ...(this.recoveryError ? { recoveryError: this.recoveryError } : {}) };
   }
   private busyOwner: 'user' | 'background' | undefined;

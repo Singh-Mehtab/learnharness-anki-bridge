@@ -43,3 +43,7 @@
 .anki-bridge-carded { opacity: .6; }
 .anki-bridge-flag-waiting, .anki-bridge-flag-no-nodes, .anki-bridge-flag-missing { border-style: dashed !important; }
 .anki-bridge-flag { max-width: 34rem; }
+.anki-bridge-coverage { margin-block: .75rem; }
+.anki-bridge-coverage > input[type=search] { max-width: 32rem; }
+.anki-bridge-coverage .anki-bridge-nodes { list-style: none; padding: 0; max-height: 28rem; overflow-y: auto; }
+.anki-bridge-coverage .anki-bridge-nodes > li { border: 1px solid var(--border-color, #888); border-radius: .4rem; padding: .5rem .75rem; margin: .4rem 0; overflow-wrap: anywhere; }

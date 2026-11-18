@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { Window } from "happy-dom";
+import { Window, type HTMLTextAreaElement } from "happy-dom";
 import { activate } from "../src/main.ts";
 import type { PluginFrontendContext, PluginView } from "../sdk/index.d.ts";
 
@@ -40,6 +40,8 @@ async function setup(handler?: (name: string, input: unknown) => unknown | Promi
     onResync: (listener: () => void) => { resyncs.add(listener); return () => { resyncs.delete(listener); }; },
     app: { openView: (id: string) => { openedView = id; } },
     call: async (name: string, input: unknown) => {
+      if (name === "coverageContext") return handler?.(name, input) ?? { nodes: [], missing: [], cardsPerNode: 2, paired: false, pairingWarning: false };
+      if (name === "generationStatus") return { generationSettings: { cardsPerNode: 2, enabledKinds: ["recall"], model: null }, generations: [] };
       // This fixture checks delivery commands, not the session panel's background reads.
       if (name !== "sessions" && name !== "sessionFlow") calls.push({ name, input });
       if (handler) return handler(name, input);
@@ -47,7 +49,7 @@ async function setup(handler?: (name: string, input: unknown) => unknown | Promi
       if (name === "sessions") return { sessions: [], unresolved: [] };
       return structuredClone(state);
     },
-    ui: { mountMarkdown: (target: HTMLElement, props: { text: string }) => {
+    ui: { mountModelPicker: () => ({ update: () => {}, dispose: () => {} }), mountMarkdown: (target: HTMLElement, props: { text: string }) => {
       target.textContent = props.text;
       return { update: (next: { text: string }) => { target.textContent = next.text; }, dispose: () => {} };
     }, openDialog: (props: { content: HTMLElement; onClose: () => void }) => {
@@ -79,13 +81,99 @@ async function setup(handler?: (name: string, input: unknown) => unknown | Promi
   };
 }
 
+test("Review waiting cards focuses the exact node, not another card with the same node name", async () => {
+  const state = fixture();
+  state.cards = ['other:id', 'target:id'].map(nodeId => ({ id: nodeId, nodeId, nodeName: 'Same name', kind: 'recall', status: 'draft', front: nodeId, back: 'Answer', extra: '' }));
+  const f = await setup(name => name === 'coverageContext' ? { nodes: [{ id: 'target:id', name: 'Same name', statement: 'Shared text', cards: { waiting: 1, sent: 1, sentElsewhere: 0 } }], missing: [], paired: true, cardsPerNode: 2 }
+    : name === 'sessions' ? { sessions: [], unresolved: [] } : state);
+  try {
+    f.button('Review waiting cards').click();
+    assert.equal(f.window.document.activeElement?.getAttribute('data-waiting-node'), 'target:id');
+  } finally { await f.dispose(); }
+});
+
+test("Review waiting cards fetches a newly visible draft without discarding unsaved input", async () => {
+  const state = fixture();
+  state.cards = [{ id: 'existing', nodeId: 'other:id', kind: 'recall', status: 'draft', front: 'Original', back: 'Answer', extra: '' }];
+  let waiting = 0;
+  const f = await setup(name => name === 'coverageContext' ? { nodes: [{ id: 'target:id', name: 'Target', statement: 'Statement', cards: { waiting, sent: 1, sentElsewhere: 0 } }], missing: [], paired: true, cardsPerNode: 2 }
+    : name === 'sessions' ? { sessions: [], unresolved: [] } : structuredClone(state));
+  try {
+    const front = f.container.querySelector<HTMLTextAreaElement>('textarea[data-keep]')!;
+    front.value = 'Unsaved front'; front.dispatchEvent(new f.window.Event('input'));
+    waiting = 1;
+    state.cards.push({ id: 'new', nodeId: 'target:id', kind: 'recall', status: 'draft', front: 'New draft', back: 'Answer', extra: '' });
+    f.button('Refresh graph').click(); await tick();
+    assert.equal(f.container.querySelector('[data-waiting-node="target:id"]'), null);
+    const reads = f.calls.filter(c => c.name === 'snapshot').length;
+    f.button('Review waiting cards').click(); await tick();
+    assert.equal(f.calls.filter(c => c.name === 'snapshot').length, reads + 1);
+    assert.equal(f.window.document.activeElement?.getAttribute('data-waiting-node'), 'target:id');
+    assert.equal(f.container.querySelector<HTMLTextAreaElement>('textarea[data-keep]')!.value, 'Unsaved front');
+  } finally { await f.dispose(); }
+});
+
+test("a background review refresh is retried when a card action finishes as its snapshot arrives", async () => {
+  const state = fixture();
+  state.cards = [{ id: 'sent', nodeId: 'target:id', kind: 'recall', status: 'sent', front: 'Sent card', back: 'Answer', extra: '' }];
+  let reads = 0, releaseSnapshot!: (value: typeof state) => void, finishShow!: () => void;
+  const heldSnapshot = new Promise<typeof state>(resolve => { releaseSnapshot = resolve; });
+  const shown = new Promise<void>(resolve => { finishShow = resolve; });
+  const f = await setup(name => {
+    if (name === 'sessions') return { sessions: [], unresolved: [] };
+    if (name === 'coverageContext') return undefined;
+    if (name === 'snapshot') return ++reads === 2 ? heldSnapshot : structuredClone(state);
+    if (name === 'show') return shown;
+    return undefined;
+  });
+  try {
+    f.button('Refresh generation').click(); await tick();
+    assert.equal(reads, 2);
+    f.button('Show in Anki').click();
+    const older = structuredClone(state);
+    state.cards.push({ id: 'new', nodeId: 'target:id', kind: 'recall', status: 'draft', front: 'New draft', back: 'Answer', extra: '' });
+    finishShow(); await Promise.resolve(); releaseSnapshot(older); await tick();
+    assert.equal(reads, 3, 'the finished card action must see the pending refresh');
+    assert.ok(f.container.querySelector('[data-waiting-node="target:id"]'));
+  } finally { await f.dispose(); }
+});
+
+test("a deferred graph refresh does not overwrite the saved dismissal acknowledgement", async () => {
+  const state = fixture();
+  state.cards = [{ id: 'sent', nodeId: 'other:id', kind: 'recall', status: 'sent', front: 'Sent card', back: 'Answer', extra: '' }];
+  let saved = false, failedReads = 0, finishShow!: () => void;
+  const shown = new Promise<void>(resolve => { finishShow = resolve; });
+  const f = await setup(name => {
+    if (name === 'sessions') return { sessions: [], unresolved: [] };
+    if (name === 'show') return shown;
+    if (name === 'dismissNode') { saved = true; return {}; }
+    if (name === 'coverageContext') {
+      if (saved) { failedReads++; throw new Error('Graph read failed'); }
+      return { nodes: [{ id: 'target:id', name: 'Target', statement: 'Statement', statementHash: 'a'.repeat(64),
+        cards: { waiting: 0, sent: 0, sentElsewhere: 0 }, coverage: { state: 'no-cards', base: 'no-cards', selectable: true, canDismiss: true } }],
+        missing: [], paired: true, cardsPerNode: 2 };
+    }
+    return structuredClone(state);
+  });
+  try {
+    f.button('Show in Anki').click();
+    f.button("Don't card this").click(); await tick();
+    assert.equal(failedReads, 1);
+    assert.match(f.container.textContent!, /Dismissal saved, but the graph refresh failed: Graph read failed/);
+    finishShow(); await tick();
+    assert.equal(failedReads, 2, 'the completed review action releases the deferred refresh');
+    assert.match(f.container.textContent!, /Dismissal saved, but the graph refresh failed: Graph read failed/);
+    assert.match(f.container.textContent!, /Coverage is stale/);
+  } finally { finishShow(); await f.dispose(); }
+});
+
 test("plugin UI registers sidebar/view/settings, saves password without exposing stored key, and warns about localhost", async () => {
   const f = await setup();
   try {
     assert.equal(f.openSidebar(), "bridge");
-    const url = f.container.querySelector("input")!;
+    const url = f.container.querySelector('input[data-keep="url"]') as unknown as HTMLInputElement;
     url.value = "http://localhost:8766";
-    url.dispatchEvent(new f.window.Event("input"));
+    url.dispatchEvent(new f.window.Event("input") as never);
     assert.match(f.container.textContent!, /IPv6/);
     assert.equal(f.container.querySelector('input[type=password]')!.getAttribute("value"), null);
     f.button("Save connection settings").click(); await tick();
@@ -95,7 +183,7 @@ test("plugin UI registers sidebar/view/settings, saves password without exposing
     f.button("Save connection settings").click(); await tick();
     assert.deepEqual(f.calls.at(-1), { name: "settings", input: { url: f.state.settings.url, apiKey: "test-only-key" } });
     assert.equal((f.container.querySelector('input[type=password]') as unknown as HTMLInputElement).value, "");
-    (f.container.querySelector('input[type=checkbox]') as unknown as HTMLInputElement).checked = true;
+    (f.container.querySelector('[data-keep="clear-key"]') as unknown as HTMLInputElement).checked = true;
     f.button("Save connection settings").click(); await tick();
     assert.deepEqual(f.calls.at(-1), { name: "settings", input: { url: f.state.settings.url, apiKey: "" } });
     const settingsContainer = f.window.document.createElement("div");

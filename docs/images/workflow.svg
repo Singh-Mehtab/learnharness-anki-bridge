@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="296" viewBox="0 0 1200 296" role="img" aria-labelledby="title description">
   <title id="title">Anki Bridge workflow and development status</title>
-  <desc id="description">LearnHarness graph selection and in-app draft review and approval are merged in 0.3.0. Session flags feed drafting in 0.4.0, approved by both Sol reviewers. The shared card writer was merged in 0.1.1. Anki delivery through AnkiConnect was merged in 0.2.0.</desc>
+  <desc id="description">LearnHarness graph selection and in-app draft review and approval are merged in 0.3.0. Session flags feed drafting in merged 0.4.0. Coverage, dismissals and no-cards selection are implemented in the 0.5.0 development branch. The shared card writer was merged in 0.1.1. Anki delivery through AnkiConnect was merged in 0.2.0.</desc>
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#64748b"/></marker>
   </defs>
@@ -24,13 +24,13 @@
       <text x="922" y="133">Anki</text>
     </g>
     <g font-size="16" fill="#334155">
-      <text x="52" y="166">Select source nodes</text>
+      <text x="52" y="166">Filter by card coverage</text>
       <text x="342" y="166">Draft with graph context</text>
       <text x="632" y="166">Edit, approve or drop</text>
       <text x="922" y="166">Delivery via AnkiConnect</text>
     </g>
     <g font-size="14" font-weight="600">
-      <text x="52" y="209" fill="#166534">0.3.0 · MERGED</text>
+      <text x="52" y="209" fill="#92400e">0.5.0 · IN REVIEW</text>
       <text x="342" y="209" fill="#166534">0.1.1 · MERGED</text>
       <text x="632" y="209" fill="#166534">0.3.0 · MERGED</text>
       <text x="922" y="209" fill="#166534">0.2.0 · MERGED</text>

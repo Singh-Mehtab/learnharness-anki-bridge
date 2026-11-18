@@ -1,19 +1,22 @@
 import type { PluginActionContext, PluginFrontendContext } from "../sdk/index.d.ts";
-import { defaultSelection, hasCards, latestTeacherTurn, MAX_FLAG_NOTE, uncardedIds } from "./session/flow.ts";
-import type { CardCounts, TeacherTurn } from "./session/flow.ts";
+import { latestTeacherTurn, MAX_FLAG_NOTE } from "./session/flow.ts";
+import type { TeacherTurn } from "./session/flow.ts";
+
+import { CoveragePicker } from "./coverage-ui.ts";
+import type { CoverageRow } from "./coverage-ui.ts";
 
 // Mirrors of the backend's public shapes (src/session/service.ts). The frontend
 // bundle must not import backend modules.
 type FlagStatus = "matched" | "waiting" | "no-nodes" | "missing";
 interface FlagView { id: string; sessionId: string; sessionTitle: string; messageIds: string[]; note: string; flaggedAt: string; status: FlagStatus; nodeIds: string[]; created?: boolean }
-interface SessionNode { id: string; name: string; statement: string; flagged: boolean; flagNotes: string[]; cards: CardCounts }
-interface SessionFlow { session: { id: string; title: string; exists: boolean }; nodes: SessionNode[]; flags: FlagView[]; cardsPerNode: number; paired: boolean }
+interface SessionNode extends CoverageRow { flagged: boolean; flagNotes: string[] }
+interface SessionFlow { session: { id: string; title: string; exists: boolean }; nodes: SessionNode[]; flags: FlagView[]; cardsPerNode: number; paired: boolean; pairingWarning?: boolean; missing?: CoverageRow[] }
 interface SessionSummary { id: string; title: string; updatedAt: string; nodeCount: number; flagCount: number; waitingCount: number }
 interface SessionList { sessions: SessionSummary[]; unresolved: FlagView[] }
 
-/** What "Make cards" hands to drafting: one session and the ticked node IDs.
+/** What "Make cards" hands to drafting: one session, ticked node IDs and their backfill subset.
  * The draft panel owns preflight, generation and review from here. */
-export interface DraftRequest { sessionId: string; nodeIds: string[] }
+export interface DraftRequest { sessionId: string; nodeIds: string[]; backfillNodeIds: string[] }
 
 export const FLAG_SHORTCUT = "mod+shift+a";
 
@@ -139,6 +142,9 @@ export function registerSessionActions(ctx: PluginFrontendContext, requests: Ses
 
 export interface SessionPanelOptions {
   requests: SessionRequests;
+  onInvalidateEstimate?: () => void;
+  onCoverageChanged?: () => Promise<void>;
+  reviewWaiting?: (nodeId: string) => void;
   /** Puts these nodes into the draft panel's selection. Without it the Draft button stays disabled. */
   onDraft?: (request: DraftRequest) => void | Promise<void>;
 }
@@ -158,8 +164,25 @@ export function mountSessionFlow(ctx: PluginFrontendContext, container: HTMLElem
   let disposed = false, busy = false, refreshPending = false, refreshTimer: ReturnType<typeof setTimeout> | undefined;
   let list: SessionList | undefined, flow: SessionFlow | undefined;
   let sessionId = options.requests.take();
-  let selected = new Set<string>();
-  const touched = new Set<string>(); // nodes the learner ticked or unticked by hand
+  const coverage = new CoveragePicker({
+    defaults: true,
+    reviewWaiting: options.reviewWaiting,
+    changed: source => {
+      if (source === "user" || coverage.isStale) options.onInvalidateEstimate?.();
+      // A session read can discover extraction or coverage changes before drafting does.
+      if (source === "read") void options.onCoverageChanged?.();
+      if (draft) draft.disabled = !options.onDraft || !coverage.ids.length || coverage.isStale;
+    },
+    mutate: (name, node) => { void run(async () => {
+      try { await ctx.call(name, { nodeId: node.id, statementHash: node.statementHash }); }
+      catch (error) { if (alive()) coverage.markStale(); throw error; }
+      try { await load(); }
+      catch (error) {
+        throw new Error(`${name === "dismissNode" ? "Dismissal" : "Restoration"} saved, but the session refresh failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }); },
+  });
+  let draft: HTMLButtonElement | undefined;
   const alive = () => !disposed && !signal.aborted && !ctx.signal.aborted;
 
   async function run(action: () => Promise<void>, quiet = false): Promise<void> {
@@ -185,17 +208,13 @@ export function mountSessionFlow(ctx: PluginFrontendContext, container: HTMLElem
     try {
       nextList = await ctx.call<SessionList>("sessions");
       if (requested) nextFlow = await ctx.call<SessionFlow>("sessionFlow", { sessionId: requested });
-    } catch (error) { if (requested !== sessionId) return; throw error; }
+    } catch (error) { if (requested !== sessionId) return; coverage.markStale(); throw error; }
     if (!alive() || requested !== sessionId) return;
     feedback.textContent = "";
     const switched = nextFlow?.session.id !== flow?.session.id;
     list = nextList; flow = nextFlow;
-    if (!flow) { selected = new Set(); touched.clear(); return; }
-    if (switched) { touched.clear(); selected = new Set(defaultSelection(flow.nodes)); }
-    else {
-      // Untouched nodes follow current flags; preserve only explicit checkbox choices.
-      selected = new Set(flow.nodes.filter(n => touched.has(n.id) ? selected.has(n.id) : n.flagged).map(n => n.id));
-    }
+    if (!flow) return;
+    coverage.update({ ...flow, pairingWarning: flow.pairingWarning ?? false }, switched);
   }
   function scheduleRefresh(): void {
     if (!alive() || refreshTimer) return;
@@ -213,14 +232,14 @@ export function mountSessionFlow(ctx: PluginFrontendContext, container: HTMLElem
       if (flag.note) item.append(el("p", `Note: ${flag.note}`));
       item.append(el("p", flagStatusText(flag)));
       item.append(button("Remove flag", async () => { await ctx.call("unflag", { id: flag.id }); await load(); }));
-      if (flag.sessionId !== sessionId) item.append(button("Open session", () => { sessionId = flag.sessionId; return load(); }));
+      if (flag.sessionId !== sessionId) item.append(button("Open session", () => { options.onInvalidateEstimate?.(); sessionId = flag.sessionId; return load(); }));
       items.append(item);
     }
     target.append(items);
   }
 
   function render(): void {
-    if (flow?.session.id !== sessionId) { flow = undefined; selected.clear(); touched.clear(); }
+    if (flow?.session.id !== sessionId) { flow = undefined; }
     controls.replaceChildren();
     const picker = el("select");
     picker.append(option("Choose a teaching session", ""));
@@ -230,7 +249,7 @@ export function mountSessionFlow(ctx: PluginFrontendContext, container: HTMLElem
     }
     if (sessionId && !list?.sessions.some(s => s.id === sessionId)) picker.append(option(flow?.session.title || sessionId, sessionId));
     picker.value = sessionId ?? "";
-    picker.onchange = () => { sessionId = picker.value || undefined; void run(load); };
+    picker.onchange = () => { options.onInvalidateEstimate?.(); sessionId = picker.value || undefined; void run(load); };
     const pickLabel = el("label"); pickLabel.append(el("span", "Session"), picker);
     controls.append(pickLabel, button("Refresh", load));
 
@@ -248,55 +267,22 @@ export function mountSessionFlow(ctx: PluginFrontendContext, container: HTMLElem
       controls.append(el("p", flow.flags.some(f => f.status === "waiting")
         ? "No ideas extracted from this session yet. Extraction runs after each reply settles; press Refresh to check again."
         : "No graph ideas come from this session."));
-      return;
+      if (!flow.missing?.length) return;
     }
-    const uncarded = uncardedIds(nodes), flagged = defaultSelection(nodes);
-    const setSelection = (ids: string[]) => { selected = new Set(ids); for (const n of nodes) touched.add(n.id); };
-    const bar = el("div");
-    controls.append(el("h4", `Ideas from this session (${nodes.length})`), bar);
-    const clear = button("Clear selection", () => setSelection([]), !selected.size);
-    bar.append(
-      button(`Select flagged: ${plural(flagged.length, "idea")}`, () => setSelection(flagged), !flagged.length),
-      button(`Select all uncarded: ${plural(uncarded.length, "idea")}, about ${plural(uncarded.length * flow.cardsPerNode, "card")}`, () => setSelection(uncarded), !uncarded.length),
-      clear,
-    );
-    const rows = el("ul", undefined, "anki-bridge-nodes");
-    for (const node of nodes) {
-      const carded = hasCards(node.cards);
-      const row = el("li", undefined, carded ? "anki-bridge-carded" : undefined);
-      const box = el("input"); box.type = "checkbox"; box.checked = selected.has(node.id);
-      box.onchange = () => { touched.add(node.id); if (box.checked) selected.add(node.id); else selected.delete(node.id); summary.textContent = summaryText(); draft.disabled = !canDraft(); clear.disabled = !selected.size; };
-      const label = el("label", undefined, "anki-bridge-node");
-      const body = el("span");
-      body.append(el("strong", node.name), el("span", node.statement, "anki-bridge-muted"));
-      const badges: string[] = [];
-      if (node.flagged) badges.push("Flagged");
-      if (node.cards.sent) badges.push(`${node.cards.sent} sent`);
-      if (node.cards.waiting) badges.push(`${node.cards.waiting} not yet sent`);
-      if (node.cards.sentElsewhere) badges.push(`${node.cards.sentElsewhere} sent to another profile`);
-      if (badges.length) body.append(el("span", badges.join(" · "), "anki-bridge-badges"));
-      for (const n of node.flagNotes) body.append(el("span", `Note: ${n}`, "anki-bridge-muted"));
-      label.append(box, body);
-      row.append(label);
-      rows.append(row);
-    }
-    const summaryText = () => `Selected: ${plural(selected.size, "idea")}, up to ${plural(selected.size * flow!.cardsPerNode, "card")}.`;
-    const canDraft = () => !!options.onDraft && selected.size > 0;
-    const summary = el("p", summaryText());
-    const draft = button("Draft cards for selected", async () => {
-      if (!options.onDraft || !flow) return;
-      const ids = nodes.map(n => n.id).filter(id => selected.has(id));
-      await options.onDraft({ sessionId: flow.session.id, nodeIds: ids });
-    }, !canDraft());
-    controls.append(rows, summary, draft);
+    controls.append(el("h4", `Ideas from this session (${nodes.length})`), coverage.root);
+    draft = button("Draft cards for selected", async () => {
+      if (!options.onDraft || !flow || coverage.isStale) return;
+      await options.onDraft({ sessionId: flow.session.id, nodeIds: coverage.ids, backfillNodeIds: coverage.backfillNodeIds });
+    }, !options.onDraft || !coverage.ids.length || coverage.isStale);
+    controls.append(draft);
   }
 
   const unsubscribers = [
     options.requests.subscribe(id => {
-      options.requests.take(); sessionId = id;
+      options.requests.take(); options.onInvalidateEstimate?.(); sessionId = id;
       if (busy) refreshPending = true; else void run(load);
     }),
-    ctx.onResync(() => { void run(load, true); }),
+    ctx.onResync(() => { if (busy) refreshPending = true; else void run(load, true); }),
     // Extraction has no completion event. Phase changes are a hint to re-check
     // waiting flags; Refresh remains the reliable path.
     ctx.onAppEvent(event => {

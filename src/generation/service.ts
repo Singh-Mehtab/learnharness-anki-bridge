@@ -13,10 +13,11 @@ import type { Batch } from '../writer/input.ts';
 import type { WriterInput, WriterResult } from '../writer/types.ts';
 import { validGenerationSettings } from './types.ts';
 import type { Generation, GenerationSettings, GenerationTask, SourceSnapshot } from './types.ts';
+import { graphCoverage, statementHash } from '../coverage/service.ts';
+import { MAX_SELECTED_NODES } from '../coverage/flow.ts';
 
 const WORKER = 'manual-card-writer';
 const digest = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
-const statementHash = (value: string) => createHash('sha256').update(value).digest('hex');
 const errorText = (e: unknown) => e instanceof Error ? e.message : String(e);
 function object(v: unknown): Record<string, unknown> {
   if (!v || typeof v !== 'object' || Array.isArray(v)) throw new Error('Expected an input object.');
@@ -26,8 +27,13 @@ function keys(v: Record<string, unknown>, allowed: string[]): void {
   if (Object.keys(v).some(k => !allowed.includes(k))) throw new Error('Unsupported generation input.');
 }
 function nodeIds(v: unknown): string[] {
-  if (!Array.isArray(v) || !v.length || v.length > 1000 || v.some(id => typeof id !== 'string' || !id) || new Set(v).size !== v.length) throw new Error('Choose 1–1000 distinct nodes.');
+  if (!Array.isArray(v) || !v.length || v.length > MAX_SELECTED_NODES || v.some(id => typeof id !== 'string' || !id) || new Set(v).size !== v.length) throw new Error('Choose 1–1000 distinct nodes.');
   return v;
+}
+function backfillIds(value: unknown, ids: readonly string[]): string[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.length > MAX_SELECTED_NODES || new Set(value).size !== value.length || value.some(id => typeof id !== 'string' || !ids.includes(id))) throw new Error('Backfill targets must be a distinct subset of the selected nodes.');
+  return ids.filter(id => value.includes(id));
 }
 interface Prepared {
   binding: string;
@@ -37,7 +43,7 @@ interface Prepared {
   sources: SourceSnapshot[];
   skipped: { nodeId: string; reason: string }[];
 }
-interface Preflight { id: string; nodeIds: string[]; prepared: Prepared }
+interface Preflight { id: string; nodeIds: string[]; backfillNodeIds: string[]; prepared: Prepared }
 
 /** No model I/O here: only the host worker service starts bounded, explicitly confirmed calls. */
 export class GenerationService {
@@ -57,6 +63,8 @@ export class GenerationService {
     if (ctx.signal.aborted) this.abort(); else ctx.signal.addEventListener('abort', this.abort, { once: true });
     delivery.sourceStatements = () => new Map(ctx.learning.graph().propositions.map(n => [n.id, n.statement]));
   }
+  /** Reversible coverage/pairing edits must not revive an earlier confirmation. */
+  invalidatePreflights(): void { this.preflights.clear(); }
   private active(): void {
     if (this.closed || this.lifetime.signal.aborted) throw new Error('Anki Bridge is disabled.');
   }
@@ -129,7 +137,7 @@ export class GenerationService {
         stored.taskId = worker.id; stored.status = 'applied'; stored.result = result; delete stored.error;
     });
   }
-  private async prepare(ids: string[]): Promise<Prepared> {
+  private async prepare(ids: string[], backfillNodeIds: string[]): Promise<Prepared> {
     this.active();
     const settings = this.store.snapshot().generationSettings;
     if (!settings.model) throw new Error('Choose a model explicitly before preflight.');
@@ -138,11 +146,17 @@ export class GenerationService {
     const model = catalog.models.find(m => m.provider === settings.model!.provider && m.id === settings.model!.id);
     if (!model || !catalog.providers.some(p => p.id === model.provider && p.keyPresent)) throw new Error('The selected model is unavailable. Choose an available model; no fallback is used.');
     const graph = this.ctx.learning.graph();
-    const cards = this.store.snapshot().cards.filter(c => c.status !== 'dropped');
+    const state = this.store.snapshot(), coverage = graphCoverage(graph, state);
+    const cards = state.cards.filter(c => c.status !== 'dropped');
+    for (const id of ids) {
+      const node = coverage.nodes.find(n => n.id === id);
+      if (node && !node.coverage.selectable) throw new Error(`Node ${id} is dismissed, generating, or has unresolved delivery. Restore or settle it before generating.`);
+      if (node && backfillNodeIds.includes(id) && !node.coverage.uncarded) throw new Error(`Backfill target ${id} is no longer uncarded. Refresh and explicitly reselect it for another angle.`);
+    }
     const sources: SourceSnapshot[] = [];
     for (const id of ids) {
       const n = graph.propositions.find(n => n.id === id);
-      if (!n) throw new Error(`Selected node is missing: ${id}. Refresh the picker.`);
+      if (!n) throw new Error(`Selected node is missing from the returned graph snapshot: ${id}. The host may have returned incomplete data. Refresh the picker.`);
       const sessionId = n.provenance?.find(p => p.messageId)?.chatId ?? '';
       const session = sessionId ? this.ctx.learning.getSession(sessionId) : null;
       sources.push({ nodeId: id, name: n.name, statement: n.statement, statementHash: statementHash(n.statement),
@@ -171,16 +185,19 @@ export class GenerationService {
       if (current.targets.length) batches.push(batch(current));
     }
     // Bind exactly what would be sent and spent: prompts, limits, model entry and skips.
-    return { binding: digest({ batches, skipped, settings, model, sources }), settings, model, batches, skipped, sources };
+    const coverageBinding = { destination: state.destination, nodes: coverage.nodes.filter(n => ids.includes(n.id)),
+      dismissals: state.dismissals.filter(d => ids.includes(d.nodeId)) };
+    return { binding: digest({ batches, skipped, settings, model, sources, coverageBinding, backfillNodeIds }), settings, model, batches, skipped, sources };
   }
-  private async preflight(ids: string[]): Promise<unknown> {
-    const prepared = await this.prepare(ids), id = randomUUID();
+  private async preflight(ids: string[], backfillNodeIds: string[] = []): Promise<unknown> {
+    ids = nodeIds(ids); backfillNodeIds = backfillIds(backfillNodeIds, ids);
+    const prepared = await this.prepare(ids, backfillNodeIds), id = randomUUID();
     // Preflights are ephemeral confirmations, never autonomous durable work.
     if (this.preflights.size >= 32) this.preflights.delete(this.preflights.keys().next().value!);
-    this.preflights.set(id, { id, nodeIds: ids, prepared });
+    this.preflights.set(id, { id, nodeIds: ids, backfillNodeIds, prepared });
     const inputTokens = prepared.batches.reduce((n, b) => n + b.inputTokens, 0);
     const outputTokens = prepared.batches.reduce((n, b) => n + b.outputAllowance, 0);
-    return { preflightId: id, nodeIds: ids, nodeCount: ids.length, maximumCards: prepared.batches.reduce((n, b) => n + b.input.targets.length * prepared.settings.cardsPerNode, 0),
+    return { preflightId: id, nodeIds: ids, backfillNodeIds, nodeCount: ids.length, maximumCards: prepared.batches.reduce((n, b) => n + b.input.targets.length * prepared.settings.cardsPerNode, 0),
       inputTokens, outputTokens, estimatedCost: prepared.model.cost ? (inputTokens * prepared.model.cost.input + outputTokens * prepared.model.cost.output) / 1_000_000 : null,
       model: prepared.settings.model, settings: prepared.settings, skipped: prepared.skipped,
       batches: prepared.batches.map(b => ({ nodeIds: b.input.targets.map(t => t.nodeId), inputTokens: b.inputTokens, outputAllowance: b.outputAllowance })) };
@@ -193,7 +210,7 @@ export class GenerationService {
       if (name === 'generationContext') {
         keys(value, []);
         const catalog = await this.ctx.inference.catalog(); this.active();
-        return { nodes: this.ctx.learning.graph().propositions.map(({ id, name, statement }) => ({ id, name, statement })), catalog };
+        return { ...graphCoverage(this.ctx.learning.graph(), this.store.snapshot()), catalog };
       }
       if (name === 'generationSettings') {
         keys(value, ['cardsPerNode', 'enabledKinds', 'model']);
@@ -201,24 +218,26 @@ export class GenerationService {
         if (!validGenerationSettings(settings)) throw new Error('Choose 1–4 cards per node, one or more core kinds, and an explicit model or null.');
         await this.delivery.save(s => { s.generationSettings = settings; });
       } else if (name === 'preflight') {
-        keys(value, ['nodeIds']); return this.preflight(nodeIds(value.nodeIds));
+        keys(value, ['nodeIds', 'backfillNodeIds']);
+        const ids = nodeIds(value.nodeIds); return this.preflight(ids, backfillIds(value.backfillNodeIds, ids));
       } else if (name === 'retryGeneration') {
         keys(value, ['id']); const g = this.generation(value.id);
         if (g.status === 'running') throw new Error('Cancel or finish this generation before retrying.');
         const ids = g.tasks.filter(t => t.status !== 'applied').flatMap(t => t.input.targets.map(n => n.nodeId));
         if (!ids.length) throw new Error('No unfinished tasks to retry.');
-        return this.preflight([...new Set(ids)]);
+        const selected = [...new Set(ids)];
+        return this.preflight(selected, backfillIds((g.backfillNodeIds ?? []).filter(id => selected.includes(id)), selected));
       } else if (name === 'generate') {
         keys(value, ['preflightId']);
         if (typeof value.preflightId !== 'string') throw new Error('Confirm a valid preflight ID.');
-        if (this.store.snapshot().generations.some(g => g.id === value.preflightId)) return this.delivery.snapshot();
+        if (this.store.snapshot().generations.some(g => g.id === value.preflightId)) return this.delivery.snapshot(false);
         if (this.store.snapshot().generations.some(g => g.status === 'running')) throw new Error('A generation is already running.');
         const p = this.preflights.get(value.preflightId);
         if (!p) throw new Error('Preflight expired. Run preflight again.');
-        const fresh = await this.prepare(p.nodeIds);
+        const fresh = await this.prepare(p.nodeIds, p.backfillNodeIds);
         if (fresh.binding !== p.prepared.binding) throw new Error('Preflight is stale. Review a new preflight before generating.');
         if (!fresh.batches.length) throw new Error('No targets fit this preflight. Review the skipped reasons.');
-        const g: Generation = { id: p.id, createdAt: new Date().toISOString(), status: 'running', nodeIds: p.nodeIds,
+        const g: Generation = { id: p.id, createdAt: new Date().toISOString(), status: 'running', nodeIds: p.nodeIds, backfillNodeIds: p.backfillNodeIds,
           settings: fresh.settings, skipped: fresh.skipped,
           tasks: fresh.batches.map(b => ({ requestId: randomUUID(), status: 'pending', input: b.input, outputAllowance: b.outputAllowance,
             sources: fresh.sources.filter(s => b.input.targets.some(t => t.nodeId === s.nodeId)) })) };
@@ -232,7 +251,7 @@ export class GenerationService {
         this.drive(g.id);
       } else if (name === 'cancelGeneration') {
         keys(value, ['id']); const g = this.generation(value.id);
-        if (g.status !== 'running') return this.delivery.snapshot();
+        if (g.status !== 'running') return this.delivery.snapshot(false);
         for (const t of g.tasks.filter(t => ['pending', 'running'].includes(t.status))) {
           const w = this.findWorker(t);
           if (w?.status === 'succeeded') await this.apply(g.id, t.requestId, w);
@@ -241,7 +260,7 @@ export class GenerationService {
         }
         await this.delivery.save(s => { s.generations.find(x => x.id === g.id)!.status = 'cancelled'; });
       } else throw new Error('Unknown generation operation.');
-      return this.delivery.snapshot();
+      return this.delivery.snapshot(false);
     });
   }
   private drive(id: string): void {

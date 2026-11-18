@@ -58,23 +58,27 @@ test('session selection reaches drafting, clears estimates, and stays current wi
     assert.match(container.textContent!, /1 node selected/);
     button('Estimate generation').click();
     await until(() => [...container.querySelectorAll('button')].some(b => b.textContent === 'Confirm and generate'), 'first estimate');
-    assert.deepEqual(calls.filter(c => c.name === 'preflight').at(-1)?.input, { nodeIds: ['n_b'] });
+    assert.deepEqual(calls.filter(c => c.name === 'preflight').at(-1)?.input, { nodeIds: ['n_b'], backfillNodeIds: [] });
     assert.ok(button('Confirm and generate'));
-    button('Select all uncarded: 2 ideas, about 4 cards').click(); await settle();
+    button('Select all uncarded: 2 ideas, up to 4 cards').click(); await settle();
     button('Draft cards for selected').click(); await settle();
     assert.match(container.textContent!, /2 nodes selected/);
     assert.equal([...container.querySelectorAll('button')].some(b => b.textContent === 'Confirm and generate'), false);
     button('Estimate generation').click();
     await until(() => calls.filter(c => c.name === 'preflight').length === 2, 'second estimate');
-    assert.deepEqual(calls.filter(c => c.name === 'preflight').at(-1)?.input, { nodeIds: ['n_a', 'n_b'] });
+    assert.deepEqual(calls.filter(c => c.name === 'preflight').at(-1)?.input, { nodeIds: ['n_a', 'n_b'], backfillNodeIds: ['n_a', 'n_b'] });
     assert.equal(calls.some(c => c.name === 'generate'), false);
     assert.equal(f.host.workers.starts.length, 0);
     assert.doesNotMatch(container.textContent!, /connects to the 0\.3\.0/);
 
     const cap = [...container.querySelectorAll('label')].find(l => l.textContent?.includes('Maximum cards per node'))!.querySelector('input')!;
     cap.value = '4'; cap.dispatchEvent(new window.Event('input'));
+    button('Estimate generation').click();
+    await until(() => [...container.querySelectorAll('button')].some(b => b.textContent === 'Confirm and generate'), 'unsaved cap estimate with an active session');
+    assert.match(container.textContent!, /up to 8 cards in 1 model call/);
     button('Save drafting defaults').click();
-    await until(() => container.textContent!.includes('Select all uncarded: 2 ideas, about 8 cards'), 'session cap refresh');
+    await until(() => ![...container.querySelectorAll('button')].some(b => b.textContent === 'Confirm and generate'), 'saved defaults invalidate the prior estimate');
+    await until(() => container.textContent!.includes('Select all uncarded: 2 ideas, up to 8 cards'), 'session cap refresh');
     button('Estimate generation').click();
     await until(() => [...container.querySelectorAll('button')].some(b => b.textContent === 'Confirm and generate'), 'new cap estimate');
     button('Confirm and generate').click();
@@ -85,7 +89,7 @@ test('session selection reaches drafting, clears estimates, and stays current wi
       await settle(); // Include the panel's normal polling interval, not a manual refresh.
       return container.querySelectorAll('.anki-bridge-session .anki-bridge-carded').length === 2;
     }, 'completed drafts update session counts');
-    assert.match(container.querySelector('.anki-bridge-session')!.textContent!, /Select all uncarded: 0 ideas, about 0 cards/);
+    assert.match(container.querySelector('.anki-bridge-session')!.textContent!, /Select all uncarded: 0 ideas, up to 0 cards/);
     assert.equal(container.querySelectorAll('.anki-bridge-session .anki-bridge-badges').length, 2);
 
     // Extraction can add an idea after both panels have mounted.
@@ -124,7 +128,7 @@ test('schema 2 migration preserves a completed generation, applied result, and g
     await writeFile(file, JSON.stringify(v2));
     const store = await StateStore.open(f.directory);
     try {
-      assert.deepEqual(store.snapshot(), { ...v2, schemaVersion: 3, flags: [] });
+      assert.deepEqual(store.snapshot(), { ...v2, schemaVersion: 4, flags: [], dismissals: [] });
       assert.equal(store.snapshot().generations[0].tasks[0].status, 'applied');
       assert.equal(store.snapshot().cards[0].sourceSnapshot?.statement, f.host.nodes[0].statement);
     } finally { await store.close(); }

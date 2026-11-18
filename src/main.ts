@@ -1,5 +1,6 @@
 import type { PluginFrontendContext } from "../sdk/index.d.ts";
 import { mountDrafting } from "./drafting-ui.ts";
+import { isWaitingCard } from "./coverage/flow.ts";
 import { mountSessionFlow, registerSessionActions, SessionRequests } from "./session-ui.ts";
 
 interface Destination { url: string; profile: string }
@@ -23,6 +24,7 @@ interface Card {
   sourceStatement?: string;
   sourceChanged?: boolean;
   sourceMissing?: boolean;
+  sourceUnavailable?: boolean;
 }
 interface Snapshot {
   settings: { url: string; lastDeck: string; hasApiKey: boolean };
@@ -133,8 +135,14 @@ function mount(ctx: PluginFrontendContext, container: HTMLElement, signal: Abort
       if (refreshPending && alive()) void backgroundRefresh();
     }
   }
-  /** Background drafts arrive while the user may be typing. Never skip a refresh, and never
-   * drop unsaved form input, open sections or the caret when re-rendering for one. */
+  // A snapshot can arrive while the learner is editing. Keep unsaved inputs,
+  // open sections, and the caret when updating the review list.
+  function applyReviewSnapshot(fresh: Snapshot): void {
+    state = fresh;
+    const kept = captureForm();
+    render();
+    restoreForm(kept);
+  }
   let refreshPending = false;
   async function backgroundRefresh(): Promise<void> {
     if (!alive()) return;
@@ -143,12 +151,10 @@ function mount(ctx: PluginFrontendContext, container: HTMLElement, signal: Abort
     try {
       const fresh = await ctx.call<Snapshot>("snapshot");
       if (!alive()) return;
+      // Set the flag before yielding so the active action sees it on completion.
       if (busy) { refreshPending = true; return; }
-      state = fresh;
-      const kept = captureForm();
-      render();
-      restoreForm(kept);
-      await sessionPanel?.refresh();
+      applyReviewSnapshot(fresh);
+      await sessionPanel?.refresh(); await draftingPanel?.refresh();
     } catch { refreshPending = true; }
   }
   interface Kept { values: Map<string, { value: string; checked: boolean }>; open: Set<string>; focus?: { key: string; start: number | null; end: number | null } }
@@ -188,11 +194,11 @@ function mount(ctx: PluginFrontendContext, container: HTMLElement, signal: Abort
   async function snapshotAction(name: string, input?: unknown): Promise<void> {
     try {
       const next = await ctx.call<Snapshot>(name, input);
-      if (alive()) { state = next; await sessionPanel?.refresh(); }
+      if (alive()) { state = next; await sessionPanel?.refresh(); await draftingPanel?.refresh(); }
     } catch (error) {
       if (name === "send" && alive()) {
         // A failed send may still have persisted per-card results.
-        try { const fresh = await ctx.call<Snapshot>("snapshot"); if (alive()) { state = fresh; render(); await sessionPanel?.refresh(); } } catch { /* Preserve the send error. */ }
+        try { const fresh = await ctx.call<Snapshot>("snapshot"); if (alive()) { state = fresh; render(); await sessionPanel?.refresh(); await draftingPanel?.refresh(); } } catch { /* Preserve the send error. */ }
       }
       throw error;
     }
@@ -314,6 +320,10 @@ function mount(ctx: PluginFrontendContext, container: HTMLElement, signal: Abort
     if (!state.cards.some(card => card.status !== "dropped")) controls.append(element("p", "No cards to review yet. Select graph nodes above, or write a card by hand."));
     for (const card of state.cards.filter(card => card.status !== "dropped")) {
       const row = element("article");
+      if (card.nodeId && isWaitingCard(card)) {
+        row.dataset.waitingNode = card.nodeId;
+        row.tabIndex = -1;
+      }
       row.append(element("h4", `${card.kind} · ${card.status}`));
       if (card.nodeName || card.sessionName) row.append(element("p", [card.nodeName, card.sessionName].filter(Boolean).join(" / ")));
       if (card.lastError) row.append(element("p", `Error: ${card.lastError}`));
@@ -330,7 +340,8 @@ function mount(ctx: PluginFrontendContext, container: HTMLElement, signal: Abort
       if (card.sourceStatement) {
         const source = element("aside");
         source.append(element("h5", "Source at drafting"), element("p", card.sourceStatement));
-        if (card.sourceMissing) source.append(element("p", "Source node is missing. Check this card before approving."));
+        if (card.sourceUnavailable) source.append(element("p", "Current source is unavailable. Refresh cards to check it."));
+        else if (card.sourceMissing) source.append(element("p", "Source node is missing. Check this card before approving."));
         else if (card.sourceChanged) source.append(element("p", "Source has changed since drafting. Check this card against the graph."));
         columns.append(source);
       }
@@ -382,12 +393,34 @@ function mount(ctx: PluginFrontendContext, container: HTMLElement, signal: Abort
   }
   const unsubscribe = ctx.onResync(() => { void run(refresh); });
   void run(refresh);
-  const draftingPanel = settingsOnly ? undefined : mountDrafting(ctx, drafting, signal, backgroundRefresh);
+  const reviewWaiting = async (nodeId: string) => {
+    const focusWaiting = () => {
+      const row = [...controls.querySelectorAll<HTMLElement>("[data-waiting-node]")].find(row => row.dataset.waitingNode === nodeId);
+      if (!row) return false;
+      row.scrollIntoView?.({ block: "start" }); row.focus();
+      return true;
+    };
+    if (!alive() || focusWaiting()) return;
+    const waitMessage = "Wait for the current card action to finish, then try again.";
+    if (busy) { feedback.textContent = waitMessage; return; }
+    try {
+      const fresh = await ctx.call<Snapshot>("snapshot");
+      if (!alive()) return;
+      if (busy) { feedback.textContent = waitMessage; return; }
+      applyReviewSnapshot(fresh);
+      feedback.textContent = focusWaiting() ? "" : "No waiting cards for this node in the review list.";
+    } catch (error) {
+      if (alive()) feedback.textContent = `Could not refresh the review list: ${error instanceof Error ? error.message : String(error)}`;
+    }
+  };
+  const draftingPanel = settingsOnly ? undefined : mountDrafting(ctx, drafting, signal, backgroundRefresh, reviewWaiting);
   sessionPanel = !settingsOnly && requests && draftingPanel ? mountSessionFlow(ctx, sessionHost, signal, {
-    requests,
+    requests, reviewWaiting,
+    onInvalidateEstimate: () => draftingPanel.invalidateEstimate(),
+    onCoverageChanged: () => draftingPanel.refresh(),
     // Replaces the draft selection and clears any estimate; the learner still estimates and confirms.
-    onDraft: async ({ nodeIds }) => {
-      await draftingPanel.select(nodeIds);
+    onDraft: async ({ nodeIds, backfillNodeIds }) => {
+      await draftingPanel.select(nodeIds, backfillNodeIds);
       if (alive()) { drafting.scrollIntoView?.({ block: "start" }); drafting.querySelector<HTMLElement>("button, input")?.focus(); }
     },
   }) : undefined;
