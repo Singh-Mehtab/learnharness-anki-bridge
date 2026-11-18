@@ -136,7 +136,9 @@ function mount(ctx: PluginFrontendContext, container: HTMLElement, signal: Abort
       }
     } catch (error) {
       if (alive()) {
-        if (!state) render();
+        // The action may have redrawn before failing; nothing was consumed, so put typing back.
+        render();
+        if (kept) restoreForm(kept);
         feedback.textContent = error instanceof Error ? error.message : String(error);
       }
     } finally {
@@ -148,29 +150,35 @@ function mount(ctx: PluginFrontendContext, container: HTMLElement, signal: Abort
   // A snapshot can arrive while the learner is editing. Keep unsaved inputs,
   // open sections, and the caret when updating the review list.
   function applyReviewSnapshot(fresh: Snapshot): void {
-    // A different saved URL makes the last connection test describe another endpoint.
-    const urlChanged = !!state && fresh.settings.url !== state.settings.url;
-    if (urlChanged) connection = undefined;
-    state = fresh;
+    setState(fresh);
     const kept = captureForm();
-    // A typed key belongs to the URL it was typed beside. If the saved URL changed
-    // and this view's URL field was untouched, the field adopts the new URL, so drop the key.
-    if (urlChanged && !kept.values.has("url")) { kept.values.delete("api-key"); kept.values.delete("clear-key"); }
     render();
     restoreForm(kept);
   }
-  let refreshPending = false, actions = 0, reads = 0, consumed: string[] = [];
-  /** Reads a snapshot for background use. Returns 'busy' if an action is running, or
-   * 'stale' if a newer read started. Rereads if an action ran while it was in flight. */
-  async function readSnapshot(): Promise<Snapshot | "busy" | "stale"> {
+  /** A different saved URL makes the last connection test describe another endpoint. */
+  function setState(next: Snapshot): void {
+    if (state && next.settings.url !== state.settings.url) connection = undefined;
+    state = next;
+  }
+  let refreshPending = false, actions = 0, consumed: string[] = [];
+  let reading: Promise<Snapshot | "busy"> | undefined, queuedRead: Promise<Snapshot | "busy"> | undefined;
+  async function fetchSnapshot(): Promise<Snapshot | "busy"> {
     for (;;) {
-      const read = ++reads, started = actions;
+      const started = actions;
       const fresh = await ctx.call<Snapshot>("snapshot");
       // Set the flag in this tick: the active action's finally may run before our caller resumes.
       if (busy) { refreshPending = true; return "busy"; }
-      if (read !== reads) return "stale";
+      // An action ran while this read was in flight; its result may be newer.
       if (started === actions) return fresh;
     }
+  }
+  /** Background reads run one at a time. A caller arriving during a read waits for one
+   * that starts after it, so every caller gets a snapshot at least as new as its request,
+   * and callers resume in read order. Returns 'busy' if an action is running. */
+  function readSnapshot(): Promise<Snapshot | "busy"> {
+    if (!reading) { reading = fetchSnapshot().finally(() => { reading = undefined; }); return reading; }
+    queuedRead ??= reading.catch(() => undefined).then(() => { queuedRead = undefined; return readSnapshot(); });
+    return queuedRead;
   }
   async function backgroundRefresh(): Promise<void> {
     if (!alive()) return;
@@ -178,7 +186,7 @@ function mount(ctx: PluginFrontendContext, container: HTMLElement, signal: Abort
     refreshPending = false;
     try {
       const fresh = await readSnapshot();
-      if (!alive() || fresh === "stale" || fresh === "busy") return;
+      if (!alive() || fresh === "busy") return;
       applyReviewSnapshot(fresh);
       await sessionPanel?.refresh(); await draftingPanel?.refresh();
     } catch (error) {
@@ -186,7 +194,7 @@ function mount(ctx: PluginFrontendContext, container: HTMLElement, signal: Abort
       if (alive()) feedback.textContent = `Could not refresh: ${error instanceof Error ? error.message : String(error)}`;
     }
   }
-  interface Kept { values: Map<string, { value: string; checked: boolean }>; open: Set<string>; focus?: { key: string; start: number | null; end: number | null } }
+  interface Kept { values: Map<string, { value: string; checked: boolean }>; open: Set<string>; url?: string; focus?: { key: string; start: number | null; end: number | null } }
   /** Input values as last rendered; only inputs the learner changed since then are kept. */
   let rendered = new Map<string, { value: string; checked: boolean }>();
   function formValues(): Map<string, { value: string; checked: boolean }> {
@@ -206,14 +214,20 @@ function mount(ctx: PluginFrontendContext, container: HTMLElement, signal: Abort
     const active = document.activeElement as HTMLInputElement | null;
     const focus = active?.dataset?.keep && controls.contains(active)
       ? { key: active.dataset.keep, start: active.selectionStart ?? null, end: active.selectionEnd ?? null } : undefined;
-    return { values, open, focus };
+    return { values, open, url: urlField()?.value, focus };
   }
+  const urlField = () => controls.querySelector<HTMLInputElement>('[data-keep="url"]');
   function restoreForm(kept: Kept): void {
+    // A typed key belongs to the URL shown beside it. If the URL this restore leaves in
+    // the field differs (for example, an untouched field adopted a newly saved URL), drop it.
+    const finalUrl = kept.values.get("url")?.value ?? urlField()?.value;
+    if (finalUrl?.trim() !== kept.url?.trim()) { kept.values.delete("api-key"); kept.values.delete("clear-key"); }
     for (const node of controls.querySelectorAll<HTMLElement>("[data-keep]")) {
       const key = node.dataset.keep!;
       if (node.tagName === "DETAILS") { (node as HTMLDetailsElement).open = kept.open.has(key); continue; }
       const saved = kept.values.get(key), input = node as HTMLInputElement;
-      if (!saved) continue;
+      // Read-only fields (for example a card sent from another view) show saved data only.
+      if (!saved || input.readOnly) continue;
       if (input.type === "checkbox") input.checked = saved.checked;
       else if (input.value !== saved.value) { input.value = saved.value; const view = input.ownerDocument.defaultView as (Window & typeof globalThis) | null; input.dispatchEvent(new (view?.Event ?? Event)("input")); }
     }
@@ -233,11 +247,11 @@ function mount(ctx: PluginFrontendContext, container: HTMLElement, signal: Abort
     try {
       const next = await ctx.call<Snapshot>(name, input);
       if (name === "pair" || name === "settings") for (const peer of peers) if (peer !== refreshFromPeer) peer();
-      if (alive()) { state = next; await sessionPanel?.refresh(); await draftingPanel?.refresh(); }
+      if (alive()) { setState(next); await sessionPanel?.refresh(); await draftingPanel?.refresh(); }
     } catch (error) {
       if (name === "send" && alive()) {
         // A failed send may still have persisted per-card results.
-        try { const fresh = await ctx.call<Snapshot>("snapshot"); if (alive()) { state = fresh; render(); await sessionPanel?.refresh(); await draftingPanel?.refresh(); } } catch { /* Preserve the send error. */ }
+        try { const fresh = await ctx.call<Snapshot>("snapshot"); if (alive()) { setState(fresh); render(); await sessionPanel?.refresh(); await draftingPanel?.refresh(); } } catch { /* Preserve the send error. */ }
       }
       throw error;
     }
@@ -390,6 +404,7 @@ function mount(ctx: PluginFrontendContext, container: HTMLElement, signal: Abort
       if (card.presence) row.append(element("p", `Anki presence: ${card.presence}`));
       if (card.noteId !== undefined) row.append(element("p", `Anki note ID: ${card.noteId}`));
       const editable = ["draft", "approved", "failed"].includes(card.status) && card.noteId === undefined;
+      if (!editable) edits.delete(card.id);
       const cached = (editable && edits.get(card.id)) || card;
       const cardFront = keep(textArea(cached.front), `card-${card.id}-front`), cardBack = keep(textArea(cached.back), `card-${card.id}-back`), cardExtra = keep(textArea(cached.extra), `card-${card.id}-extra`);
       cardFront.readOnly = cardBack.readOnly = cardExtra.readOnly = !editable;
@@ -467,8 +482,7 @@ function mount(ctx: PluginFrontendContext, container: HTMLElement, signal: Abort
       const fresh = await readSnapshot();
       if (!alive()) return;
       if (fresh === "busy") { feedback.textContent = waitMessage; return; }
-      // A newer read has the latest list; it renders before focusing.
-      if (fresh !== "stale") applyReviewSnapshot(fresh);
+      applyReviewSnapshot(fresh);
       feedback.textContent = focusWaiting() ? "" : "No waiting cards for this node in the review list.";
     } catch (error) {
       if (alive()) feedback.textContent = `Could not refresh the review list: ${error instanceof Error ? error.message : String(error)}`;

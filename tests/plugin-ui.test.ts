@@ -313,6 +313,51 @@ test("unrelated actions keep hand-card typing; Create draft consumes it; untouch
   } finally { await f.dispose(); }
 });
 
+test("an action that brings a new saved URL drops a key typed for the old one", async () => {
+  const f = await setup();
+  try {
+    const key = () => f.container.querySelector('[data-keep="api-key"]') as unknown as HTMLInputElement;
+    const url = () => f.container.querySelector('[data-keep="url"]') as unknown as HTMLInputElement;
+    key().value = "typed-for-a";
+    f.state.settings.url = "http://127.0.0.1:8766/";
+    f.button("Refresh cards").click(); await tick();
+    assert.equal(url().value, "http://127.0.0.1:8766/");
+    assert.equal(key().value, "", "the key typed beside the old URL is dropped");
+    key().value = "typed-for-b";
+    f.button("Refresh cards").click(); await tick();
+    assert.equal(key().value, "typed-for-b", "a key typed beside the current URL survives");
+  } finally { await f.dispose(); }
+});
+
+test("a failed action keeps typing, and read-only cards show saved text", async () => {
+  let failConnection = true;
+  const state = fixture();
+  const f = await setup((name) => {
+    if (name === "coverageContext") return undefined;
+    if (name === "sessions") return { sessions: [], unresolved: [] };
+    if (name === "connection") { if (failConnection) throw new Error("Anki is not running"); return { profile: "Throwaway <test>", decks: ["Scratch"] }; }
+    return structuredClone(state);
+  });
+  try {
+    const manual = () => f.container.querySelector('details[data-keep="manual"]') as unknown as HTMLDetailsElement;
+    const front = () => f.container.querySelector('[data-keep="manual-front"]') as unknown as HTMLTextAreaElement;
+    manual().open = true; front().value = "Half-written";
+    f.button("Test connection").click(); await tick(); await tick();
+    assert.match(f.container.textContent!, /Anki is not running/);
+    assert.equal(manual().open, true); assert.equal(front().value, "Half-written");
+    failConnection = false;
+
+    state.cards.push({ id: "c", nodeId: "n", kind: "recall", status: "draft", front: "Saved", back: "Answer", extra: "" });
+    f.button("Refresh cards").click(); await tick();
+    const editor = () => f.container.querySelector('[data-keep="card-c-front"]') as unknown as HTMLTextAreaElement;
+    editor().value = "Unsaved local edit"; editor().dispatchEvent(new f.window.Event("input"));
+    state.cards[0]!.status = "sent"; state.cards[0]!.destination = paired();
+    f.resync(); await tick(); await tick();
+    assert.equal(editor().readOnly, true);
+    assert.equal(editor().value, "Saved", "a card sent elsewhere shows the text that was sent");
+  } finally { await f.dispose(); }
+});
+
 test("a background snapshot taken before an action cannot overwrite that action's result", async () => {
   const state = fixture();
   state.cards = [{ id: "one", nodeId: "n", kind: "recall", status: "draft", front: "Front", back: "Back", extra: "" }];
