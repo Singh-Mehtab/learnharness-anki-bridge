@@ -33,7 +33,7 @@ test("build emits the public API1 layout with real ESM frontend and CJS backend,
     assert.equal(manifest.id, "anki-bridge");
     assert.equal(manifest.apiVersion, 1);
     assert.equal(manifest.minAppVersion, "0.6.1");
-    assert.equal(manifest.version, "0.4.0");
+    assert.equal(manifest.version, "0.5.0");
     const frontend = await import(pathToFileURL(path.join(f.dist, "main.js")).href);
     assert.equal(typeof frontend.activate, "function");
     const backend = createRequire(import.meta.url)(path.join(f.dist, "backend.cjs"));

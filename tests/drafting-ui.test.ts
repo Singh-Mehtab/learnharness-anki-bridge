@@ -302,7 +302,7 @@ for (const filter of ["search", "scope"] as const) test(`a late estimate cannot 
   } finally { await f.close(); }
 });
 
-test("a session handoff resets graph search and scope so an explicit sent node is visible and selected", async () => {
+for (const stale of [false, true]) test(`a session handoff resets graph search and scope with ${stale ? "stale" : "fresh"} coverage`, async () => {
   const f = setup();
   try {
     await tick();
@@ -312,6 +312,11 @@ test("a session handoff resets graph search and scope so an explicit sent node i
     scope.value = "uncarded"; scope.dispatchEvent(new scope.ownerDocument.defaultView.Event("change"));
     const search = f.container.querySelector('input[type=search]') as any;
     search.value = "unrelated"; search.dispatchEvent(new search.ownerDocument.defaultView.Event("input"));
+    if (stale) {
+      const gate = f.holdGraphReload(); const reading = f.panel.refresh();
+      gate.reject(); await reading;
+      assert.match(f.container.textContent!, /Coverage is stale/);
+    }
     await f.panel.select(["n_a"]);
     assert.equal(scope.value, "all"); assert.equal(search.value, "");
     assert.match(f.container.textContent!, /Alpha holds under A/); assert.match(f.container.textContent!, /1 node selected/);

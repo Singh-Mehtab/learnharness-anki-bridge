@@ -2,11 +2,11 @@
 
 An unofficial LearnHarness community plugin in development. The goal is to draft cards from your knowledge graph, let you edit and approve them, and send them to Anki through AnkiConnect. Delivery is one-way; Anki keeps responsibility for reviews and scheduling. This project is not affiliated with Anki or LearnHarness.
 
-**Version 0.4.0, reviewed development build.** Select ideas from a teaching session or the graph, confirm a generation estimate, review and edit the model's drafts, then explicitly approve and send them to Anki. Flag a teaching reply during a session to mark it for cards. There is no public release yet.
+**Version 0.5.0, development build for review.** Select ideas from a teaching session or the graph, confirm a generation estimate, review and edit the model's drafts, then explicitly approve and send them to Anki. Flag a teaching reply during a session to mark it for cards. There is no public release yet.
 
 ![Target workflow: graph selection, card writing, approval, then delivery to Anki. Each step shows its implementation status.](docs/images/workflow.svg)
 
-Graph drafting, review and delivery work with session flags and session-based selection. Coverage filtering is planned for 0.5.0.
+Graph drafting, review and delivery work with session flags and session-based selection. This branch adds coverage labels, reversible dismissals and a shared no-cards filter to the manual and session pickers.
 
 ## What's done
 
@@ -16,7 +16,8 @@ Graph drafting, review and delivery work with session flags and session-based se
 | 0.1.1 | Merged in [PR #1](https://github.com/Singh-Mehtab/learnharness-anki-bridge/pull/1) | Multiline code support, stronger accuracy and answer-leak guidance, soft word targets, a hard generation-call budget, and separate automated/human scoring. 22 tests, typecheck and browser checks passed. Sol approved the code. |
 | 0.2.0 | Merged in [PR #2](https://github.com/Singh-Mehtab/learnharness-anki-bridge/pull/2) | Connection/profile pairing, owned Basic note type, approval, durable delivery, interrupted-send recovery, presence checks and Show in Anki. Final merged head passed 77 tests, build and typecheck. Real AnkiConnect and scratch LearnHarness checks predate the final renderer fixes and main merge. |
 | 0.3.0 | Merged in [PR #5](https://github.com/Singh-Mehtab/learnharness-anki-bridge/pull/5) (`e88f89d`) | Native graph and model pickers, configurable card kinds and cap, confirmed preflight, worker generation, source-aware editable review with previews, bulk approval/send, dropping cards and generation recovery. 100 tests, typecheck and build pass. A scratch LearnHarness run with a local stub model passed seven end-to-end checks and a restart-during-generation check. Not yet tested with a real model in the app, or by sending generated cards to Anki. See [verification and limits](docs/0.3.0-verification.md). |
-| 0.4.0 | Reviewed in [PR #4](https://github.com/Singh-Mehtab/learnharness-anki-bridge/pull/4) | Flag for Anki and Make cards in the teaching top bar, flag notes passed to the writer, waiting-for-extraction status, and session node selection that feeds the draft panel. 137 tests, typecheck and build pass. Both Sol reviewers approved after three rounds each. Earlier scratch LearnHarness checks passed 17 session checks and 9 integrated drafting checks with a local stub. No real model or Anki calls were made. See [verification and limits](docs/0.4.0-verification.md). |
+| 0.4.0 | Merged in [PR #4](https://github.com/Singh-Mehtab/learnharness-anki-bridge/pull/4) | Flag for Anki and Make cards in the teaching top bar, flag notes passed to the writer, waiting-for-extraction status, and session node selection that feeds the draft panel. 137 tests, typecheck and build pass. Both Sol reviewers approved after three rounds each. Earlier scratch LearnHarness checks passed 17 session checks and 9 integrated drafting checks with a local stub. No real model or Anki calls were made. See [verification and limits](docs/0.4.0-verification.md). |
+| 0.5.0 | Implemented on this branch, not merged | Shared destination-aware coverage, changed/missing-source warnings, dismiss/restore, coverage-aware node lists and no-cards backfill. State schema 4 preserves older cards, flags and generation recovery data. See [verification and limits](docs/0.5.0-verification.md). |
 
 ### Card writer
 
@@ -44,13 +45,25 @@ A flag covers every idea LearnHarness extracted from that reply, which is usuall
 
 LearnHarness extracts ideas after a reply settles and doesn't announce when it finishes. Until it does, a flag shows "waiting for extraction". The panel re-checks when extraction activity changes, and Refresh checks on demand. A flag whose reply produced no new ideas says so. Flags are kept until you remove them, including flags on deleted sessions.
 
-**Make cards** opens Anki Bridge on the session. Flagged ideas are ticked, even if they already have cards; carded ideas are greyed. "Select all uncarded" ticks every idea without cards and estimates the card count using your saved cap. **Draft cards for selected** replaces the draft panel's selection and clears any old estimate. It never starts generation. You still choose a model, estimate and confirm.
+**Make cards** opens Anki Bridge on the session. Flagged ideas are ticked, even if they already have cards; carded ideas are greyed. Current dismissals and ideas blocked by unresolved delivery or generation stay unticked. "Select all uncarded" ticks every idea without cards and estimates the card count using your saved cap. **Draft cards for selected** replaces the draft panel's selection and clears any old estimate. It never starts generation. You still choose a model, estimate and confirm.
 
 Flag notes go into the writer prompt. Changing a note makes an open estimate stale, so the backend requires a fresh estimate before generating. The session's card counts update when drafting finishes.
 
 ![Session panel with one flagged idea ticked, in a scratch LearnHarness host](docs/images/0.4.0-session-panel.png)
 
 Screenshot from the integrated scratch-host run with a synthetic session. [Session selection and generation estimate](docs/images/0.4.0-session-drafting.png) shows the same session feeding the draft panel. See [0.4.0 verification](docs/0.4.0-verification.md) and the [session flow contract](docs/session-contract.md).
+
+### Coverage and backfill in 0.5.0
+
+Both pickers show whether an idea has no cards, drafts waiting, sent cards or a current dismissal. Source changes and missing sources have separate warnings. Mixed sent and waiting counts remain visible. Coverage counts cards sent to the paired URL and profile across all decks; cards sent elsewhere carry a warning. These are saved records, not a live Anki presence check. A note deleted in Anki stays deleted and does not automatically return to backfill.
+
+Use "No cards" and search to narrow the list, then "Select all uncarded" to select visible eligible ideas. The displayed card count is a maximum. Dropped-only ideas are eligible again. Changed sources require an explicit choice from "All nodes"; missing sources appear as nonselectable history. Changing the filter or search removes hidden selections and clears the estimate. Opening the graph-wide picker selects nothing by default. Both views enforce a 1,000-node limit without truncating a bulk or default selection. Narrow the search or scope if too many ideas qualify.
+
+Bulk selection retains backfill intent through estimates, confirmation and retries, including after restart. If an idea gains coverage before an estimate or retry, the backend rejects that backfill target. Choose it individually to request another angle; the bridge never silently changes backfill into an explicit request.
+
+"Don't card this" dismisses the current statement across sessions and profiles. It never drops drafts or changes Anki. Review or drop waiting drafts and settle generation or delivery before dismissing an idea. "Restore" makes it selectable again. A changed statement expires its old dismissal and shows a source warning. A model skip does not create a dismissal. The native model picker remains; coverage uses plugin-owned rows because the host knowledge picker cannot accept labels or filters.
+
+Coverage loads without a selected model or live Anki connection. If a graph read fails, the last rows remain visible but stale, and selection is disabled until "Refresh graph" succeeds. Node IDs determine coverage. Alias text cannot transfer old coverage to a recreated idea. "Source missing" means absent from the returned graph snapshot, not confirmed deletion. The host can silently omit unreadable or invalid ledger data, so keep that uncertainty in mind.
 
 ## Development preview
 
@@ -85,7 +98,7 @@ npm run bench:run -- --dry-run --sets humanities,programming
 
 The bench uses the authenticated Claude Code CLI. In-app drafting uses your explicitly selected LearnHarness model and its provider account, including subscription quota on Claude Code routes. The automated tests and dry runs make no model calls.
 
-### Try the 0.3.0 workflow
+### Try the development workflow
 
 For development tests, use a throwaway Anki profile and a LearnHarness checkout with scratch `LH_DATA_DIR` and `LH_AUTH_FILE` paths. Generation consumes your selected provider's quota only after you confirm the preflight.
 
@@ -98,7 +111,7 @@ For development tests, use a throwaway Anki profile and a LearnHarness checkout 
 
    The installer replaces `anki-bridge/dist/` and preserves its sibling `data/`. Discovery leaves the plugin disabled. Enable it in settings; restart LearnHarness after changing already-loaded plugin code.
 3. Open Anki Bridge from the sidebar. Save the AnkiConnect URL and optional API key, then test the connection. The default is `http://127.0.0.1:8765`; check your local port first because another service may use it. Use a separate port for isolated tests.
-4. Choose graph nodes using the knowledge picker and select a configured model. Set the maximum cards per node and enabled kinds. Click Estimate generation and check the node count, maximum cards, number of model calls and token estimate. Estimating calls no model. A dollar estimate appears only when the model catalog supplies pricing. Click Confirm and generate to start. You can close the view while it runs. Cancelling keeps drafts from completed tasks.
+4. Choose graph nodes from All nodes or No cards, optionally narrow them with search, and select a configured model. Set the maximum cards per node and enabled kinds. Click Estimate generation and check the node count, maximum cards, number of model calls and token estimate. Estimating calls no model. A dollar estimate appears only when the model catalog supplies pricing. Click Confirm and generate to start. You can close the view while it runs. Cancelling keeps drafts from completed tasks.
 5. Review each card beside the source statement captured at drafting. Check correctness and assumptions, edit as needed and save. The live preview supports maths and code. Length warnings are advisory. Drop unwanted cards, then approve cards individually or confirm bulk approval. Editing clears approval. No generation result is approved automatically.
 6. Test and pair the displayed throwaway Anki profile. Choose an existing or new deck and send approved cards. Check presence or use Show in Anki. URL or profile mismatches block sends and reconciliation; do not switch profiles during a send, since AnkiConnect cannot make a profile check and write atomic.
 
@@ -114,7 +127,6 @@ The opt-in [live integration test](docs/0.2.0-verification.md) requires an isola
 
 | Version | Planned scope |
 | --- | --- |
-| 0.5.0 | Card coverage and no-cards filtering. |
 | 0.6.0 | First public release, after validation and explicit publication approval. |
 
 These are plans, not shipped features or promised dates. The design is one-way and approval-first: the plugin must not update or delete existing Anki notes or change scheduling. Anki edits win.

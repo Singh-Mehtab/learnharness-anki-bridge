@@ -213,7 +213,7 @@ export function mountDrafting(ctx: PluginFrontendContext, container: HTMLElement
   return {
     select: (nodeIds, backfillNodeIds = []) => {
       invalidate(); renderPreflight(); picker.select(nodeIds, backfillNodeIds, true); const at = ++choiceRevision;
-      return run(async () => { await load(); if (at === choiceRevision) picker.select(nodeIds, backfillNodeIds); });
+      return run(async () => { await load(); if (at === choiceRevision) picker.select(nodeIds, backfillNodeIds, true); });
     },
     refresh,
     invalidateEstimate: () => { invalidate(); renderPreflight(); },
