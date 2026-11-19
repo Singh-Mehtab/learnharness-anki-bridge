@@ -234,7 +234,7 @@ export function mountDrafting(ctx: PluginFrontendContext, ideasHost: HTMLElement
         }, false) }));
       } else {
         const summary = generation.status === "completed" && !failed.length
-          ? `Wrote ${plural(cards, "card")} for ${plural(carded, "idea")}.`
+          ? cards ? `Wrote ${plural(cards, "card")} for ${plural(carded, "idea")}.` : "No cards written."
           : !cards && failed.length && !cancelled.length ? `Couldn't write cards. ${failed.length === 1 ? "The model call failed." : `${failed.length} model calls failed.`}`
           : `Wrote ${plural(cards, "card")}. ${[failed.length ? `${plural(failed.length, "batch", "batches")} failed` : "", cancelled.length ? `${plural(cancelled.length, "batch", "batches")} cancelled` : ""].filter(Boolean).join(", ")}.`;
         text.append(el("strong", summary), el("span", cards ? " Review them in step 3." : "", "ab-muted"));

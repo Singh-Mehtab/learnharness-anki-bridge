@@ -134,7 +134,10 @@ export function mountSettings(ctx: PluginFrontendContext, container: HTMLElement
   saveButton = button(ctx, connectionActions, signal, { label: "Save", variant: "default", disabled: true, onClick: () => act(connectionStatus, async () => {
     const value: { url: string; apiKey?: string } = { url: url.value };
     if (key.value) value.apiKey = key.value;
-    await apply("settings", value);
+    // The save sends these values, so they can't change underneath it.
+    url.readOnly = true; key.readOnly = true;
+    try { await apply("settings", value); }
+    finally { url.readOnly = false; key.readOnly = false; }
     key.value = ""; keyCleared = false; urlAdvice();
     return "Saved. Test the connection to check it.";
   }, "Saving…") });

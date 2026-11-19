@@ -221,6 +221,17 @@ test("the summary counts ideas that got cards, and lists the skipped ones", asyn
   } finally { await f.close(); }
 });
 
+test("a run where every idea was skipped says no cards were written", async () => {
+  const f = setup();
+  try {
+    f.state.generations.push({ id: "g", status: "completed", nodeIds: ["n_a"], skipped: [], settings: {}, createdAt: "", tasks: [
+      { requestId: "r", status: "applied", input: {}, outputAllowance: 1, sources: [], result: { targets: [{ nodeId: "n_a", cards: [], skipReason: "Couldn't check it" }] } }] });
+    await f.panel.setScope(undefined); await tick();
+    assert.match(f.text(), /No cards written\./);
+    assert.doesNotMatch(f.text(), /Wrote 0/);
+  } finally { await f.close(); }
+});
+
 test("failed batches show the provider message, not raw JSON", async () => {
   const f = setup();
   try {

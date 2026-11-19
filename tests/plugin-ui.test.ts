@@ -411,7 +411,7 @@ test("a background refresh keeps focus and the caret in the card being edited", 
 });
 
 test("the editor is read-only while a save is in flight, so late typing can't be lost", async () => {
-  const state = fixture(); state.cards = [card("a")];
+  const state = fixture(); state.cards = [card("a"), card("b")];
   let release!: () => void;
   const held = new Promise<void>(r => { release = r; });
   const f = await setup({ state, handler: async name => { if (name === "edit") await held; return undefined; } });
@@ -421,6 +421,12 @@ test("the editor is read-only while a save is in flight, so late typing can't be
     f.type(front, "New question");
     f.button("Save").click(); await tick();
     assert.equal(front.readOnly, true);
+    // Opening another editor redraws the list; the saving card must stay locked.
+    f.button("Edit", f.review().querySelectorAll(".ab-card")[1]).click(); await tick();
+    const redrawn = f.review().querySelector('[data-keep="card-a-front"]') as unknown as HTMLTextAreaElement;
+    assert.notEqual(redrawn, front, "the editor was redrawn");
+    assert.equal(redrawn.readOnly, true);
+    assert.equal(f.button("Cancel", f.review().querySelector(".ab-card")!).disabled, true);
     release(); await tick();
     assert.deepEqual(f.calls.find(c => c.name === "edit")!.input, { id: "a", front: "New question", back: "Answer", extra: "" });
   } finally { release(); await f.dispose(); }
@@ -536,4 +542,60 @@ test("a refresh asked for during a read gets a newer read, not the old answer", 
     assert.match(f.review().textContent!, /Idea b/);
     s.close();
   } finally { release?.(); await f.dispose(); }
+});
+
+test("a saved address that differs from the pairing offers no decks until it is paired again", async () => {
+  const state = fixture();
+  const f = await setup({ state, connection: () => ({ profile: "Throwaway", decks: ["From the other Anki"] }) });
+  try {
+    const options = () => Array.from(f.container.querySelectorAll("#anki-bridge-decks option") as unknown as ArrayLike<HTMLOptionElement>).map(o => o.value);
+    assert.deepEqual(options(), ["From the other Anki"]);
+    state.settings.url = "http://127.0.0.1:9999/";
+    await f.resync();
+    assert.deepEqual(options(), [], "the old address's decks are dropped");
+    const asked = f.calls.filter(c => c.name === "connection").length;
+    await f.more("Refresh cards"); await tick();
+    assert.equal(f.calls.filter(c => c.name === "connection").length, asked, "no lookup at the unpaired address");
+    assert.deepEqual(options(), []);
+    f.type(f.deck(), "Scratch");
+    assert.match(f.container.textContent!, /Choose the profile again in settings to check this deck name at the new address\./);
+  } finally { await f.dispose(); }
+});
+
+test("saving an unchanged approved card keeps it approved without asking to approve again", async () => {
+  const state = fixture(); state.cards = [card("a", { status: "approved" })];
+  const f = await setup({ state });
+  try {
+    f.button("Edit", f.review().querySelector(".ab-card")!).click(); await tick();
+    f.button("Save").click(); await tick();
+    assert.equal(f.calls.some(c => c.name === "edit"), false);
+    assert.doesNotMatch(f.container.textContent!, /approve it again/);
+  } finally { await f.dispose(); }
+});
+
+test("connection fields are locked while a save runs", async () => {
+  let release!: () => void;
+  const held = new Promise<void>(r => { release = r; });
+  const f = await setup({ handler: async (name, input) => { if (name === "settings" && input.url) await held; return undefined; } });
+  try {
+    const s = await f.mountSettings();
+    const url = s.host.querySelector('input[type="url"]') as unknown as HTMLInputElement;
+    const key = s.host.querySelector('input[type="password"]') as unknown as HTMLInputElement;
+    f.type(key, "new-key");
+    f.button("Save", s.host).click(); await tick();
+    assert.equal(url.readOnly, true); assert.equal(key.readOnly, true);
+    release(); await tick();
+    assert.equal(url.readOnly, false); assert.equal(key.readOnly, false);
+    s.close();
+  } finally { release(); await f.dispose(); }
+});
+
+test("loading again after a failed first load also loads deck suggestions", async () => {
+  let fail = true;
+  const f = await setup({ handler: name => { if (name === "snapshot" && fail) { fail = false; throw new Error("Not ready"); } return undefined; } });
+  try {
+    f.button("Try loading again").click(); await tick(); await tick();
+    const options = Array.from(f.container.querySelectorAll("#anki-bridge-decks option") as unknown as ArrayLike<HTMLOptionElement>).map(o => o.value);
+    assert.deepEqual(options, ["Scratch", "New::Deck"]);
+  } finally { await f.dispose(); }
 });

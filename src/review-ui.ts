@@ -52,6 +52,8 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
   let deckTouched = false, tagsTouched = false;
   const edits = new Map<string, Fields>();
   const editing = new Set<string>();
+  /** Cards whose save is in flight. Their editors stay read-only across re-renders. */
+  const saving = new Set<string>();
   const alive = () => !disposed && !signal.aborted && !ctx.signal.aborted;
   const scope = new RenderScope(signal), barScope = new RenderScope(signal), bannerScope = new RenderScope(signal);
   let approveAll: ButtonHandle | undefined, sendAll: ButtonHandle | undefined;
@@ -99,10 +101,11 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
     try {
       const fresh = await readSnapshot();
       if (!alive() || fresh === "busy") return;
-      const before = destinationKey(state?.destination);
+      const before = destinationKey(state?.destination), lookupBefore = lookupKey();
       state = fresh; render();
-      // A new profile changes which decks exist and which ideas count as in Anki.
-      if (destinationKey(fresh.destination) !== before) { void loadDecks(); void options.onChanged().catch(() => undefined); }
+      // A new profile changes which ideas count as in Anki, and a new profile or address changes which decks exist.
+      if (destinationKey(fresh.destination) !== before) void options.onChanged().catch(() => undefined);
+      if (lookupKey() !== lookupBefore) void loadDecks();
     } catch (error) {
       refreshPending = true;
       if (alive()) feedback.show(`Couldn't refresh the cards: ${message(error)}`, "error");
@@ -110,12 +113,19 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
   }
   function refreshFromPeer(): void { void backgroundRefresh(); }
   const destinationKey = (d: Destination | null | undefined) => d ? `${d.url}\n${d.profile}` : "";
+  /** Decks are looked up only while the saved address is the paired one, as the backend requires for sending. */
+  const lookupKey = () => state?.destination && state.settings.url === state.destination.url ? destinationKey(state.destination) : "";
   let decksFor = "";
   /** Deck names shown for the profile in Anki, or none while that profile isn't the paired one. */
-  const knownDecks = () => connection && connection.profile === state?.destination?.profile ? connection.decks : undefined;
+  const knownDecks = () => connection && lookupKey() && connection.profile === state?.destination?.profile ? connection.decks : undefined;
   async function loadDecks(): Promise<void> {
-    if (!state?.destination) return;
-    const asked = destinationKey(state.destination);
+    const asked = lookupKey();
+    if (!asked) {
+      // No pairing, or the address changed since pairing: offer nothing until it is paired again.
+      decksFor = ""; connection = undefined; connectionError = "";
+      decks.replaceChildren(); syncDeck(); renderBanner();
+      return;
+    }
     if (asked !== decksFor) {
       // Don't offer the old profile's decks while the new one loads.
       decksFor = asked; connection = undefined; connectionError = "";
@@ -124,8 +134,8 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
     let next: Connection | undefined, error = "";
     try { next = await ctx.call<Connection>("connection"); }
     catch (e) { error = message(e); }
-    // Ignore answers for a profile that has since changed.
-    if (!alive() || destinationKey(state?.destination) !== asked) return;
+    // Ignore answers for an address or profile that has since changed.
+    if (!alive() || lookupKey() !== asked) return;
     connection = next; connectionError = error;
     decks.replaceChildren(...(knownDecks() ?? []).map(name => { const o = el("option"); o.value = name; return o; }));
     syncDeck(); renderBanner();
@@ -138,6 +148,7 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
   function syncDeck(): void {
     const name = deckName();
     if (!name) deckHint.textContent = "Type a deck name, or pick one of your decks.";
+    else if (state?.destination && !lookupKey()) deckHint.textContent = "Choose the profile again in settings to check this deck name at the new address.";
     else if (!connection) deckHint.textContent = connectionError ? "Open Anki to check this deck name." : "";
     else if (!knownDecks()) deckHint.textContent = `Open the ${state?.destination?.profile ?? "chosen"} profile in Anki to check this deck name.`;
     else if (knownDecks()!.includes(name)) deckHint.textContent = "Existing deck.";
@@ -309,6 +320,7 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
         const area = textarea(values[key], Math.min(12, Math.max(key === "extra" ? 2 : 3, lines)));
         area.setAttribute("aria-label", `${key[0].toUpperCase()}${key.slice(1)}`);
         area.dataset.keep = `card-${card.id}-${key}`;
+        area.readOnly = saving.has(card.id);
         inputs[key] = area;
         area.oninput = () => {
           edits.set(card.id, { front: inputs.front!.value, back: inputs.back!.value, extra: inputs.extra!.value });
@@ -341,14 +353,17 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
     };
     if (editable) {
       if (isEditing) {
-        button(ctx, left, s, { label: "Cancel", onClick: () => { edits.delete(card.id); editing.delete(card.id); feedback.show(""); render(); } });
+        button(ctx, left, s, { label: "Cancel", disabled: saving.has(card.id), onClick: () => { edits.delete(card.id); editing.delete(card.id); feedback.show(""); render(); } });
         button(ctx, right, s, { label: "Save", variant: "default", onClick: () => run(async () => {
           // Typing during the save would be lost when the editor closes.
+          saving.add(card.id);
           for (const area of Object.values(inputs)) if (area) area.readOnly = true;
-          const now = edits.get(card.id) ?? card;
-          if (!saved()) await call("edit", { id: card.id, front: now.front, back: now.back, extra: now.extra });
-          edits.delete(card.id); editing.delete(card.id);
-          return card.status === "draft" ? "" : "Saved. Edited cards go back to draft, so approve it again.";
+          try {
+            const now = edits.get(card.id) ?? card, changed = !saved();
+            if (changed) await call("edit", { id: card.id, front: now.front, back: now.back, extra: now.extra });
+            edits.delete(card.id); editing.delete(card.id);
+            return card.status === "draft" || !changed ? "" : "Saved. Edited cards go back to draft, so approve it again.";
+          } finally { saving.delete(card.id); }
         }) });
       } else {
         button(ctx, left, s, { label: "Edit", onClick: () => { editing.add(card.id); feedback.show(""); render(); article.ownerDocument.querySelector<HTMLTextAreaElement>(`[data-keep="card-${card.id}-front"]`)?.focus(); } });
@@ -383,7 +398,7 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
   function draw(s: AbortSignal): void {
     renderBanner();
     if (!state) {
-      button(ctx, list, s, { label: "Try loading again", onClick: () => run(async () => { await call("snapshot"); }) });
+      button(ctx, list, s, { label: "Try loading again", onClick: () => run(async () => { await call("snapshot"); void loadDecks(); }) });
       return;
     }
     // Only fill the deck the learner hasn't touched. A cleared field stays clear.
@@ -410,7 +425,7 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
   }
 
   options.peers.add(refreshFromPeer);
-  const unsubscribe = ctx.onResync(() => { void (state ? backgroundRefresh() : run(async () => { await call("snapshot"); })); });
+  const unsubscribe = ctx.onResync(() => { void (state ? backgroundRefresh() : run(async () => { await call("snapshot"); void loadDecks(); })); });
   void run(async () => { await call("snapshot"); void loadDecks(); });
   return {
     refresh: backgroundRefresh,
