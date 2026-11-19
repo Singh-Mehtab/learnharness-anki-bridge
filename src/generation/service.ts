@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import type { PluginBackendContext, PluginModelSpec } from '../../sdk/index.d.ts';
 import type { PluginTaskSnapshot } from '../../sdk/src/core/plugin-workers.d.ts';
 import type { ModelCatalogEntry } from '../../sdk/src/core/contracts/models.d.ts';
-import { StateStore, sameDestination } from '../anki/state.ts';
+import { StateStore } from '../anki/state.ts';
 import { DeliveryService } from '../anki/delivery.ts';
 import { renderMarkdown } from '../anki/render.ts';
 import { pack, sourcePassage, estimateTokens, targetsAllowance } from '../writer/input.ts';
@@ -141,7 +141,7 @@ export class GenerationService {
       const matching = new Map<string, typeof s.cards>();
       for (const card of s.cards) {
         if (!card.requestId || card.requestId === requestId || currentHashes.get(card.nodeId) !== card.statementHash
-          || !(card.status === 'draft' || card.status === 'approved' || card.status === 'sent' && card.presence === 'present' && sameDestination(card.destination, s.destination))) continue;
+          || !(card.status === 'draft' || card.status === 'approved')) continue;
         const key = contentKey(card), group = matching.get(key) ?? [];
         group.push(card);
         matching.set(key, group);

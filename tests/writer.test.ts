@@ -229,6 +229,10 @@ test("instructions describe only requested kinds; prompt carries cap and kinds",
   assert.ok(core.includes("- discriminate:") && !core.includes("mini-problem"));
   const trial = writerInstructions({ kinds: ["mini-problem", "spot-the-mistake"], completion: "Return JSON." });
   assert.ok(trial.includes("- mini-problem:") && !trial.includes("- recall:") && trial.endsWith("Return JSON."));
+  assert.match(trial, /Do not turn a number from one calculation or example into a fact to memorise/);
+  assert.match(trial, /Give the inputs needed to solve it, but not the tested rule or result/);
+  assert.match(trial, /Do not give away a value or conversion the learner is meant to recall/);
+  assert.match(trial, /The back is the result and extra gives the key step/);
   const p = writerPrompt(input());
   assert.match(p, /at most 2 cards per target/);
   assert.match(p, /Enabled kinds: recall, why, compose, discriminate/);
@@ -276,17 +280,29 @@ test("duplicateIndexes finds the same fact drafted by separate requests, not sam
     { front: "What is the approximate rest energy of a proton, in MeV?", back: "About \\(940\\ \\mathrm{MeV}\\)" },
     { front: "Roughly what is a proton's rest energy in MeV?", back: "\\(940\\ \\mathrm{MeV}\\)" },
   ];
-  assert.deepEqual(duplicateIndexes(cards), [-1, 0, -1, 2, -1, -1, -1, 6]);
+  assert.deepEqual(duplicateIndexes([...cards, { ...cards[0] }]), [...Array(cards.length).fill(-1), 0]);
 });
 
-test("duplicateIndexes treats the same whole equation as one fact, however it is asked", () => {
+test("duplicateIndexes leaves equivalent equations with different cues for review", () => {
   const cards = [
     { front: "Restoring SI units: relate a length \\(L_{\\rm SI}\\) to its natural-unit value.", back: "$$L_{\\rm SI} = \\hbar c\\,L_{\\rm NU}$$" },
     { front: "Convert a length from natural units to SI.", back: "$$L_{\\rm SI} = \\hbar c\\, L_{\\rm NU}$$" },
     { front: "In natural units, what is the dimension of time?", back: "\\([t] = [E]^{-1}\\)" },
     { front: "In natural units, what is the dimension of length in terms of energy?", back: "\\([x] = [E]^{-1}\\)" },
   ];
-  assert.deepEqual(duplicateIndexes(cards), [-1, 0, -1, -1]);
+  assert.deepEqual(duplicateIndexes(cards), [-1, -1, -1, -1]);
+});
+
+test("bench dedupe preserves different math and unit answers to similar cues", () => {
+  const front = "What value does \\(x\\) have?";
+  const cards = ["1.5", "15", "MeV", "meV", "y=2(a+b)", "y=2(c+d)", "y=(a+b)/c", "y=a+b/c", "\\(y=\\sin h(x)\\)", "\\(y=\\sinh(x)\\)"].map(back => ({ front, back }));
+  assert.deepEqual(duplicateIndexes(cards), Array(cards.length).fill(-1));
+});
+
+test("mini-problems with the same result are distinct unless the whole card matches", () => {
+  const square = { kind: "mini-problem", front: "Evaluate \\(x^2\\) at \\(x=2\\)", back: "4" };
+  const add = { ...square, front: "Evaluate \\(x+2\\) at \\(x=2\\)" };
+  assert.deepEqual(duplicateIndexes([square, add, { ...add, extra: "Use addition." }, { ...square }]), [-1, -1, -1, 0]);
 });
 
 test("writer instructions keep LaTeX backslashes (template-literal escapes ate them once)", () => {

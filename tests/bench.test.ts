@@ -64,6 +64,34 @@ process.stdout.write(JSON.stringify({session_id:'fake',structured_output:{target
   assert.match(correction.stdout, /FAILED after 3 attempt/);
 });
 
+test("bench dedupe keeps separate fixtures, same-request cards and failed-validation cards", (t) => {
+  const dir = scratch(t), bin = join(dir, "bin");
+  mkdirSync(bin);
+  mkdirSync(join(dir, "bench/private"), { recursive: true });
+  mkdirSync(join(dir, "bench/fixtures"));
+  writeFileSync(join(bin, "claude"), `#!/usr/bin/env node
+const input = JSON.parse(process.argv.at(-1).split('\\n\\n').at(-1));
+const targets = input.targets.map(t => ({nodeId:t.nodeId,cards:[{kind:'fact',front:'Which consequence follows here?',back:'Distinct result'}]}));
+if (input.targets.some(t => t.nodeId === 'bad')) targets.push({nodeId:'unknown',cards:[],skipReason:'Not a requested target.'});
+process.stdout.write(JSON.stringify({session_id:'fake',structured_output:{targets}}));
+`, { mode: 0o755 });
+  for (const [name, ids] of [["a", ["bad", "first", "same", "later"]], ["b", ["other"]]] as const) {
+    const nodes = ids.map(id => ({ id, name: `Topic ${id}`, statement: "Supported fact. ".repeat(id === 'first' || id === 'same' ? 5 : 1100) }));
+    writeFileSync(join(dir, `bench/private/${name}.json`), JSON.stringify({ name, subject: "test", origin: "hand-written", graph: { propositions: nodes, chains: [] }, chats: {}, targets: nodes.map(n => n.id) }));
+  }
+  const env = { ...process.env, PATH: `${bin}${delimiter}${process.env.PATH}` };
+  const r = spawnSync(process.execPath, [runner, "--sets", "a,b", "--max-calls", "10", "--retries", "0"], { cwd: dir, env, encoding: "utf8" });
+  assert.equal(r.status, 0, r.stderr);
+  const run = JSON.parse(readFileSync(join(dir, "bench-output", readdirSync(join(dir, "bench-output"))[0], "run.json"), "utf8"));
+  assert.deepEqual(run.batches.map((b: { nodeIds: string[] }) => b.nodeIds), [["bad"], ["first", "same"], ["later"], ["other"]]);
+  assert.deepEqual(run.cards.map((c: {nodeId: string; unvalidated: boolean}) => [c.nodeId, c.unvalidated]), [["bad", true], ["first", false], ["same", false], ["other", false]]);
+  const other = JSON.parse(readFileSync(join(dir, "bench/private/b.json"), "utf8"));
+  writeFileSync(join(dir, "bench/private/b.json"), JSON.stringify({ ...other, name: "a" }));
+  const duplicateSet = spawnSync(process.execPath, [runner, "--sets", "a", "--dry-run"], { cwd: dir, env, encoding: "utf8" });
+  assert.notEqual(duplicateSet.status, 0);
+  assert.match(duplicateSet.stderr, /Duplicate bench fixture name: a/);
+});
+
 function summaryFixture(dir: string) {
   const cards = Array.from({ length: 3 }, (_, i) => ({ id: `s:n:${i}`, set: "s", nodeId: "n", nodeName: "Name", origin: "hand-written", kind: "recall", front: "Question?", back: "Answer", frontWords: 1, backWords: 1 }));
   const run = { runId: "test-core", mode: "core", model: "fake", maxCardsPerNode: 2, enabledKinds: ["recall"], cards, skips: [], batches: [{ accepted: true, attempts: [{}] }] };

@@ -494,5 +494,19 @@ test('cross-request omissions use exact live content and preserve distinct cards
     assert.equal(snap.cards[0].front, 'My edited question?');
     assert.equal(snap.cards[4].status, 'dropped');
     assert.deepEqual(snap.generations[0].tasks[1].result, fullResult, 'later edits and drops never rewrite a worker result');
+    // Simulate persisted delivery that has only checked the presence of a note ID.
+    // Anki may have a different answer now, so the saved fields must not block a draft.
+    await close();
+    const saved = JSON.parse(await readFile(statePath(directory), 'utf8'));
+    const destination = { url: saved.settings.url, profile: 'Scratch' };
+    saved.destination = destination;
+    Object.assign(saved.cards.at(-1), { status: 'sent', presence: 'present', noteId: 123, deck: 'Scratch', destination });
+    await writeFile(statePath(directory), JSON.stringify(saved));
+    const reopened = await activate(c.ctx);
+    try {
+      snap = await again('n_a');
+      assert.equal(snap.cards.length, 7, 'a previously sent card never suppresses a draft');
+      assert.equal(snap.cards.at(-1).status, 'draft');
+    } finally { await reopened(); }
   } finally { await close(); }
 }));

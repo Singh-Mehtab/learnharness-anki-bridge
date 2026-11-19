@@ -23,7 +23,7 @@ Card the facts the learner has to hold in memory: definitions, terms, units and 
 - Equations the source states are worth a card even when one follows from another in a line or two.
 - Numerical values of physical constants and particle properties (\\(h\\), \\(\\hbar\\), \\(\\hbar c\\), 1 eV in joules, a proton's rest energy) are carded only when the task says constant values are on, or a flag note asks for that value. Their units and the relations between them (\\(\\hbar = h/2\\pi\\)) are always fair game. The exception is a conversion constant the lesson calculates with, such as \\(\\hbar c \\approx 197\\ \\mathrm{MeV\\,fm}\\): card its value, asked directly ("What is \\(\\hbar c\\) in MeV fm?").
 - Don't card a conversion factor that follows straight from units already carded: once the units of \\(\\hbar\\) and \\(c\\) have cards, "which factor turns \\(\\mathrm{eV^{-1}}\\) into seconds" adds nothing.
-- Never card a number that comes out of one calculation or example: the momentum needed to resolve 1 fm, a microscope's resolution, a numeric conversion of one quantity. When an example number illustrates a general point, card the point instead: "time has the dimension of inverse energy", not "1 s is \\(1.52\\times10^{15}\\ \\mathrm{eV^{-1}}\\)".
+- Do not turn a number from one calculation or example into a fact to memorise: the momentum needed to resolve 1 fm, a microscope's resolution, a numeric conversion of one quantity. When an example number illustrates a general point, card the point instead: "time has the dimension of inverse energy", not "1 s is \\(1.52\\times10^{15}\\ \\mathrm{eV^{-1}}\\)".
 - Don't card a step of one worked example or the trick of one particular problem. Cards like that get memorised as answers instead of teaching anything.`;
 
 const cardRules = `## What a card is
@@ -35,7 +35,7 @@ const cardRules = `## What a card is
 - Don't open with the rule being tested. "A prefixed unit is squared. What is \\(\\mathrm{fm^2}\\) in \\(\\mathrm{m^2}\\)?" gives the answer away in its first sentence.
 - When restoring constants, ask "Restore \\(c\\) in \\(T = p^2/2m\\)", not "in terms of \\(pc\\) and \\(mc^2\\)": the grouped forms are the answer.
 - Name a convention, don't define it. Write "In natural units, ...", never "In natural units (\\(\\hbar = c = 1\\)), ..." or a sentence explaining what natural units are. The same goes for any convention the lesson introduced.
-- The front must not contain the answer or the fact being tested, even by paraphrase. Never state a value or conversion on the front and then ask for arithmetic with it: "Express \\(3\\times10^{-13}\\) m in fm, given 1 fm = \\(10^{-15}\\) m" tests multiplication, not the prefix. Do not define the answer and then ask for its label.
+- The front must not contain the answer or the fact being tested, even by paraphrase. Do not give away a value or conversion the learner is meant to recall and then ask for arithmetic with it: "Express \\(3\\times10^{-13}\\) m in fm, given 1 fm = \\(10^{-15}\\) m" tests multiplication, not the prefix. Do not define the answer and then ask for its label.
 - Give only the context needed to know which answer is meant: the setting, the convention's name, and what a symbol means when that is not obvious from the lesson.
 - Write units and dimensions as one bracket equation, with no "i.e.": \\([t] = [E]^{-1} = \\mathrm{eV^{-1}}\\), \\([p] = \\mathrm{eV\\,s\\,m^{-1}}\\). Use the same format for every such card.
 - Give a specific quantity its own symbol: rest energy is \\(E_0\\), not \\(E\\).
@@ -53,7 +53,7 @@ const kindText: Record<CardKind, string> = {
   why: `- why: only when the target concludes a listed chain. Ask why the idea holds. The back is that chain's premises, together and compressed. Never drop a premise: "A and B give C" must not become "A gives C".`,
   compose: `- compose: only when the target concludes a listed chain. State the chain's premises as the situation, in your own words, and ask what follows. The back is the target idea.`,
   discriminate: `- discriminate: only when a listed neighbour is easily confused with the target. Describe a near-twin case that only the target fits. The back names or states the target, and extra gives the feature that separates them. Don't list both candidates with the separating feature.`,
-  "mini-problem": `- mini-problem: a short problem with concrete values, one or two steps, that this idea solves. The back is the result and extra gives the key step. Write one only when you can check the result exactly.`,
+  "mini-problem": `- mini-problem: a short problem with concrete numerical inputs and one or two steps. Give the inputs needed to solve it, but not the tested rule or result. The back is the result and extra gives the key step. Write one only when you can check the result exactly.`,
   "spot-the-mistake": `- spot-the-mistake: a plausible wrong claim or step that a learner might make about this idea. The front says plainly that it contains a mistake and asks what is wrong. The back states the correction.`,
 };
 

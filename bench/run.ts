@@ -81,7 +81,13 @@ function loadSets(): BenchSet[] {
   ].filter((f) => f.endsWith(".json"));
   const sets = files.map((f) => JSON.parse(readFileSync(f, "utf8")) as BenchSet);
   const wanted = values.sets?.split(",");
-  return wanted ? sets.filter((s) => wanted.includes(s.name)) : sets;
+  const selected = wanted ? sets.filter((s) => wanted.includes(s.name)) : sets;
+  const names = new Set<string>();
+  for (const set of selected) {
+    if (names.has(set.name)) throw new Error(`Duplicate bench fixture name: ${set.name}. Give each fixture a unique name before running the bench.`);
+    names.add(set.name);
+  }
+  return selected;
 }
 
 interface ClaudeReply {
@@ -225,7 +231,8 @@ const results = await pool(jobs, concurrency, async (job) => {
 });
 
 const cards: BenchCard[] = [];
-for (const { set, batch, result, record } of results) {
+const requestByCard = new Map<BenchCard, number>();
+for (const [request, { set, batch, result, record }] of results.entries()) {
   if (!result || !Array.isArray(result.targets)) continue;
   const byId = new Map(set.graph.propositions.map((n) => [n.id, n]));
   const inBatch = new Set(batch.input.targets.map((t) => t.nodeId));
@@ -236,7 +243,7 @@ for (const { set, batch, result, record } of results) {
       skips.push({ set: set.name, nodeId: row.nodeId, nodeName: node.name, statement: node.statement, reason: row.skipReason ?? "", by: "model" });
     }
     row.cards.forEach((card, i) => {
-      cards.push({
+      const entry: BenchCard = {
         id: `${set.name}:${row.nodeId}:${i}`,
         set: set.name,
         subject: set.subject,
@@ -251,7 +258,9 @@ for (const { set, batch, result, record } of results) {
         frontWords: wordCount(card.front),
         backWords: wordCount(card.back),
         unvalidated: !record.accepted,
-      });
+      };
+      requestByCard.set(entry, request);
+      cards.push(entry);
     });
   }
 }
@@ -259,7 +268,8 @@ for (const { set, batch, result, record } of results) {
 // Same fact drafted by separate requests: keep the first in set order.
 const order = new Map(sets.flatMap((s) => s.targets.map((id, i) => [`${s.name}:${id}`, i] as const)));
 cards.sort((a, b) => a.set.localeCompare(b.set) || (order.get(`${a.set}:${a.nodeId}`) ?? 0) - (order.get(`${b.set}:${b.nodeId}`) ?? 0));
-const dup = duplicateIndexes(cards);
+const dup = duplicateIndexes(cards, (current, earlier) => !current.unvalidated && !earlier.unvalidated
+  && current.set === earlier.set && requestByCard.get(current) !== requestByCard.get(earlier));
 const duplicates = cards.flatMap((c, i) => (dup[i] >= 0 ? [{ removed: c.front, kept: cards[dup[i]].front }] : []));
 cards.splice(0, cards.length, ...cards.filter((_, i) => dup[i] < 0));
 
