@@ -303,7 +303,7 @@ test("approve and send use named calls with deck, tags and destination; an empty
     assert.equal(sent.getAttribute("role"), "status");
     assert.match(sent.textContent!, /1 card sent to Anki/);
     assert.match(sent.textContent!, /Deck Brand new/);
-    assert.match(sent.textContent!, /Tags YEAR_3::NPP extra/);
+    assert.match(sent.textContent!, /Tags YEAR_3::NPP extra learnharness learnharness::kind::recall/, "lists the automatic tags too");
     f.button("Show in Anki", sent).click(); await tick();
     assert.deepEqual(f.calls.at(-1), { name: "show", input: { ids: ["a"] } });
     assert.equal(sent.hidden, false, "showing the cards keeps the confirmation");
@@ -502,6 +502,23 @@ test("deck and tags are locked while a send runs", async () => {
     assert.equal(f.deck().readOnly, false); assert.equal(f.tags().readOnly, false);
     assert.match(f.container.querySelector(".ab-sent")!.textContent!, /1 card sent to Anki.*Deck Scratch/);
   } finally { release(); await f.dispose(); }
+});
+
+test("the send confirmation omits automatic tags when they're off, and adding a card by hand clears it", async () => {
+  const state = fixture(); state.settings.systemTags = false; state.cards = [card("a", { status: "approved" })];
+  const f = await setup({ state });
+  try {
+    f.button("Send 1 card to Anki").click(); await tick();
+    const sent = f.container.querySelector(".ab-sent") as unknown as HTMLElement;
+    assert.equal(sent.hidden, false);
+    assert.doesNotMatch(sent.textContent!, /learnharness/);
+    await f.more("Write a card by hand"); await tick();
+    const dialog = f.dialog()!;
+    const [front, back] = Array.from(dialog.querySelectorAll("textarea")) as unknown as HTMLTextAreaElement[];
+    front.value = "Front text"; back.value = "Back text";
+    f.button("Add card", dialog).click(); await tick();
+    assert.equal(sent.hidden, true, "the old confirmation doesn't sit beside the new card");
+  } finally { await f.dispose(); }
 });
 
 test("switching profiles refreshes step 1 and drops the old profile's decks", async () => {

@@ -95,7 +95,7 @@ The Anki Bridge settings hold the AnkiConnect address and optional key, the Anki
 ## Privacy and safety
 
 - Writing cards sends the chosen ideas to the model provider you picked, along with their linked ideas, an excerpt of the session reply each idea came from (flagged or not), your flag notes and any existing cards for those ideas. The Write cards dialog lists this before anything is sent.
-- From Anki, the bridge reads the open profile's name, its deck names and its tag names, for the deck and tag suggestions. It doesn't read your notes' content or your review history.
+- From Anki, the bridge reads the open profile's name, its deck names and its tag names, for the deck and tag suggestions. It only looks up notes it sent itself, to check they still exist. Anki returns those notes' fields with the answer, and the bridge doesn't use them. It doesn't read your other notes or your review history.
 - The optional AnkiConnect key is stored in plain text in the plugin's `data/` folder. Never share that folder. Use AnkiConnect on your own machine.
 - Community plugins run local code with LearnHarness's permissions. Install builds you trust.
 - Adding missing fields and resetting styling and templates only change the bridge's own note type, and both ask you to confirm first.

@@ -83,6 +83,8 @@ function openFlagDialog(ctx: PluginFrontendContext, target: { sessionId: string;
     return handle;
   };
   let current = immediate;
+  /** The flag being edited: the shortcut's flag, or one found by the top-bar Flag. */
+  let existing = immediate;
   const describe = (view: FlagView) => flagStatusText(view);
   /** After a flag or note is saved, confirm it and close shortly after (#33). */
   const finish = (view: FlagView, saved: string) => {
@@ -94,10 +96,18 @@ function openFlagDialog(ctx: PluginFrontendContext, target: { sessionId: string;
   let finished = false;
   const submit = async () => {
     if (finished) return;
-    const value = note.value.trim(), noteChange = !!immediate && value !== (current?.note ?? "");
+    const value = note.value.trim(), noteChange = !!existing && value !== (current?.note ?? "");
     // Omitting an empty note keeps any note already on this reply's flag.
     const view = await ctx.call<FlagView>("flag", { sessionId: target.sessionId, messageIds: target.turn.messageIds, ...(value || current ? { note: value } : {}) });
-    finish(view, immediate ? (noteChange ? (value ? "Note saved." : "Note removed.") : "Saved.") : value ? "Flagged with your note." : "Flagged.");
+    if (!existing && view.created === false && view.note && !value) {
+      // The reply was already flagged with a note the learner hasn't seen. Show it so they can keep, edit or clear it.
+      existing = current = view; note.value = view.note; heading.textContent = "Already flagged for Anki";
+      status.textContent = `Already flagged with a note. ${describe(view)}`; status.dataset.tone = "";
+      primary.update({ label: "Save note" }); close.update({ label: "Close" });
+      return;
+    }
+    finish(view, existing ? (noteChange ? (value ? "Note saved." : "Note removed.") : "Saved.")
+      : view.created === false ? (value ? "Note saved." : "Already flagged.") : value ? "Flagged with your note." : "Flagged.");
   };
   let primaryAction: () => Promise<void> = submit;
   note.onkeydown = (event) => { if (event.key === "Enter") { event.preventDefault(); void primaryAction(); } };

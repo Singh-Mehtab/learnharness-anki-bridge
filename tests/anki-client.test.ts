@@ -65,6 +65,35 @@ test("a failed tag lookup still returns the profile and decks", async () => {
   finally { await http.close(); }
 });
 
+test("a tag lookup that times out or is refused keeps the decks; pairing skips it", async () => {
+  let port = 0;
+  const actions: string[] = [];
+  const http = await server((req, res) => {
+    let body = ""; req.on("data", chunk => { body += chunk; });
+    req.on("end", () => {
+      const { action } = JSON.parse(body) as { action: string };
+      actions.push(action);
+      if (action === "getTags") return; // Never answers.
+      res.end(JSON.stringify({ result: { version: 6, getActiveProfile: "Scratch", deckNames: ["Default"] }[action], error: null }));
+    });
+  });
+  try {
+    assert.deepEqual(await new AnkiClient({ url: http.url, timeoutMs: 100 }).connection(), { profile: "Scratch", decks: ["Default"], tags: [] });
+    actions.length = 0;
+    assert.deepEqual(await new AnkiClient({ url: http.url, timeoutMs: 100 }).connection({ tags: false }), { profile: "Scratch", decks: ["Default"], tags: [] });
+    assert.deepEqual(actions, ["version", "getActiveProfile", "deckNames"]);
+    port = Number(new URL(http.url).port);
+  } finally { await http.close(); }
+  // Anki quits between deckNames and getTags: the port now refuses connections.
+  let calls = 0;
+  const refusing = new AnkiClient({ url: `http://127.0.0.1:${port}`, timeoutMs: 1000 });
+  const answers: Record<string, unknown> = { version: 6, getActiveProfile: "Scratch", deckNames: ["Default"] };
+  const real = refusing.call.bind(refusing);
+  (refusing as unknown as { call: (action: string) => Promise<unknown> }).call = async (action: string) => { calls++; return action === "getTags" ? real(action) : answers[action]; };
+  assert.deepEqual(await refusing.connection(), { profile: "Scratch", decks: ["Default"], tags: [] });
+  assert.equal(calls, 4);
+});
+
 test("a cleared optional API key is omitted, not sent as an empty authentication attempt", async () => {
   let request: Record<string, unknown> | undefined;
   const http = await server((req, res) => {

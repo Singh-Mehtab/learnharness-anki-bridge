@@ -146,6 +146,36 @@ test("the top-bar button opens a note dialog, flags, confirms and closes itself 
   } finally { t.mock.timers.reset(); await f.close(); }
 });
 
+test("the top-bar Flag on a reply flagged with a note shows that note so it can be cleared", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  let saved = "earlier note";
+  const f = setup((_name, input) => {
+    const note = (input as { note?: string }).note;
+    if (note !== undefined) saved = note;
+    return flagView({ note: saved, created: false });
+  });
+  const settle = async () => { for (let i = 0; i < 5; i++) await Promise.resolve(); };
+  try {
+    registerSessionActions(f.ctx, new SessionRequests());
+    await f.actions.get("flag-for-anki")!.run(sessionContext());
+    const content = f.dialog()!.content;
+    f.buttonIn(content, "Flag").click(); await settle();
+    assert.equal(saved, "earlier note", "a blank first submit keeps the note");
+    assert.match(content.textContent!, /Already flagged for Anki/);
+    const note = content.querySelector("input")!;
+    assert.equal(note.value, "earlier note");
+    assert.equal(note.readOnly, false);
+    t.mock.timers.tick(5000);
+    assert.ok(f.dialog(), "stays open so the learner can edit the note");
+    note.value = "";
+    f.buttonIn(content, "Save note").click(); await settle();
+    assert.equal(saved, "");
+    assert.match(content.textContent!, /Note removed\./);
+    t.mock.timers.tick(1600);
+    assert.equal(f.dialog(), undefined);
+  } finally { t.mock.timers.reset(); await f.close(); }
+});
+
 test("Save note after a shortcut flag saves, says so and closes; Close still closes at once", async (t) => {
   t.mock.timers.enable({ apis: ["setTimeout"] });
   let saved = "kept";

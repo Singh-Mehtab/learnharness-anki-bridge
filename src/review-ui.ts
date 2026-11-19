@@ -1,6 +1,6 @@
 // Step 3: check each card, approve it and send approved cards to a deck.
 import type { PluginFrontendContext } from "../sdk/index.d.ts";
-import { expandTagTemplate, matchTagCase, tagSuggestions, validateTags } from "./anki/tags.ts";
+import { expandTagTemplate, matchTagCase, systemTags, tagSuggestions, validateTags } from "./anki/tags.ts";
 import { isWaitingCard } from "./coverage/flow.ts";
 import { KIND_NAMES } from "./drafting-ui.ts";
 import type { Connection, Destination, Peers, Settings } from "./settings-ui.ts";
@@ -69,7 +69,10 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
     icon.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>';
     const text = el("div", undefined, "ab-sent-text");
     text.append(el("p", `${plural(ids.length, "card")} sent to Anki`, "ab-sent-title"), el("p", `Deck ${deckSent}`, "ab-sent-detail"));
-    if (tagsSent.length) text.append(el("p", `Tags ${tagsSent.join(" ")}`, "ab-sent-detail"));
+    // Show every tag the send added, including the automatic ones (delivery.ts adds them per card).
+    const auto = state?.settings.systemTags === false ? [] : ids.flatMap(id => { const c = state?.cards.find(card => card.id === id); return c ? systemTags(c.kind) : []; });
+    const allTags = [...new Set([...tagsSent, ...auto])];
+    if (allTags.length) text.append(el("p", `Tags ${allTags.join(" ")}`, "ab-sent-detail"));
     const actionsBox = el("div", undefined, "ab-actions");
     if (state?.destination) button(ctx, actionsBox, s, { label: "Show in Anki", onClick: async () => {
       // Not run(): that would clear this confirmation.
@@ -290,6 +293,7 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
       if (busy) { err.show("Wait for the current action to finish, then add the card.", "error"); return; }
       // Counted like other actions, so an older background read can't hide the new card.
       busy = true; actions++; syncBar();
+      hideSent();
       try {
         await call("draft", { front: front.value, back: back.value, extra: extra.value, kind: kind.value });
         close(); render(); feedback.show("Card added for review.", "success");

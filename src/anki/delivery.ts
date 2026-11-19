@@ -192,7 +192,8 @@ export class DeliveryService {
         });
       } else if (name === 'pair') {
         if (value.confirmed !== true) throw new Error('Confirm the destination change before pairing.');
-        const connection = await this.client().connection();
+        // Pairing holds the writer lock; skip the optional tag lookup so it can't stall other actions.
+        const connection = await this.client().connection({ tags: false });
         this.active();
         if (!connection.profile) throw new Error('Open a profile in Anki before pairing.');
         const destination = { url: this.store.snapshot().settings.url, profile: connection.profile };

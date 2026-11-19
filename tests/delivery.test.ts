@@ -93,6 +93,7 @@ test('hand-written cards require explicit pairing and durable approval, then add
     assert.equal(f.calls.length, 0);
     await assert.rejects(f.send([id]), /Pair/);
     await f.pair();
+    assert.deepEqual(f.calls.map(c => c.action), ['version', 'getActiveProfile', 'deckNames'], 'pairing skips the optional tag lookup while it holds the lock');
     await assert.rejects(f.send([id]), /Approve/);
     assert.equal(f.calls.filter(c => c.action === 'addNote').length, 0);
     await f.approve([id]);

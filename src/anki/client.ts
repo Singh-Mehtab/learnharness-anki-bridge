@@ -146,14 +146,17 @@ export class AnkiClient {
   }
 
   /** Profile, deck names and tag names. Tag names only feed suggestions, so a failed tag lookup leaves them empty. */
-  async connection(): Promise<{ profile: string | null; decks: string[]; tags: string[] }> {
+  async connection(options: { tags?: boolean } = {}): Promise<{ profile: string | null; decks: string[]; tags: string[] }> {
     await this.call("version");
     const profile = await this.call<string | null>("getActiveProfile");
     if (profile === null) return { profile, decks: [], tags: [] };
     const decks = await this.call<string[]>("deckNames");
     let tags: string[] = [];
-    try { tags = await this.call<string[]>("getTags"); }
-    catch (error) { if (error instanceof AnkiError && (error.kind === "cancelled" || error.kind === "refused")) throw error; }
+    // Any failure here keeps the decks; only a cancel stops the whole lookup.
+    if (options.tags !== false) {
+      try { tags = await this.call<string[]>("getTags"); }
+      catch (error) { if (error instanceof AnkiError && error.kind === "cancelled") throw error; }
+    }
     return { profile, decks, tags };
   }
 }
