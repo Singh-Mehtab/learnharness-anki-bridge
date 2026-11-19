@@ -3,11 +3,12 @@ import { AnkiClient, AnkiError, normalizeUrl } from './client.ts';
 import { ensureNoteType, MODEL_NAME, repairFields, updateStyling } from './note-type.ts';
 import { renderMarkdown } from './render.ts';
 import { StateStore, sameDestination } from './state.ts';
+import { expandTagTemplate, systemTags, validateTags } from './tags.ts';
 import type { Card, CardKind, Destination, State } from './state.ts';
 import type { Generation, GenerationSettings } from '../generation/types.ts';
 
 export interface PublicSnapshot {
-  settings: { url: string; lastDeck: string; hasApiKey: boolean };
+  settings: { url: string; lastDeck: string; hasApiKey: boolean; tagTemplate: string; systemTags: boolean };
   destination: Destination | null;
   cards: (Card & { sourceStatement?: string; sourceChanged?: boolean; sourceMissing?: boolean; sourceUnavailable?: boolean })[];
   generationSettings: GenerationSettings;
@@ -87,7 +88,7 @@ export class DeliveryService {
         sourceMissing: current ? !current.has(card.nodeId) : false,
         sourceChanged: current?.has(card.nodeId) ? current.get(card.nodeId) !== card.sourceSnapshot.statement : false,
       }) } : card);
-    return { generationSettings, generations, settings: { url: settings.url, lastDeck: settings.lastDeck, hasApiKey: !!settings.apiKey }, destination, cards: publicCards, ...(this.recoveryError ? { recoveryError: this.recoveryError } : {}) };
+    return { generationSettings, generations, settings: { url: settings.url, lastDeck: settings.lastDeck, hasApiKey: !!settings.apiKey, tagTemplate: settings.tagTemplate ?? '', systemTags: settings.systemTags ?? true }, destination, cards: publicCards, ...(this.recoveryError ? { recoveryError: this.recoveryError } : {}) };
   }
   private busyOwner: 'user' | 'background' | undefined;
   /** One writer fence. User calls fail fast on another user operation (no double sends),
@@ -159,13 +160,27 @@ export class DeliveryService {
       this.active();
       const value = data(input);
       if (name === 'settings') {
-        const allowed = new Set(['url', 'apiKey']);
+        const allowed = new Set(['url', 'apiKey', 'tagTemplate', 'systemTags']);
         if (Object.keys(value).some(k => !allowed.has(k))) throw new Error('Unsupported setting.');
         const current = this.store.snapshot().settings;
+        if (value.tagTemplate !== undefined) {
+          if (typeof value.tagTemplate !== 'string' || value.tagTemplate.length > 2000) throw new Error('Use a tag template shorter than 2,000 characters.');
+          validateTags(expandTagTemplate(value.tagTemplate, 'Deck'));
+        }
+        if (value.systemTags !== undefined && typeof value.systemTags !== 'boolean') throw new Error('Invalid system tags setting.');
+        const tagTemplate = value.tagTemplate as string | undefined, keepSystemTags = value.systemTags as boolean | undefined;
+        if (value.url === undefined && value.apiKey === undefined) {
+          await this.save(s => { if (tagTemplate !== undefined) s.settings.tagTemplate = tagTemplate; if (keepSystemTags !== undefined) s.settings.systemTags = keepSystemTags; });
+          return this.snapshot();
+        }
         const url = value.url === undefined ? current.url : normalizeUrl(requiredText(value.url, 'URL'));
         // A saved key belongs to its endpoint. Never forward it to a changed URL.
         const apiKey = optionalText(value.apiKey, 'API key', url === current.url ? current.apiKey : '');
-        await this.save(s => { s.settings.url = url; s.settings.apiKey = apiKey; });
+        await this.save(s => {
+          s.settings.url = url; s.settings.apiKey = apiKey;
+          if (tagTemplate !== undefined) s.settings.tagTemplate = tagTemplate;
+          if (keepSystemTags !== undefined) s.settings.systemTags = keepSystemTags;
+        });
       } else if (name === 'connection') {
         return this.client().connection();
       } else if (name === 'pair') {
@@ -213,6 +228,8 @@ export class DeliveryService {
         const ids = idsInput(value.ids);
         const deck = requiredText(value.deck, 'Deck').trim();
         if (deck.length > 250 || /[\r\n]/.test(deck)) throw new Error('Use a deck name shorter than 251 characters on one line.');
+        const settings = this.store.snapshot().settings;
+        const chosenTags = validateTags(value.tags === undefined ? expandTagTemplate(settings.tagTemplate ?? '', deck) : value.tags);
         for (const id of ids) this.card(id);
         // The settings dialog can re-pair while a review view still shows the old destination.
         const paired = this.store.snapshot().destination;
@@ -246,7 +263,7 @@ export class DeliveryService {
           try {
             await this.destination(client);
             result = await client.call('addNote', { note: { deckName: deck, modelName: MODEL_NAME, fields,
-              tags: ['learnharness', `learnharness::kind::${card.kind}`],
+              tags: [...new Set([...chosenTags, ...(settings.systemTags === false ? [] : systemTags(card.kind))])],
               options: { allowDuplicate: false, duplicateScope: 'deck', duplicateScopeOptions: { deckName: deck, checkChildren: false, checkAllModels: false } } } });
           } catch (error) {
             // API rejections are definite, but still look up the UUID before failing.

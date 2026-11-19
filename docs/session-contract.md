@@ -41,10 +41,10 @@ The action is disabled unless the session view reports `status === "ready"` and 
 ## Frontend
 
 - **Flag for Anki** sits in the teaching top bar. A click opens a dialog with the reply excerpt and an optional note. The shortcut, default `mod+shift+a`, flags at once and shows a confirmation that closes after 3.5 seconds unless the learner clicks or types in it. The confirmation offers a note field, and Undo when this press created the flag. Pressing the shortcut on an already flagged reply says so and never offers to undo the earlier flag.
-- **Make cards** sits in the teaching top bar and opens the Anki Bridge view on that session.
-- The view's session panel lists flags and their status, with Refresh and Remove flag. Unresolved flags from other sessions appear above it. The node list ticks flagged nodes by default and greys nodes that already have cards. "Select all uncarded" ticks nodes with no unsent or paired-sent cards.
-- Saved generation settings and card mutations refresh session estimates and card counts through `SessionPanelHandle.refresh()`. These explicit refresh requests and Make cards requests are deferred while a session operation is busy. Manual node choices survive refresh; untouched ticks follow the current flags. Superseded loads cannot replace the selected session or leave its old flow actionable.
-- Extraction has no completion event. While any flag is `waiting`, the panel re-checks one second after an `activity-changed` or `turn-settled` app event. Refresh is the reliable path.
+- **Make cards** sits in the teaching top bar and opens the Anki Bridge view scoped to that session.
+- Since 0.7.0, step 1's "Ideas from" picker chooses one session or the whole graph, and a single idea list shows only that scope. In a session, the list ticks flagged ideas by default; the whole graph ticks nothing. Session flags show above the list with Remove flag, and flags waiting in other sessions are listed as links that open their session. "Select ideas without cards" ticks ideas with no unsent or paired-sent cards.
+- Manual choices survive refresh; untouched ticks follow the current flags. Make cards requests that arrive while a read is busy are applied afterwards. A superseded read cannot replace the chosen scope.
+- Extraction has no completion event. While any flag is `waiting`, the view re-checks one second after an `activity-changed` or `turn-settled` app event. Refresh is the reliable path.
 
 ## State
 

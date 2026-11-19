@@ -259,6 +259,11 @@ export class GenerationService {
             await this.patch(g.id, t.requestId, { status: 'cancelled', error: 'Cancelled by user. Finished tasks retain their drafts.' }); }
         }
         await this.delivery.save(s => { s.generations.find(x => x.id === g.id)!.status = 'cancelled'; });
+      } else if (name === 'dismissGeneration') {
+        // Hides a finished batch from the page. Its drafts, skips and history stay.
+        keys(value, ['id']); const g = this.generation(value.id);
+        if (g.status === 'running') throw new Error('Cancel or finish this generation before dismissing it.');
+        await this.delivery.save(s => { s.generations.find(x => x.id === g.id)!.hidden = true; });
       } else throw new Error('Unknown generation operation.');
       return this.delivery.snapshot(false);
     });
@@ -322,4 +327,4 @@ export class GenerationService {
   }
 }
 
-export const GENERATION_OPERATIONS = ['generationContext', 'generationSettings', 'preflight', 'generate', 'generationStatus', 'cancelGeneration', 'retryGeneration'] as const;
+export const GENERATION_OPERATIONS = ['generationContext', 'generationSettings', 'preflight', 'generate', 'generationStatus', 'cancelGeneration', 'retryGeneration', 'dismissGeneration'] as const;

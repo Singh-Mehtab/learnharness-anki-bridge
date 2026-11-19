@@ -2,11 +2,11 @@
 
 An unofficial LearnHarness community plugin in development. The goal is to draft cards from your knowledge graph, let you edit and approve them, and send them to Anki through AnkiConnect. Delivery is one-way; Anki keeps responsibility for reviews and scheduling. This project is not affiliated with Anki or LearnHarness.
 
-**Version 0.6.1 is a personal-use candidate.** It ties sends to the destination you see and preserves your work across refreshes. You can preview the Anki field formatting before approval. There is no public release yet. See the [install guide](docs/install.md) for the install zip, setup and upgrades.
+**Version 0.7.0 is a personal-use candidate.** It redesigns the plugin to match the rest of LearnHarness, using the app's own buttons, borders and theme colours. The page is now three numbered steps, and connection upkeep lives in settings. There is no public release yet. See the [install guide](docs/install.md) for the install zip, setup and upgrades.
 
-![Anki Bridge 0.6.1 personal-use candidate: graph selection, card writing, approval, then delivery to Anki.](docs/images/workflow.svg)
+![Anki Bridge 0.7.0 personal-use candidate: choose ideas, write cards, review and send, then delivery to Anki.](docs/images/workflow.svg)
 
-Graph drafting, review and delivery work with session flags and session-based selection. Version 0.5.0 adds coverage labels, reversible dismissals and a shared no-cards filter to the manual and session pickers.
+Pick ideas from one teaching session or the whole graph, let a model draft cards in the background, then check, tag and send each card. Coverage labels, flags and reversible dismissals from earlier versions carry over.
 
 ## What's done
 
@@ -20,6 +20,7 @@ Graph drafting, review and delivery work with session flags and session-based se
 | 0.5.0 | Merged in [PR #7](https://github.com/Singh-Mehtab/learnharness-anki-bridge/pull/7) | Shared destination-aware coverage, changed/missing-source warnings, dismiss/restore, coverage-aware node lists and no-cards backfill. State schema 4 preserves older cards, flags and generation recovery data. See [verification and limits](docs/0.5.0-verification.md). |
 | 0.6.0 | Merged in [PR #9](https://github.com/Singh-Mehtab/learnharness-anki-bridge/pull/9) | First install zip and upgrade instructions. See [verification and limits](docs/0.6.0-verification.md). |
 | 0.6.1 | Merged for personal use | Destination checks, refresh and recovery fixes, collapsed sent history, and Anki field previews. See [verification and limits](docs/0.6.1-verification.md). |
+| 0.7.0 | Merged for personal use | Redesign that fixes the 18 interface issues filed after 0.6.1 (#11 to #28). Three numbered steps, one idea list scoped to a session or the graph, background writing with a single progress line, a card editor with Front, Back and Extra side by side, a deck field that checks names, and a tag template. The writer prompt now asks for MathJax on every variable and prefers display maths. 196 tests, typecheck and build pass. See [verification and limits](docs/0.7.0-verification.md). |
 
 ### Card writer
 
@@ -39,39 +40,39 @@ That is a partial result, **not a full benchmark pass**. Claude's quota stopped 
 
 Additional card-quality validation is deferred until before public release. No automatic rerun is scheduled. See the [bench guide](bench/README.md) and [0.1.1 closeout](bench/0.1.1-closeout.md) for methods and limitations. Private graph data, generated cards and per-card scores are not committed.
 
-### Session flags (0.4.0)
+## Using Anki Bridge (0.7.0)
 
-In a teaching session, **Flag for Anki** in the top bar marks the teacher's latest reply for cards. A click opens a dialog for an optional note such as "I got the sign wrong"; the card writer receives the note with that idea. The shortcut, `Cmd/Ctrl+Shift+A` by default, flags straight away and offers the note in a short confirmation. The button is disabled while a reply is still streaming.
+The page has three numbered steps. Settings hold the AnkiConnect address, the Anki profile, tags and note type repairs.
 
-A flag covers every idea LearnHarness extracted from that reply, which is usually about two. You can't flag a single sentence.
+![Step 1 in a scratch LearnHarness host: a session chosen in Ideas from, its flag note, and a bordered idea list with labels and a selection count](docs/images/0.7.0-choose-ideas.png)
 
-LearnHarness extracts ideas after a reply settles and doesn't announce when it finishes. Until it does, a flag shows "waiting for extraction". The panel re-checks when extraction activity changes, and Refresh checks on demand. A flag whose reply produced no new ideas says so. Flags are kept until you remove them, including flags on deleted sessions.
+1. **Choose ideas.** "Ideas from" picks one teaching session or all sessions. The list below shows only those ideas, in a bordered box with search, a "Without cards" filter and a count of the cards you could get. Each idea is labelled Flagged, To review, In Anki, Not carding or No cards. "Select ideas without cards" ticks every visible idea that has no cards. In a session, flagged ideas start ticked. The menu on each idea lets you stop carding it, make cards for it again, or jump to its cards in step 3.
+2. **Write cards.** Choose the model and card types, and set the most cards per idea. Recall states a fact, Why explains a reason, Compose combines linked ideas, and Contrast separates the idea from a similar one (stored as `discriminate`). Write cards opens a dialog with the idea count, card limit, model calls and any cost estimate. Nothing runs until you press Start writing. Writing runs in the background and shows one progress line with Cancel. When a run ends, one summary offers Retry the rest and Dismiss. Cancelled ideas can be selected again straight away.
+3. **Review and send.** Each card shows Front, Back and Extra side by side with maths rendered. Edit swaps in text boxes with a live preview. Approve cards one at a time or all together. The deck field suggests your Anki decks and says whether a name already exists or will be created. Tags start from your template and can be changed before each send. Sending without a deck or profile shows an error. The More menu holds Write a card by hand, Check unconfirmed sends, presence checks, Show in Anki and Drop all unsent cards.
 
-**Make cards** opens Anki Bridge on the session. Flagged ideas are ticked, even if they already have cards; carded ideas are greyed. Current dismissals and ideas blocked by unresolved delivery or generation stay unticked. "Select all uncarded" ticks every idea without cards and estimates the card count using your saved cap. **Draft cards for selected** replaces the draft panel's selection and clears any old estimate. It never starts generation. You still choose a model, estimate and confirm.
+![Step 2 and step 3: card types with explanations, the Write cards button, and draft cards with Front, Back and Extra columns](docs/images/0.7.0-write-and-review.png)
 
-Flag notes go into the writer prompt. Changing a note makes an open estimate stale, so the backend requires a fresh estimate before generating. The session's card counts update when drafting finishes.
+Screenshots come from a scratch LearnHarness host with synthetic sessions and a fake AnkiConnect. They show the interface, not real card quality. Also see the [estimate dialog](docs/images/0.7.0-write-dialog.png), [editing a card](docs/images/0.7.0-edit.png), [a failed run](docs/images/0.7.0-failed-run.png), [settings](docs/images/0.7.0-settings.png), [tags and note type settings](docs/images/0.7.0-settings-tags.png), [the flag dialog](docs/images/0.7.0-flag-dialog.png) and [the light theme](docs/images/0.7.0-light.png). The [0.6.1 page](docs/images/0.6.1-before.png) is kept for comparison.
 
-![Session panel with one flagged idea ticked, in a scratch LearnHarness host](docs/images/0.4.0-session-panel.png)
+### Tags
 
-Screenshot from the integrated scratch-host run with a synthetic session. [Session selection and generation estimate](docs/images/0.4.0-session-drafting.png) shows the same session feeding the draft panel. See [0.4.0 verification](docs/0.4.0-verification.md) and the [session flow contract](docs/session-contract.md).
+Set "Tags for new cards" in settings. Separate tags with spaces. `{deck}` becomes the deck name with spaces replaced by underscores, so the template `{deck}::Lecture_01` with the deck `Year 3::Nuclear Physics` gives `Year_3::Nuclear_Physics::Lecture_01`. The send bar shows the result, and any change you make there applies to that send. The `learnharness` and card-type tags are on by default and can be turned off.
 
-### Coverage and backfill in 0.5.0
+### Session flags
 
-Both pickers show whether an idea has no cards, drafts waiting, sent cards or a current dismissal. Source changes and missing sources have separate warnings. Mixed sent and waiting counts remain visible. Coverage counts cards sent to the paired URL and profile across all decks; cards sent elsewhere carry a warning. These are saved records, not a live Anki presence check. A note deleted in Anki stays deleted and does not automatically return to backfill.
+In a teaching session, Flag for Anki in the top bar marks the teacher's latest reply for cards. A click opens a dialog with a plain-text preview of the reply and an optional note such as "I got the sign wrong". The card writer receives the note with that reply's ideas. The shortcut, `Cmd/Ctrl+Shift+A` by default, flags straight away and offers the note in a short confirmation. A flag covers every idea LearnHarness extracted from that reply.
 
-Use "No cards" and search to narrow the list, then "Select all uncarded" to select visible eligible ideas. The displayed card count is a maximum. Dropped-only ideas are eligible again. Changed sources require an explicit choice from "All nodes"; missing sources appear as nonselectable history. Changing the filter or search removes hidden selections and clears the estimate. Opening the graph-wide picker selects nothing by default. Both views enforce a 1,000-node limit without truncating a bulk or default selection. Narrow the search or scope if too many ideas qualify.
+LearnHarness extracts ideas after a reply settles and doesn't announce when it finishes. Until then the flag shows that extraction is still running, and the page re-checks when extraction activity changes. Make cards in the top bar opens Anki Bridge scoped to that session with its flagged ideas ticked. Flags in other sessions are listed under step 1 and open their session.
 
-Bulk selection retains backfill intent through estimates, confirmation and retries, including after restart. If an idea gains coverage before an estimate or retry, the backend rejects that backfill target. Choose it individually to request another angle; the bridge never silently changes backfill into an explicit request.
+### Coverage and backfill
 
-"Don't card this" dismisses the current statement across sessions and profiles. It never drops drafts or changes Anki. Review or drop waiting drafts and settle generation or delivery before dismissing an idea. "Restore" makes it selectable again. A changed statement expires its old dismissal and shows a source warning. A model skip does not create a dismissal. The native model picker remains; coverage uses plugin-owned rows because the host knowledge picker cannot accept labels or filters.
+Coverage counts cards sent to the paired URL and profile across all decks. Cards sent to another profile get their own label. These are saved records, not a live presence check. A note deleted in Anki stays deleted and does not return to backfill.
 
-Coverage loads without a selected model or live Anki connection. If a graph read fails, the last rows remain visible but stale, and selection is disabled until "Refresh graph" succeeds. Node IDs determine coverage. Alias text cannot transfer old coverage to a recreated idea. "Source missing" means absent from the returned graph snapshot, not confirmed deletion. The host can silently omit unreadable or invalid ledger data, so keep that uncertainty in mind.
+Selecting ideas without cards keeps backfill intent through estimates, confirmation and retries, including after restart. If an idea gains coverage first, the backend rejects that backfill target. Tick it yourself to ask for another angle. Not carding an idea applies to its current statement across sessions and profiles, never drops drafts and never changes Anki. A changed statement ends the old dismissal and shows a warning. Both views keep a 1,000-idea selection limit.
 
-## Development preview
+If a list read fails, the last rows stay visible and marked out of date, and selection is disabled until Refresh succeeds. Ideas missing from the current graph read appear in a collapsed history section with their cards kept.
 
-![Anki Bridge 0.3.0 in a scratch LearnHarness host. A generated draft sits beside the source statement it was written from, with a live preview that renders the maths.](docs/images/0.3.0-review.png)
-
-This is a real screenshot from the 0.3.0 scratch run, not a mockup. The graph has two synthetic nodes, and the drafts come from a local stub model, so the screenshot shows the workflow, not real card quality. The [estimate screen](docs/images/0.3.0-preflight.png) comes from the same run.
+## Earlier verification
 
 The 0.2.0 tests used LearnHarness 0.6.1, Anki 26.08.1 and AnkiConnect builds 26.10.11.0 and 26.11.15.0. They covered note type creation and repair, duplicate rejection, profile mismatches, Show in Anki, and recovery after killing the bridge immediately after a real `addNote`. See [0.2.0 verification](docs/0.2.0-verification.md) and [0.3.0 verification](docs/0.3.0-verification.md).
 
@@ -112,16 +113,16 @@ For development tests, use a throwaway Anki profile and a LearnHarness checkout 
    ```
 
    The installer replaces `anki-bridge/dist/` and preserves its sibling `data/`. Discovery leaves the plugin disabled. Enable it in settings; restart LearnHarness after changing already-loaded plugin code.
-3. Open Anki Bridge from the sidebar. Save the AnkiConnect URL and optional API key, then test the connection. The default is `http://127.0.0.1:8765`; check your local port first because another service may use it. Use a separate port for isolated tests.
-4. Choose graph nodes from All nodes or No cards, optionally narrow them with search, and select a configured model. Set the maximum cards per node and enabled kinds. Click Estimate generation and check the node count, maximum cards, number of batches, the maximum model turns if validation retries, and the first-attempt token estimate. Estimating calls no model. A dollar estimate appears only when the model catalog supplies pricing. Click Confirm and generate to start. You can close the view while it runs. Cancelling keeps drafts from completed tasks.
-5. Review each card beside the source statement captured at drafting. Check correctness and assumptions, edit as needed and save. The live LearnHarness preview supports maths and code. Open **Preview Anki field formatting** to inspect what the bridge sends for Front, Back and Extra. Anki applies its own styling and renders the TeX. Length warnings are advisory. Drop unwanted cards, then approve cards individually or confirm bulk approval. Editing clears approval. No generation result is approved automatically.
-6. Test and pair the displayed throwaway Anki profile. Choose an existing or new deck and send approved cards. Check presence or use Show in Anki. URL or profile mismatches block sends and reconciliation; do not switch profiles during a send, since AnkiConnect cannot make a profile check and write atomic.
+3. Open the Anki Bridge settings. Save the AnkiConnect address and optional API key, then test the connection. The default is `http://127.0.0.1:8765`; check your local port first because another service may use it. With Anki open on the throwaway profile, choose Use the open profile.
+4. Open Anki Bridge from the sidebar and choose ideas in step 1. In step 2, select a configured model, card types and the most cards per idea, then press Write cards. The dialog shows the idea count, card limit, model calls and a dollar estimate when the catalog has pricing. Estimating calls no model. Start writing runs it in the background; you can leave the page. Cancelling keeps cards from finished batches.
+5. Review each card. The collapsed Source idea shows the statement captured at drafting. Edit and save as needed; editing an approved card returns it to draft. Length warnings are advisory. Drop unwanted cards, then approve cards one at a time or all together. No generated card is approved automatically.
+6. Choose an existing or new deck, check the tags and send approved cards. Check presence or use Show in Anki. URL or profile mismatches block sends and reconciliation; do not switch profiles during a send, since AnkiConnect cannot make a profile check and write atomic.
 
-Use Refresh generation to inspect running or interrupted tasks. Completed worker results are applied at most once. Retry offers a new preflight for unsuccessful tasks; it does not regenerate successful tasks. Source changes and missing nodes are shown without changing Anki notes. Writing a card by hand is still available in a collapsed section.
+Completed worker results are applied at most once. Retry the rest offers a new estimate for unsuccessful batches; it does not regenerate successful ones. Source changes and missing ideas are shown without changing Anki notes. Write a card by hand is in the More menu.
 
 The bridge never updates or deletes existing Anki notes or their review history. Field repair and styling replacement are separate actions; styling replacement can overwrite template edits after confirmation. Close affected Anki editors before either operation.
 
-The optional API key is stored in plain text in the plugin's `data/` directory. Keep it private, use loopback and a trusted local AnkiConnect service, and never distribute `data/`. A remote HTTP endpoint can expose both the key and card content. The saved key is not displayed. A blank key input keeps it only while the URL stays the same; saving a different URL clears it, and the clear checkbox removes it.
+The optional API key is stored in plain text in the plugin's `data/` directory. Keep it private, use loopback and a trusted local AnkiConnect service, and never distribute `data/`. A remote HTTP endpoint can expose both the key and card content. The saved key is not displayed. A blank key input keeps it only while the URL stays the same; saving a different URL clears it, and Remove saved key removes it.
 
 The opt-in [live integration test](docs/0.2.0-verification.md) requires an isolated profile named `Anki Bridge Test`, leaves notes in that collection, and refuses ports 8765 and 8766. It does not start or stop Anki. The core Flashcards plugin is independent and can remain enabled.
 

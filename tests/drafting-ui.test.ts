@@ -1,33 +1,36 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { Window } from "happy-dom";
-import { mountDrafting } from "../src/drafting-ui.ts";
+import { mountDrafting, readableError } from "../src/drafting-ui.ts";
 import type { PluginFrontendContext } from "../sdk/index.d.ts";
+import { chooseMenu, fakeUi } from "./fake-ui.ts";
 
-const tick = async () => { for (let i = 0; i < 4; i++) await new Promise(resolve => setTimeout(resolve, 0)); };
+const tick = async () => { for (let i = 0; i < 6; i++) await new Promise(resolve => setTimeout(resolve, 0)); };
 const preflight = { preflightId: "p1", nodeIds: ["n_a"], nodeCount: 1, maximumCards: 2, inputTokens: 900, outputTokens: 1200, estimatedCost: null,
   model: { provider: "scratch", id: "writer" }, settings: {}, batches: [{ nodeIds: ["n_a"], inputTokens: 900, outputAllowance: 1200 }], skipped: [] };
+const coverage = () => ({ state: "no-cards", base: "no-cards", selectable: true, uncarded: true, canDismiss: true,
+  dismissed: false, generating: false, unresolved: 0, olderSourceCards: 0, unknownSourceCards: 0, deletedNotes: 0 });
 
-function setup(options: { catalogUnavailable?: boolean; initialGraphFailure?: boolean } = {}) {
+function setup(options: { catalogUnavailable?: boolean; initialGraphFailure?: boolean; model?: boolean } = {}) {
   const window = new Window();
   Object.assign(globalThis, { document: window.document });
   const controller = new AbortController();
   const calls: Array<{ name: string; input: any }> = [];
   const graph: any = { nodes: [{ id: "n_a", name: "Alpha", statement: "Alpha holds under A.", statementHash: "a".repeat(64),
-    cards: { waiting: 0, sent: 0, sentElsewhere: 0 }, coverage: { state: "no-cards", base: "no-cards", selectable: true, uncarded: true, canDismiss: true,
-      dismissed: false, generating: false, unresolved: 0, olderSourceCards: 0, unknownSourceCards: 0, deletedNotes: 0 } }],
-    missing: [], cardsPerNode: 2, paired: false, pairingWarning: false };
-  const state: any = { generationSettings: { cardsPerNode: 2, enabledKinds: ["recall", "why", "compose", "discriminate"], model: null }, generations: [] };
+    cards: { waiting: 0, sent: 0, sentElsewhere: 0 }, coverage: coverage() }], missing: [], cardsPerNode: 2, paired: false, pairingWarning: false };
+  const session: any = { session: { id: "s1", title: "Session one", exists: true }, flags: [], cardsPerNode: 2, paired: false,
+    nodes: [{ id: "n_s", name: "Session idea", statement: "Only in the session.", statementHash: "s".repeat(64), cards: { waiting: 0, sent: 0, sentElsewhere: 0 }, coverage: coverage(), flagged: true, flagNotes: [] }] };
+  const state: any = { generationSettings: { cardsPerNode: 2, enabledKinds: ["recall", "why", "compose", "discriminate"], model: options.model ? { provider: "scratch", id: "writer" } : null }, generations: [] };
   let model: ((v: { provider: string; id: string }) => void | Promise<void>) | undefined;
   let failNextCoverage = options.initialGraphFailure;
-  let mutationGate: Promise<void> | undefined;
-  let refreshed = 0, knowledgeMounts = 0, hold: Promise<void> | undefined, graphHold: Promise<void> | undefined, settingsHold: Promise<void> | undefined;
-  const widget = () => ({ update: () => {}, dispose: () => {} });
+  let mutationGate: Promise<void> | undefined, hold: Promise<void> | undefined, graphHold: Promise<void> | undefined;
+  let refreshed = 0, modelMounts = 0, knowledgeMounts = 0;
   const ctx = {
     signal: controller.signal, onResync: () => () => {},
     call: async (name: string, input: any) => {
       calls.push({ name, input });
       if (name === "coverageContext") { if (failNextCoverage) { failNextCoverage = false; throw new Error("Initial graph read failed"); } const result = structuredClone(graph); await graphHold; return result; }
+      if (name === "sessionFlow") return structuredClone(session);
       if (name === "generationContext") throw new Error("Catalog unavailable");
       if (name === "dismissNode" || name === "restoreNode") {
         await mutationGate;
@@ -37,31 +40,39 @@ function setup(options: { catalogUnavailable?: boolean; initialGraphFailure?: bo
           state: dismissed ? "dismissed" : "no-cards", base: dismissed ? "dismissed" : "no-cards" });
         return structuredClone(graph);
       }
-      if (name === "generationSettings") { await settingsHold; Object.assign(state.generationSettings, input); }
+      if (name === "generationSettings") Object.assign(state.generationSettings, input);
       if (name === "preflight" || name === "retryGeneration") { await hold; return structuredClone(preflight); }
       if (name === "generate") state.generations.push({ id: "p1", status: "running", nodeIds: ["n_a"], skipped: [], settings: {}, createdAt: "", tasks: [
         { requestId: "r1", status: "running", input: {}, outputAllowance: 1200, sources: [{ nodeId: "n_a", name: "Alpha" }] }] });
       if (name === "cancelGeneration") { state.generations[0].status = "cancelled"; state.generations[0].tasks[0].status = "cancelled"; }
+      if (name === "dismissGeneration") state.generations.find((g: any) => g.id === input.id).hidden = true;
       return structuredClone(state);
     },
-    ui: {
+    ui: fakeUi({
       mountKnowledgePicker: () => { knowledgeMounts++; throw new Error("Native knowledge picker must not be mounted"); },
-      mountModelPicker: (_: HTMLElement, props: { onChange: typeof model }) => { if (options.catalogUnavailable) throw new Error("Catalog unavailable"); model = props.onChange; return widget(); },
-    },
+      mountModelPicker: (_: HTMLElement, props: { onChange: typeof model }) => {
+        if (options.catalogUnavailable) throw new Error("Catalog unavailable");
+        modelMounts++; model = props.onChange; return { update: () => {}, dispose: () => {} };
+      },
+    }),
   } as unknown as PluginFrontendContext;
-  const container = window.document.createElement("div");
-  window.document.body.append(container);
-  const panel = mountDrafting(ctx, container as unknown as HTMLElement, controller.signal, async () => { refreshed++; });
-  const button = (label: string) => {
-    const found = [...container.querySelectorAll("button")].find(b => b.textContent === label);
+  const ideas = window.document.createElement("div"), write = window.document.createElement("div");
+  window.document.body.append(ideas, write);
+  const panel = mountDrafting(ctx, ideas as unknown as HTMLElement, write as unknown as HTMLElement, controller.signal, async () => { refreshed++; });
+  const doc = window.document;
+  const text = () => `${ideas.textContent} ${write.textContent}`;
+  const buttons = () => [...doc.querySelectorAll("button")];
+  const button = (label: string | RegExp) => {
+    const found = buttons().find(b => typeof label === "string" ? b.textContent === label : label.test(b.textContent ?? ""));
     assert.ok(found, `button ${label}`); return found;
   };
-  return { container, calls, state, graph, button, select: (ids: string[]) => {
-      for (const box of container.querySelectorAll("li input[type=checkbox]")) {
-        (box as unknown as HTMLInputElement).checked = ids.includes("n_a"); box.dispatchEvent(new window.Event("change"));
-      }
-    }, pickModel: (v: { provider: string; id: string }) => model!(v),
-    holdSettings: () => { let release!: () => void; settingsHold = new Promise(resolve => { release = resolve; }); return () => { settingsHold = undefined; release(); }; },
+  const has = (label: string | RegExp) => buttons().some(b => typeof label === "string" ? b.textContent === label : label.test(b.textContent ?? ""));
+  const event = (type: string) => new window.Event(type) as unknown as Event;
+  const box = () => ideas.querySelector("li input[type=checkbox]") as unknown as HTMLInputElement;
+  return { ideas, write, text, calls, state, graph, session, button, has, box, event, panel,
+    select: (on: boolean) => { const b = box(); b.checked = on; b.dispatchEvent(event("change")); },
+    pickModel: (v: { provider: string; id: string }) => model!(v),
+    dialog: () => doc.querySelector(".ab-dialog"),
     holdGraphReload: () => {
       let resolve!: () => void, reject!: (error: Error) => void;
       graphHold = new Promise<void>((yes, no) => { resolve = yes; reject = no; });
@@ -72,386 +83,283 @@ function setup(options: { catalogUnavailable?: boolean; initialGraphFailure?: bo
       mutationGate = new Promise<void>((yes, no) => { resolve = yes; reject = no; });
       return { resolve: () => { mutationGate = undefined; resolve(); }, reject: () => { mutationGate = undefined; reject(new Error("Graph read failed")); } };
     },
-    refreshed: () => refreshed, knowledgeMounts: () => knowledgeMounts, panel, holdEstimates: () => { let release!: () => void; hold = new Promise(r => { release = r; }); return () => { hold = undefined; release(); }; }, close: async () => { panel.dispose(); controller.abort(); await window.happyDOM.close(); } };
+    holdEstimates: () => { let release!: () => void; hold = new Promise(r => { release = r; }); return () => { hold = undefined; release(); }; },
+    refreshed: () => refreshed, modelMounts: () => modelMounts, knowledgeMounts: () => knowledgeMounts,
+    menu: async (label: string) => { (ideas.querySelector("button.ab-icon-button") as unknown as HTMLButtonElement).click(); await chooseMenu(label); },
+    close: async () => { panel.dispose(); controller.abort(); await window.happyDOM.close(); } };
 }
 
-test("drafting needs explicit selection and a confirmed estimate before any generate call", async () => {
+test("writing needs a selection and a model, confirms the estimate in a dialog, then starts once", async () => {
   const f = setup();
   try {
-    await tick();
-    assert.match(f.container.textContent!, /Choose a configured model/);
-    f.button("Estimate generation").click(); await tick();
-    assert.match(f.container.textContent!, /Select at least one graph node/);
-    f.select(["n_a"]); await tick();
-    assert.match(f.container.textContent!, /1 node selected/);
-    assert.match(f.container.textContent!, /Alpha holds under A/);
+    await f.panel.setScope(undefined); await tick();
+    assert.match(f.text(), /Choose a model first/);
+    assert.equal(f.button("Write cards").disabled, true);
+    f.select(true); await tick();
+    assert.match(f.text(), /1 idea selected, up to 2 cards/);
+    assert.equal(f.button("Write cards for 1 idea").disabled, true, "no model yet");
     await f.pickModel({ provider: "scratch", id: "writer" }); await tick();
     assert.deepEqual(f.calls.find(c => c.name === "generationSettings")!.input, { model: { provider: "scratch", id: "writer" } });
-    f.select(["n_a"]); await tick();
-    f.button("Estimate generation").click(); await tick();
+    f.button("Write cards for 1 idea").click(); await tick();
+    assert.ok(f.dialog(), "estimate dialog opens");
+    assert.match(f.dialog()!.textContent!, /Up to 2.*writer.*1, or up to 3 if answers need fixing.*No estimate for this model/s);
     assert.equal(f.calls.some(c => c.name === "generate"), false);
-    assert.match(f.container.textContent!, /up to 2 cards in 1 batch, up to 3 model turns if validation retries\./);
-    assert.match(f.container.textContent!, /No dollar estimate/);
-    // Changing the selection invalidates the visible estimate.
-    f.select(["n_a"]); await tick();
-    assert.equal([...f.container.querySelectorAll("button")].some(b => b.textContent === "Confirm and generate"), false);
-    f.button("Estimate generation").click(); await tick();
-    f.button("Confirm and generate").click(); await tick();
-    assert.deepEqual(f.calls.find(c => c.name === "generate")!.input, { preflightId: "p1" });
+    f.button("Start writing").click(); await tick();
+    assert.deepEqual(f.calls.filter(c => c.name === "generate").map(c => c.input), [{ preflightId: "p1" }]);
+    assert.equal(f.dialog(), null);
     assert.ok(f.refreshed() >= 1);
-    assert.match(f.container.textContent!, /running: 0 of 1 task applied/);
-    f.button("Cancel generation").click(); await tick();
+    assert.match(f.text(), /Writing cards for 1 idea 0 of 1 batch done/);
+    assert.equal(f.button("Write cards for 1 idea").disabled, true, "one generation at a time");
+    f.button("Cancel").click(); await tick();
     assert.deepEqual(f.calls.find(c => c.name === "cancelGeneration")!.input, { id: "p1" });
-    f.button("Estimate retry").click(); await tick();
-    assert.ok(f.button("Confirm and generate"));
+    assert.match(f.text(), /Cancelled\. Finished cards are kept/);
+    f.button("Retry the rest").click(); await tick();
+    assert.deepEqual(f.calls.filter(c => c.name === "retryGeneration").map(c => c.input), [{ id: "p1" }]);
+    assert.ok(f.dialog(), "retry confirms its own estimate");
     assert.equal(f.calls.filter(c => c.name === "generate").length, 1);
   } finally { await f.close(); }
 });
 
-test("drafting settings validate locally through the backend and keep the cap as a maximum", async () => {
-  const f = setup();
+test("a selection change while the dialog is open blocks the start", async () => {
+  const f = setup({ model: true });
   try {
-    await tick();
-    const cap = f.container.querySelector("input[type=number]") as unknown as HTMLInputElement;
-    cap.value = "4";
-    const toggles = [...f.container.querySelectorAll(".anki-bridge-kind-toggles input[type=checkbox]")] as unknown as HTMLInputElement[];
-    toggles[3]!.checked = false;
-    f.button("Save drafting defaults").click(); await tick();
-    assert.deepEqual(f.calls.find(c => c.name === "generationSettings")!.input, { cardsPerNode: 4, enabledKinds: ["recall", "why", "compose"] });
-    assert.match(f.container.textContent!, /maximum, not a quota/);
+    await f.panel.setScope(undefined); await tick();
+    f.select(true); await tick();
+    f.button("Write cards for 1 idea").click(); await tick();
+    f.select(false); f.select(true); await tick();
+    f.button("Start writing").click(); await tick();
+    assert.equal(f.calls.some(c => c.name === "generate"), false);
+    assert.match(f.text(), /selection changed while the dialog was open/);
   } finally { await f.close(); }
 });
 
-test("polling a running generation keeps unsaved settings and pickers, and refreshes cards on change", async () => {
+test("an estimate that returns after the selection changed opens no dialog", async () => {
+  const f = setup({ model: true });
+  try {
+    await f.panel.setScope(undefined); await tick();
+    f.select(true); await tick();
+    const release = f.holdEstimates();
+    f.button("Write cards for 1 idea").click(); await tick();
+    f.select(false); f.select(true);
+    release(); await tick();
+    assert.equal(f.dialog(), null);
+    assert.equal(f.calls.some(c => c.name === "generate"), false);
+    assert.match(f.text(), /selection changed/);
+  } finally { await f.close(); }
+});
+
+test("card types and cap save as soon as they change, and the last type stays on", async () => {
   const f = setup();
   try {
-    await tick();
-    await f.pickModel({ provider: "scratch", id: "writer" }); await tick();
-    f.select(["n_a"]); await tick();
-    f.button("Estimate generation").click(); await tick();
-    f.button("Confirm and generate").click(); await tick();
-    const mounts = f.knowledgeMounts(), refreshed = f.refreshed();
-    const cap = f.container.querySelector("input[type=number]") as unknown as HTMLInputElement;
-    cap.value = "3"; cap.dispatchEvent(new (cap.ownerDocument.defaultView as any).Event("input"));
+    await f.panel.setScope(undefined); await tick();
+    const cap = f.write.querySelector(".ab-write-settings select") as unknown as HTMLSelectElement;
+    cap.value = "4"; cap.dispatchEvent(f.event("change")); await tick();
+    const toggles = () => [...f.write.querySelectorAll(".ab-chips input[type=checkbox]")] as unknown as HTMLInputElement[];
+    toggles()[3]!.checked = false; toggles()[3]!.dispatchEvent(f.event("change")); await tick();
+    assert.deepEqual(f.calls.filter(c => c.name === "generationSettings").map(c => c.input), [{ cardsPerNode: 4 }, { enabledKinds: ["recall", "why", "compose"] }]);
+    assert.match(f.text(), /Contrast Tell the idea apart from a similar one/);
+    for (const i of [1, 2]) { toggles()[i]!.checked = false; toggles()[i]!.dispatchEvent(f.event("change")); await tick(); }
+    assert.equal(toggles()[0]!.disabled, true, "the only remaining type cannot be turned off");
+  } finally { await f.close(); }
+});
+
+test("polling updates progress without rebuilding the model picker and refreshes cards once on change", async () => {
+  const f = setup({ model: true });
+  try {
+    await f.panel.setScope(undefined); await tick();
+    f.select(true); await tick();
+    f.button("Write cards for 1 idea").click(); await tick();
+    f.button("Start writing").click(); await tick();
+    const mounts = f.modelMounts(), refreshed = f.refreshed();
     await new Promise(resolve => setTimeout(resolve, 1300)); await tick();
-    assert.equal(f.knowledgeMounts(), mounts, "unchanged poll does not rebuild pickers");
-    assert.equal((f.container.querySelector("input[type=number]") as unknown as HTMLInputElement).value, "3");
+    assert.equal(f.modelMounts(), mounts, "unchanged poll does not rebuild pickers");
     f.state.generations[0].status = "completed"; f.state.generations[0].tasks[0].status = "applied";
+    f.state.generations[0].tasks[0].result = { targets: [{ nodeId: "n_a", cards: [{}, {}] }] };
     await new Promise(resolve => setTimeout(resolve, 1300)); await tick();
-    assert.match(f.container.textContent!, /completed: 1 of 1 task applied/);
+    assert.match(f.text(), /Wrote 2 cards for 1 idea\. Review them in step 3\./);
     assert.equal(f.refreshed(), refreshed + 1);
-    assert.equal(f.knowledgeMounts(), mounts);
-    assert.equal((f.container.querySelector("input[type=number]") as unknown as HTMLInputElement).value, "3");
+    assert.equal(f.modelMounts(), mounts);
   } finally { await f.close(); }
 });
 
-test("actions clicked while another is in flight are queued, not dropped", async () => {
+test("finished batches can be dismissed, and only the latest one stays on the page", async () => {
   const f = setup();
   try {
-    await tick();
-    f.button("Save drafting defaults").click();
-    f.button("Refresh graph").click();
-    await tick(); await tick();
-    assert.deepEqual(f.calls.map(c => c.name).filter(n => n !== "generationStatus"), ["coverageContext", "generationSettings", "coverageContext"]);
+    const done = (id: string, cards: number) => ({ id, status: "completed", nodeIds: ["n_a"], skipped: [], settings: {}, createdAt: "", tasks: [
+      { requestId: `r-${id}`, status: "applied", input: {}, outputAllowance: 1, sources: [], result: { targets: [{ nodeId: "n_a", cards: Array(cards).fill({}) }] } }] });
+    f.state.generations.push(done("old", 1), done("new", 3));
+    await f.panel.setScope(undefined); await tick();
+    assert.match(f.text(), /Wrote 3 cards/); assert.doesNotMatch(f.text(), /Wrote 1 card\b/);
+    f.button("Dismiss").click(); await tick();
+    assert.deepEqual(f.calls.find(c => c.name === "dismissGeneration")!.input, { id: "new" });
+    assert.match(f.text(), /Wrote 1 card\b/, "the next undismissed batch shows");
   } finally { await f.close(); }
 });
 
-test("an outside selection (0.4.0 session panel) replaces the selection without starting generation", async () => {
+test("failed batches show the provider message, not raw JSON", async () => {
   const f = setup();
   try {
-    await tick();
-    await f.panel.select(["n_a", "n_a"]); await tick();
-    assert.match(f.container.textContent!, /1 node selected/);
-    assert.match(f.container.textContent!, /Alpha holds under A/);
+    f.state.generations.push({ id: "g", status: "failed", nodeIds: ["n_a"], skipped: [], settings: {}, createdAt: "", tasks: [
+      { requestId: "r", status: "failed", input: {}, outputAllowance: 1, sources: [], error: '401 {"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}' }] });
+    await f.panel.setScope(undefined); await tick();
+    assert.match(f.text(), /Couldn't write cards\. The model call failed\./);
+    assert.match(f.text(), /Invalid x-api-key \(HTTP 401\)\./);
+    assert.doesNotMatch(f.text(), /authentication_error/);
+    assert.equal(readableError("plain failure"), "plain failure");
+  } finally { await f.close(); }
+});
+
+test("session scope reads only that session's ideas and preselects flagged ones; the graph scope does not", async () => {
+  const f = setup();
+  try {
+    await f.panel.setScope({ sessionId: "s1" }); await tick();
+    assert.deepEqual(f.calls.filter(c => c.name === "sessionFlow").map(c => c.input), [{ sessionId: "s1" }]);
+    assert.equal(f.calls.some(c => c.name === "coverageContext"), false);
+    assert.match(f.text(), /Session idea/); assert.doesNotMatch(f.text(), /Alpha/);
+    assert.match(f.text(), /1 idea selected/);
+    await f.panel.setScope(undefined); await tick();
+    assert.match(f.text(), /Alpha/); assert.doesNotMatch(f.text(), /Session idea/);
+    assert.match(f.text(), /No ideas selected/);
+  } finally { await f.close(); }
+});
+
+test("a handoff selection replaces the choice and resets search without starting anything", async () => {
+  const f = setup();
+  try {
+    await f.panel.setScope(undefined); await tick();
+    const search = f.ideas.querySelector("input[type=search]") as unknown as HTMLInputElement;
+    search.value = "unrelated"; search.dispatchEvent(f.event("input"));
+    await f.panel.setScope(undefined, { nodeIds: ["n_a", "n_a"], backfillNodeIds: ["n_a"] }); await tick();
+    assert.equal(search.value, "");
+    assert.match(f.text(), /1 idea selected/);
     assert.equal(f.calls.some(c => c.name === "preflight" || c.name === "generate"), false);
   } finally { await f.close(); }
 });
 
-test("session handoff clears old confirmation before graph reload and rejects its queued click", async () => {
-  for (const outcome of ["resolve", "reject"] as const) {
-    const f = setup();
-    let gate: ReturnType<typeof f.holdGraphReload> | undefined;
-    try {
-      await tick();
-      f.select(["n_a"]); await f.pickModel({ provider: "scratch", id: "writer" }); await tick();
-      f.button("Estimate generation").click(); await tick();
-      const oldConfirm = f.button("Confirm and generate");
-      gate = f.holdGraphReload();
-      const selecting = f.panel.select(["n_b"]);
-      oldConfirm.click(); // The click can queue before the selection action begins.
-      await tick();
-      assert.equal([...f.container.querySelectorAll("button")].some(b => b.textContent === "Confirm and generate"), false, outcome);
-      gate[outcome](); await selecting; await tick();
-      assert.equal(f.calls.some(c => c.name === "generate"), false, outcome);
-      assert.match(f.container.textContent!, /Estimate changed/);
-    } finally { gate?.resolve(); await f.close(); }
-  }
-});
-
-test("an estimate reply that arrives after the selection or settings changed is discarded", async () => {
-  for (const change of ["selection", "settings"] as const) {
-    const f = setup();
-    try {
-      await tick();
-      f.select(["n_a"]); await f.pickModel({ provider: "scratch", id: "writer" }); await tick();
-      const release = f.holdEstimates();
-      f.button("Estimate generation").click(); await tick();
-      if (change === "selection") f.select(["n_a", "n_b"]);
-      else { const cap = f.container.querySelector("input[type=\"number\"]") as any; cap.value = "1"; cap.dispatchEvent(new cap.ownerDocument.defaultView.Event("input")); }
-      release(); await tick();
-      assert.equal([...f.container.querySelectorAll("button")].some(b => b.textContent === "Confirm and generate"), false, change);
-      assert.equal(f.calls.some(c => c.name === "generate"), false);
-    } finally { await f.close(); }
-  }
-});
-
-test("coverage rows need neither a selected model nor a model catalog, and never mount the native knowledge picker", async () => {
+test("idea rows need neither a model nor a catalog, and never mount the native knowledge picker", async () => {
   for (const catalogUnavailable of [false, true]) {
     const f = setup({ catalogUnavailable });
     try {
-      await tick();
-      assert.match(f.container.textContent!, /Alpha holds under A/);
-      assert.match(f.container.textContent!, /No cards/);
+      await f.panel.setScope(undefined); await tick();
+      assert.match(f.text(), /Alpha holds under A/);
+      assert.match(f.text(), /No cards/);
       assert.equal(f.knowledgeMounts(), 0);
       assert.equal(f.calls.some(c => c.name === "generationContext" || c.name === "connection"), false);
-      const box = f.container.querySelector('li input[type=checkbox]') as any;
-      assert.equal(box.disabled, false); assert.equal(box.checked, false);
-      box.click(); assert.match(f.container.textContent!, /1 node selected/);
-      assert.equal(f.calls.some(c => c.name === "preflight" || c.name === "generate"), false);
+      assert.equal(f.box().disabled, false); assert.equal(f.box().checked, false);
+      f.box().click(); assert.match(f.text(), /1 idea selected/);
     } finally { await f.close(); }
   }
 });
 
-test("dismiss and restore send the current hash, invalidate confirmation, and refresh eligibility without reticking", async () => {
+test("dismiss and restore send the current hash and refresh eligibility without reticking", async () => {
   const f = setup();
   try {
-    await tick(); f.select(["n_a"]); f.button("Estimate generation").click(); await tick();
-    assert.ok(f.button("Confirm and generate"));
-    f.button("Don't card this").click();
-    assert.equal([...f.container.querySelectorAll("button")].some(b => b.textContent === "Confirm and generate"), false);
-    await tick();
+    await f.panel.setScope(undefined); await tick(); f.select(true); await tick();
+    await f.menu("Don't make cards for this idea"); await tick();
     assert.deepEqual(f.calls.find(c => c.name === "dismissNode")!.input, { nodeId: "n_a", statementHash: "a".repeat(64) });
-    assert.match(f.container.textContent!, /0 nodes selected/);
-    assert.equal((f.container.querySelector('li input[type=checkbox]') as any).disabled, true);
-    f.button("Restore").click(); await tick();
+    assert.match(f.text(), /No ideas selected/);
+    assert.equal(f.box().disabled, true);
+    await f.menu("Make cards for this idea again"); await tick();
     assert.deepEqual(f.calls.find(c => c.name === "restoreNode")!.input, { nodeId: "n_a", statementHash: "a".repeat(64) });
-    const box = f.container.querySelector('li input[type=checkbox]') as any;
-    assert.equal(box.disabled, false); assert.equal(box.checked, false);
+    assert.equal(f.box().disabled, false); assert.equal(f.box().checked, false);
   } finally { await f.close(); }
 });
 
-test("a queued dismissal does not run after the first dismissal marks coverage stale", async () => {
+test("a queued dismissal does not run after the first one marks the list stale", async () => {
   const f = setup();
   try {
-    await tick();
+    await f.panel.setScope(undefined); await tick();
     const mutation = f.holdMutation();
-    const action = f.button("Don't card this");
-    action.click(); action.click(); await tick();
+    await f.menu("Don't make cards for this idea"); await f.menu("Don't make cards for this idea"); await tick();
     assert.equal(f.calls.filter(c => c.name === "dismissNode").length, 1);
     mutation.reject(); await tick();
     assert.equal(f.calls.filter(c => c.name === "dismissNode").length, 1);
-    assert.match(f.container.textContent!, /Coverage is stale/);
+    assert.match(f.text(), /may be out of date/);
   } finally { await f.close(); }
 });
 
-test("a committed dismissal keeps its acknowledgement and refreshes the session when a duplicate click follows a failed graph read", async () => {
+test("a saved dismissal keeps its acknowledgement and refreshes cards when the list read fails", async () => {
   const f = setup();
   try {
-    await tick();
-    const mutation = f.holdMutation();
-    const action = f.button("Don't card this");
-    const refreshed = f.refreshed();
-    action.click(); action.click(); await tick();
+    await f.panel.setScope(undefined); await tick();
+    const mutation = f.holdMutation(), refreshed = f.refreshed();
+    await f.menu("Don't make cards for this idea"); await tick();
     const graph = f.holdGraphReload();
     mutation.resolve(); await tick();
     graph.reject(); await tick();
-    assert.equal(f.calls.filter(c => c.name === "dismissNode").length, 1);
-    assert.match(f.container.textContent!, /Dismissal saved, but the graph refresh failed/);
-    assert.match(f.container.textContent!, /Coverage is stale/);
-    assert.equal(f.refreshed(), refreshed + 1, "refresh the session even if the graph refresh fails");
+    assert.match(f.text(), /Saved, but the list did not refresh/);
+    assert.match(f.text(), /may be out of date/);
+    assert.equal(f.refreshed(), refreshed + 1, "cards refresh even if the list does not");
   } finally { await f.close(); }
 });
 
-test("a profile change invalidates confirmation even when coverage rows are identical", async () => {
-  const f = setup();
-  try {
-    f.graph.paired = true; f.graph.pairingKey = 'profile A';
-    await tick(); f.select(["n_a"]); f.button("Estimate generation").click(); await tick();
-    f.button("Confirm and generate");
-    f.graph.pairingKey = 'profile B'; await f.panel.refresh();
-    assert.doesNotMatch(f.container.textContent!, /Confirm and generate/);
-    assert.match(f.container.textContent!, /1 node selected/);
-  } finally { await f.close(); }
-});
-
-test("source changes invalidate confirmation even when the selected node ID is unchanged", async () => {
-  const f = setup();
-  try {
-    await tick(); f.select(["n_a"]); f.button("Estimate generation").click(); await tick();
-    const old = f.button("Confirm and generate");
-    f.graph.nodes[0].statement = "Revised source."; f.graph.nodes[0].statementHash = "b".repeat(64);
-    await f.panel.refresh();
-    assert.match(f.container.textContent!, /Revised source/);
-    assert.match(f.container.textContent!, /1 node selected/);
-    assert.equal([...f.container.querySelectorAll("button")].some(b => b.textContent === "Confirm and generate"), false);
-    old.click(); await tick(); assert.equal(f.calls.some(c => c.name === "generate"), false);
-  } finally { await f.close(); }
-});
-
-test("older coverage responses cannot replace a newer view or restore a cleared selection", async () => {
+test("older list responses cannot replace a newer view or restore a cleared selection", async () => {
   const f = setup(); let gate: ReturnType<typeof f.holdGraphReload> | undefined;
   try {
-    await tick(); f.select(["n_a"]);
+    await f.panel.setScope(undefined); await tick(); f.select(true);
     gate = f.holdGraphReload(); const oldRead = f.panel.refresh(); gate.allowFollowingReads();
     f.graph.nodes[0].statement = "Newest graph view."; f.graph.nodes[0].statementHash = "c".repeat(64);
-    await f.panel.refresh(); f.button("Clear selection").click();
+    await f.panel.refresh(); f.button("Clear").click();
     gate.resolve(); await oldRead; await tick();
-    assert.match(f.container.textContent!, /Newest graph view/);
-    assert.doesNotMatch(f.container.textContent!, /Alpha holds under A/);
-    assert.match(f.container.textContent!, /0 nodes selected/);
+    assert.match(f.text(), /Newest graph view/);
+    assert.doesNotMatch(f.text(), /Alpha holds under A/);
+    assert.match(f.text(), /No ideas selected/);
   } finally { gate?.resolve(); await f.close(); }
 });
 
-test("a late handoff graph read cannot retick choices cleared while it was pending", async () => {
-  const f = setup(); let gate: ReturnType<typeof f.holdGraphReload> | undefined;
+test("a list read failure keeps the last rows as stale and blocks writing until a refresh", async () => {
+  const f = setup({ model: true }); let gate: ReturnType<typeof f.holdGraphReload> | undefined;
   try {
-    await tick(); gate = f.holdGraphReload(); const handoff = f.panel.select(["n_a"]); await tick();
-    f.button("Clear selection").click(); gate.resolve(); await handoff; await tick();
-    assert.match(f.container.textContent!, /0 nodes selected/);
-  } finally { gate?.resolve(); await f.close(); }
-});
-
-test("graph read failure retains the last view as stale, removes estimates, and blocks generation until refresh", async () => {
-  const f = setup(); let gate: ReturnType<typeof f.holdGraphReload> | undefined;
-  try {
-    await tick(); f.select(["n_a"]); f.button("Estimate generation").click(); await tick();
-    const confirm = f.button("Confirm and generate"); gate = f.holdGraphReload(); const reading = f.panel.refresh();
+    await f.panel.setScope(undefined); await tick(); f.select(true); await tick();
+    gate = f.holdGraphReload(); const reading = f.panel.refresh();
     gate.reject(); await reading; await tick();
-    assert.match(f.container.textContent!, /Coverage is stale/); assert.match(f.container.textContent!, /Alpha holds under A/);
-    assert.equal((f.container.querySelector('li input[type=checkbox]') as any).disabled, true);
-    confirm.click(); f.button("Estimate generation").click(); await tick();
-    assert.equal(f.calls.filter(c => c.name === "preflight").length, 1);
-    assert.equal(f.calls.some(c => c.name === "generate"), false);
-    await f.panel.refresh(); assert.equal((f.container.querySelector('li input[type=checkbox]') as any).disabled, false);
-    assert.match(f.container.textContent!, /1 node selected/);
+    assert.match(f.text(), /may be out of date/); assert.match(f.text(), /Alpha holds under A/);
+    assert.equal(f.box().disabled, true);
+    assert.equal(f.button("Write cards for 1 idea").disabled, true);
+    await f.panel.refresh(); await tick();
+    assert.equal(f.box().disabled, false);
+    assert.equal(f.button("Write cards for 1 idea").disabled, false);
   } finally { gate?.resolve(); await f.close(); }
 });
 
-for (const filter of ["search", "scope"] as const) test(`a late estimate cannot survive a ${filter} change`, async () => {
-  const f = setup();
+test("an initial list failure recovers on refresh without a model catalog", async () => {
+  const f = setup({ initialGraphFailure: true, catalogUnavailable: true });
   try {
-    await tick(); f.select(["n_a"]); const release = f.holdEstimates(); f.button("Estimate generation").click(); await tick();
-    if (filter === "search") {
-      const input = f.container.querySelector('input[type=search]') as any; input.value = "hidden"; input.dispatchEvent(new input.ownerDocument.defaultView.Event("input"));
-    } else {
-      const input = f.container.querySelector('select[aria-label="Coverage view"]') as any; input.value = "uncarded"; input.dispatchEvent(new input.ownerDocument.defaultView.Event("change"));
-    }
-    release(); await tick();
-    assert.equal([...f.container.querySelectorAll("button")].some(b => b.textContent === "Confirm and generate"), false);
-    assert.equal(f.calls.some(c => c.name === "generate"), false);
-    if (filter === "search") assert.match(f.container.textContent!, /0 nodes selected/);
+    await f.panel.setScope(undefined); await tick();
+    assert.match(f.text(), /may be out of date/);
+    await f.panel.refresh(); await tick();
+    assert.match(f.text(), /Alpha holds under A/);
+    assert.doesNotMatch(f.text(), /may be out of date/);
+    assert.equal(f.calls.some(c => c.name === "generationContext"), false);
   } finally { await f.close(); }
 });
 
-for (const stale of [false, true]) test(`a session handoff resets graph search and scope with ${stale ? "stale" : "fresh"} coverage`, async () => {
-  const f = setup();
+test("backfill intent travels through handoff and bulk selection; a manual tick is explicit", async () => {
+  const f = setup({ model: true });
   try {
-    await tick();
-    Object.assign(f.graph.nodes[0].coverage, { state: "sent", base: "sent", uncarded: false, canDismiss: false });
-    f.graph.nodes[0].cards.sent = 1; await f.panel.refresh();
-    const scope = f.container.querySelector('select[aria-label="Coverage view"]') as any;
-    scope.value = "uncarded"; scope.dispatchEvent(new scope.ownerDocument.defaultView.Event("change"));
-    const search = f.container.querySelector('input[type=search]') as any;
-    search.value = "unrelated"; search.dispatchEvent(new search.ownerDocument.defaultView.Event("input"));
-    if (stale) {
-      const gate = f.holdGraphReload(); const reading = f.panel.refresh();
-      gate.reject(); await reading;
-      assert.match(f.container.textContent!, /Coverage is stale/);
-    }
-    await f.panel.select(["n_a"]);
-    assert.equal(scope.value, "all"); assert.equal(search.value, "");
-    assert.match(f.container.textContent!, /Alpha holds under A/); assert.match(f.container.textContent!, /1 node selected/);
-  } finally { await f.close(); }
-});
-
-for (const action of ["Save drafting defaults", "Estimate generation"]) test(`late ${action} settings responses preserve newer unsaved inputs`, async () => {
-  const f = setup(); let release: (() => void) | undefined;
-  try {
-    await tick(); f.select(["n_a"]);
-    const cap = f.container.querySelector('input[type=number]') as any;
-    const edit = (value: string) => { cap.value = value; cap.dispatchEvent(new cap.ownerDocument.defaultView.Event("input")); };
-    edit("3"); release = f.holdSettings(); f.button(action).click(); await tick(); edit("4");
-    release(); await tick();
-    assert.equal((f.container.querySelector('input[type=number]') as any).value, "4");
-    assert.match(f.container.textContent!, /1 node selected\. Up to 4 cards/);
-    assert.equal(f.calls.some(c => c.name === "preflight"), false);
-  } finally { release?.(); await f.close(); }
-});
-
-test("Refresh graph is always available after an initial graph failure, even without a model catalog", async () => {
-  for (const catalogUnavailable of [false, true]) {
-    const f = setup({ initialGraphFailure: true, catalogUnavailable });
-    try {
-      await tick(); assert.match(f.container.textContent!, /Coverage is stale/);
-      assert.equal(f.button("Refresh graph").disabled, false);
-      f.button("Refresh graph").click(); await tick();
-      assert.match(f.container.textContent!, /Alpha holds under A/);
-      assert.doesNotMatch(f.container.querySelector('.anki-bridge-coverage [role=status]')!.textContent!, /stale/);
-      assert.equal((f.container.querySelector('li input[type=checkbox]') as any).disabled, false);
-      assert.equal(f.calls.some(c => c.name === "generationContext"), false);
-    } finally { await f.close(); }
-  }
-});
-
-test("Refresh graph clears an estimate synchronously before waiting for its graph response", async () => {
-  const f = setup(); let gate: ReturnType<typeof f.holdGraphReload> | undefined;
-  try {
-    await tick(); f.select(["n_a"]); f.button("Estimate generation").click(); await tick();
-    const oldConfirm = f.button("Confirm and generate"); gate = f.holdGraphReload();
-    f.button("Refresh graph").click();
-    assert.equal([...f.container.querySelectorAll("button")].some(b => b.textContent === "Confirm and generate"), false);
-    oldConfirm.click(); gate.resolve(); await tick();
-    assert.equal(f.calls.some(c => c.name === "generate"), false);
-  } finally { gate?.resolve(); await f.close(); }
-});
-
-test("drafting carries backfill intent through handoff, graph refresh and first preflight; legacy selection is explicit", async () => {
-  const f = setup();
-  try {
-    await tick();
-    await f.panel.select(["n_a"], ["n_a"]);
-    Object.assign(f.graph.nodes[0].coverage, { state: "sent", base: "sent", uncarded: false });
-    await f.panel.refresh();
-    f.button("Estimate generation").click(); await tick();
-    assert.deepEqual(f.calls.filter(c => c.name === "preflight").at(-1)!.input, { nodeIds: ["n_a"], backfillNodeIds: ["n_a"] }, "stale backfill remains backfill for backend rejection");
-    await f.panel.select(["n_a"]);
-    f.button("Estimate generation").click(); await tick();
-    assert.deepEqual(f.calls.filter(c => c.name === "preflight").at(-1)!.input, { nodeIds: ["n_a"], backfillNodeIds: [] });
-    Object.assign(f.graph.nodes[0].coverage, { state: "no-cards", base: "no-cards", uncarded: true });
-    await f.panel.refresh();
-    [...f.container.querySelectorAll("button")].find(b => b.textContent?.startsWith("Select all uncarded"))!.click();
-    f.button("Estimate generation").click(); await tick();
+    await f.panel.setScope(undefined, { nodeIds: ["n_a"], backfillNodeIds: ["n_a"] }); await tick();
+    const write = async () => { f.button(/^Write cards for/).click(); await tick(); f.button("Cancel").click(); await tick(); };
+    await write();
     assert.deepEqual(f.calls.filter(c => c.name === "preflight").at(-1)!.input, { nodeIds: ["n_a"], backfillNodeIds: ["n_a"] });
-    f.select([]); f.select(["n_a"]);
-    f.button("Estimate generation").click(); await tick();
+    f.select(false); f.select(true); await tick();
+    await write();
     assert.deepEqual(f.calls.filter(c => c.name === "preflight").at(-1)!.input, { nodeIds: ["n_a"], backfillNodeIds: [] });
+    f.button(/^Select ideas without cards/).click(); await tick();
+    await write();
+    assert.deepEqual(f.calls.filter(c => c.name === "preflight").at(-1)!.input, { nodeIds: ["n_a"], backfillNodeIds: ["n_a"] });
   } finally { await f.close(); }
 });
 
-test("programmatic drafting handoff accepts 1000 targets and refuses 1001 without replacing selection", async () => {
+test("a programmatic handoff accepts 1000 ideas and refuses 1001 with a warning", async () => {
   const f = setup();
   try {
-    await tick();
     const template = f.graph.nodes[0];
     f.graph.nodes = Array.from({ length: 1001 }, (_, i) => ({ ...template, id: `node-${i}`, name: `Node ${i}` }));
-    await f.panel.refresh();
     const ids = f.graph.nodes.map((n: { id: string }) => n.id);
-    await f.panel.select(ids.slice(0, 1000), ids.slice(0, 1000));
-    assert.equal(f.container.querySelectorAll("li input:checked").length, 1000);
-    await f.panel.select(ids);
-    assert.equal(f.container.querySelectorAll("li input:checked").length, 1000);
-    assert.match(f.container.textContent!, /1001 eligible nodes.*limit is 1000 nodes.*Narrow the search or scope/);
-    f.button("Estimate generation").click(); await tick();
-    assert.deepEqual(f.calls.filter(c => c.name === "preflight").at(-1)!.input, { nodeIds: ids.slice(0, 1000), backfillNodeIds: ids.slice(0, 1000) }, "rejected overflow also preserves the previous intent");
+    await f.panel.setScope(undefined, { nodeIds: ids.slice(0, 1000), backfillNodeIds: ids.slice(0, 1000) }); await tick();
+    assert.equal(f.ideas.querySelectorAll("li input:checked").length, 1000);
+    await f.panel.setScope(undefined, { nodeIds: ids }); await tick();
+    assert.equal(f.ideas.querySelectorAll("li input:checked").length, 0, "a new scope starts from an empty selection");
+    assert.match(f.text(), /That would select 1001 ideas/);
   } finally { await f.close(); }
 });

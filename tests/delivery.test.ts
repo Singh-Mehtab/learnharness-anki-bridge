@@ -410,3 +410,27 @@ test('actual process death after addNote and before state write reconciles on re
     await f.send([id]); assert.equal(f.notes.length, 1);
   } finally { await f.close(); }
 });
+
+test('tags come from the send, or the saved template, and learnharness tags can be turned off', async () => {
+  const f = await fixture();
+  try {
+    await f.pair();
+    await f.service.command('settings', { tagTemplate: '{deck}::Lecture_01 extra', systemTags: true });
+    assert.equal(f.snap().settings.tagTemplate, '{deck}::Lecture_01 extra');
+    assert.equal(f.snap().settings.url, f.url, 'tag settings leave the address alone');
+    const first = await f.draft('First?');
+    await f.approve([first]);
+    await f.send([first], 'Year 3::Nuclear Physics');
+    assert.deepEqual(f.notes[0].tags, ['Year_3::Nuclear_Physics::Lecture_01', 'extra', 'learnharness', 'learnharness::kind::recall']);
+    await f.service.command('settings', { systemTags: false });
+    const second = await f.draft('Second?');
+    await f.approve([second]);
+    await f.service.command('send', { ids: [second], deck: 'Scratch', tags: ['YEAR_3::NPP', 'YEAR_3::NPP'], expectedDestination: f.snap().destination });
+    assert.deepEqual(f.notes[1].tags, ['YEAR_3::NPP']);
+    const third = await f.draft('Third?');
+    await f.approve([third]);
+    await assert.rejects(f.service.command('send', { ids: [third], deck: 'Scratch', tags: ['has space'], expectedDestination: f.snap().destination }), /contains a space/);
+    assert.equal(f.notes.length, 2);
+    await assert.rejects(f.service.command('settings', { systemTags: 'yes' }), /Invalid system tags/);
+  } finally { await f.close(); }
+});

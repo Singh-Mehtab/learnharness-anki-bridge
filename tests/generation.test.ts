@@ -139,6 +139,23 @@ test('cancel stops unfinished work and keeps drafts from completed tasks', () =>
     host.workers.tasks.get('task-1')!.status = 'succeeded';
     await new Promise(resolve => setTimeout(resolve, 20));
     assert.equal((await c.call('generationStatus')).cards.length, 0);
+    // A finished batch can be hidden from the page; the record stays, and the idea can be selected again.
+    const hidden = await c.call('dismissGeneration', { id: p.preflightId });
+    assert.equal(hidden.generations[0].hidden, true); assert.equal(hidden.generations[0].status, 'cancelled');
+    const again = await c.call('preflight', { nodeIds: ['n_a'] });
+    assert.deepEqual(again.nodeIds, ['n_a']);
+  } finally { await close(); }
+}));
+
+test('a running batch cannot be dismissed', () => withHost(async (host, directory) => {
+  const c = host.context(directory); const close = await activate(c.ctx);
+  try {
+    await c.call('generationSettings', { model: { provider: 'scratch', id: 'writer' }, cardsPerNode: 1 });
+    const p = await c.call('preflight', { nodeIds: ['n_a'] });
+    await c.call('generate', { preflightId: p.preflightId });
+    await until(() => host.workers.starts.length === 1);
+    await assert.rejects(c.call('dismissGeneration', { id: p.preflightId }), /Cancel or finish/);
+    await assert.rejects(c.call('dismissGeneration', { id: p.preflightId, extra: 1 }));
   } finally { await close(); }
 }));
 

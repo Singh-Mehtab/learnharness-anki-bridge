@@ -5,7 +5,7 @@ import {
 } from '../src/session/flow.ts';
 import type { Flag, GraphLike } from '../src/session/flow.ts';
 import { extractedMessageIds, messageFingerprint } from '../src/session/extraction.ts';
-import { failedOutputCallIds } from '../src/session/flow.ts';
+import { failedOutputCallIds, plainText } from '../src/session/flow.ts';
 
 const transcript = [
   { id: 'u1', role: 'user', content: 'Explain spin', timestamp: 1 },
@@ -112,4 +112,10 @@ test('flag notes reach each matched node once; selection defaults to flagged nod
   ];
   assert.deepEqual(defaultSelection(nodes), ['a']);
   assert.deepEqual(uncardedIds(nodes), ['b', 'd']);
+});
+
+test('flag excerpts drop markdown heading marks, table rules and emphasis', () => {
+  assert.equal(plainText('## Overview\n\nSome **bold** and `code`.\n\n| Term | Meaning |\n|---|---|\n| A | mass number |'),
+    'Overview.\n\nSome bold and code.\n\nTerm, Meaning.\nA, mass number.');
+  assert.equal(plainText('```py\nx = 1\n```\n- item [link](http://x)'), '(code)\nitem link');
 });
