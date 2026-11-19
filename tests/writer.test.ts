@@ -287,3 +287,9 @@ test("duplicateIndexes treats the same whole equation as one fact, however it is
   ];
   assert.deepEqual(duplicateIndexes(cards), [-1, 0, -1, -1]);
 });
+
+test("writer instructions keep LaTeX backslashes (template-literal escapes ate them once)", () => {
+  const text = writerInstructions();
+  assert.ok(!/\((hbar|mathrm)\b/.test(text), "a bare (hbar or (mathrm means a lost backslash");
+  assert.ok(text.includes("\\(\\hbar c \\approx 197"));
+});

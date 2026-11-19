@@ -18,23 +18,28 @@ const selectionRules = `## What to card
 
 Card the facts the learner has to hold in memory: definitions, terms, units and dimensions, prefixes, symbols, conventions, relations between constants, and equations.
 
-- Card a fact the target states or relies on. A fact is not too basic to card because the source treats it as already known: a unit, prefix or equation the target uses is worth a card. Skip only everyday knowledge, such as that a metre is a length.
+- Card a fact the target states or relies on. A fact is not too basic to card because the source treats it as already known: a unit, prefix or equation the target uses is worth a card. Skip only everyday knowledge, such as that a metre is a length or that a smaller unit gives a bigger number.
 - Standard reference facts (SI prefixes, SI units, the units of physical constants) may be carded when the target uses them or a flag note asks for them, even if the source does not spell them out. Give values as standard tables do.
 - Equations the source states are worth a card even when one follows from another in a line or two.
-- Numerical values of physical constants and particle properties (\(h\), \(\hbar\), \(\hbar c\), 1 eV in joules, a proton's rest energy) are carded only when the task says constant values are on, or a flag note asks for that value. Their units and the relations between them (\(\hbar = h/2\pi\)) are always fair game.
-- Never card a number that comes out of one calculation or example: the momentum needed to resolve 1 fm, a microscope's resolution, a numeric conversion of one quantity. When an example number illustrates a general point, card the point instead: "time has the dimension of inverse energy", not "1 s is \(1.52\times10^{15}\ \mathrm{eV^{-1}}\)".
+- Numerical values of physical constants and particle properties (\\(h\\), \\(\\hbar\\), \\(\\hbar c\\), 1 eV in joules, a proton's rest energy) are carded only when the task says constant values are on, or a flag note asks for that value. Their units and the relations between them (\\(\\hbar = h/2\\pi\\)) are always fair game. The exception is a conversion constant the lesson calculates with, such as \\(\\hbar c \\approx 197\\ \\mathrm{MeV\\,fm}\\): card its value, asked directly ("What is \\(\\hbar c\\) in MeV fm?").
+- Don't card a conversion factor that follows straight from units already carded: once the units of \\(\\hbar\\) and \\(c\\) have cards, "which factor turns \\(\\mathrm{eV^{-1}}\\) into seconds" adds nothing.
+- Never card a number that comes out of one calculation or example: the momentum needed to resolve 1 fm, a microscope's resolution, a numeric conversion of one quantity. When an example number illustrates a general point, card the point instead: "time has the dimension of inverse energy", not "1 s is \\(1.52\\times10^{15}\\ \\mathrm{eV^{-1}}\\)".
 - Don't card a step of one worked example or the trick of one particular problem. Cards like that get memorised as answers instead of teaching anything.`;
 
 const cardRules = `## What a card is
 
-- One fact per card, asked as a closed question with one short correct answer the learner can check themselves against. If the back needs "and", it is two cards.
+- One fact per card, asked as a closed question with one short correct answer the learner can check themselves against. If the back needs "and", it is usually two cards. The exception is a contrast learnt as one idea ("electrons decide how elements behave; nuclei decide which exist").
 - Ask plainly and briefly: the shortest question that pins down one answer. Naming what you ask about is fine and usually best: "What does the prefix femto- (f) denote?", "What are the units of \\(\\hbar\\)?", "State the de Broglie relation."
 - For a named equation, the name is enough; don't list its symbols as well ("State the de Broglie relation in natural units.").
 - No hints. Don't describe the form of the answer ("energy times time, in electronvolts"), its structure ("with \\(m\\) factored out") or the exact combinations it uses: ask for \\(T\\) "in terms of \\(p\\), \\(c\\) and \\(m\\)", not "in terms of \\(pc\\) and \\(mc^2\\)".
+- Don't open with the rule being tested. "A prefixed unit is squared. What is \\(\\mathrm{fm^2}\\) in \\(\\mathrm{m^2}\\)?" gives the answer away in its first sentence.
+- When restoring constants, ask "Restore \\(c\\) in \\(T = p^2/2m\\)", not "in terms of \\(pc\\) and \\(mc^2\\)": the grouped forms are the answer.
 - Name a convention, don't define it. Write "In natural units, ...", never "In natural units (\\(\\hbar = c = 1\\)), ..." or a sentence explaining what natural units are. The same goes for any convention the lesson introduced.
 - The front must not contain the answer or the fact being tested, even by paraphrase. Never state a value or conversion on the front and then ask for arithmetic with it: "Express \\(3\\times10^{-13}\\) m in fm, given 1 fm = \\(10^{-15}\\) m" tests multiplication, not the prefix. Do not define the answer and then ask for its label.
 - Give only the context needed to know which answer is meant: the setting, the convention's name, and what a symbol means when that is not obvious from the lesson.
-- For a dimension, bracket notation is a good answer: \\([L] = [E]^{-1}\\).
+- Write units and dimensions as one bracket equation, with no "i.e.": \\([t] = [E]^{-1} = \\mathrm{eV^{-1}}\\), \\([p] = \\mathrm{eV\\,s\\,m^{-1}}\\). Use the same format for every such card.
+- Give a specific quantity its own symbol: rest energy is \\(E_0\\), not \\(E\\).
+- A field's shorthand (a momentum "in MeV" meaning \\(pc\\) in MeV) needs a short example in the extra, or the card reads as a riddle.
 - One card per fact. A changed number, wording or example is not a new card. Existing cards for a node are listed; never repeat them.`;
 
 const legacyApply = `a short new situation. Ask which principle, equation or method applies and which cue in the situation shows it. The back names the principle and the cue. Never ask for a computed number, never put the target's name on the front, and never state on the front the fact needed to answer.`;
