@@ -149,7 +149,10 @@ test("the top-bar button opens a note dialog, flags, confirms and closes itself 
 test("the top-bar Flag on a reply flagged with a note shows that note so it can be cleared", async (t) => {
   t.mock.timers.enable({ apis: ["setTimeout"] });
   let saved = "earlier note";
-  const f = setup((_name, input) => {
+  let release!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  const f = setup(async (_name, input) => {
+    await held;
     const note = (input as { note?: string }).note;
     if (note !== undefined) saved = note;
     return flagView({ note: saved, created: false });
@@ -159,10 +162,13 @@ test("the top-bar Flag on a reply flagged with a note shows that note so it can 
     registerSessionActions(f.ctx, new SessionRequests());
     await f.actions.get("flag-for-anki")!.run(sessionContext());
     const content = f.dialog()!.content;
-    f.buttonIn(content, "Flag").click(); await settle();
+    const note = content.querySelector("input")!;
+    const enter = () => note.dispatchEvent(new f.window.KeyboardEvent("keydown", { key: "Enter", bubbles: true }) as never);
+    enter(); enter();
+    assert.equal(f.calls.length, 1, "pressing Enter twice while saving submits only once");
+    release(); await settle();
     assert.equal(saved, "earlier note", "a blank first submit keeps the note");
     assert.match(content.textContent!, /Already flagged for Anki/);
-    const note = content.querySelector("input")!;
     assert.equal(note.value, "earlier note");
     assert.equal(note.readOnly, false);
     t.mock.timers.tick(5000);

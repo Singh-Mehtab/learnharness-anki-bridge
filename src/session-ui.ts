@@ -71,14 +71,18 @@ function openFlagDialog(ctx: PluginFrontendContext, target: { sessionId: string;
   const buttons = el("div", undefined, "ab-actions ab-dialog-actions");
   const handles: Array<ReturnType<typeof hostButton>> = [];
   const setDisabled = (disabled: boolean) => { for (const h of handles) h.update({ disabled }); };
+  let busy = false;
+  const run = async (action: () => Promise<void> | void) => {
+    if (busy || scope.signal.aborted) return;
+    busy = true;
+    clearTimeout(timer);
+    setDisabled(true);
+    try { await action(); }
+    catch (error) { status.textContent = error instanceof Error ? error.message : String(error); status.dataset.tone = "error"; }
+    finally { busy = false; setDisabled(false); syncFinished(); }
+  };
   const button = (label: string, action: () => Promise<void> | void, variant: "default" | "ghost" | "outline" = "outline") => {
-    const handle = hostButton(ctx, buttons, scope.signal, { label, variant, onClick: async () => {
-      clearTimeout(timer);
-      setDisabled(true);
-      try { await action(); }
-      catch (error) { status.textContent = error instanceof Error ? error.message : String(error); status.dataset.tone = "error"; }
-      finally { setDisabled(false); syncFinished(); }
-    } });
+    const handle = hostButton(ctx, buttons, scope.signal, { label, variant, onClick: () => run(action) });
     handles.push(handle);
     return handle;
   };
@@ -109,13 +113,11 @@ function openFlagDialog(ctx: PluginFrontendContext, target: { sessionId: string;
     finish(view, existing ? (noteChange ? (value ? "Note saved." : "Note removed.") : "Saved.")
       : view.created === false ? (value ? "Note saved." : "Already flagged.") : value ? "Flagged with your note." : "Flagged.");
   };
-  let primaryAction: () => Promise<void> = submit;
-  note.onkeydown = (event) => { if (event.key === "Enter") { event.preventDefault(); void primaryAction(); } };
+  note.onkeydown = (event) => { if (event.key === "Enter") { event.preventDefault(); void run(submit); } };
   const close = button(immediate ? "Close" : "Cancel", done, "ghost");
   // Undo only a flag this shortcut press created; never an earlier flag and its note.
   if (immediate?.created) button("Undo flag", async () => { await ctx.call("unflag", { id: immediate.id }); done(); });
   const primary = button(immediate ? "Save note" : "Flag", submit, "default");
-  primaryAction = async () => { clearTimeout(timer); setDisabled(true); try { await submit(); } catch (error) { status.textContent = error instanceof Error ? error.message : String(error); status.dataset.tone = "error"; } finally { setDisabled(false); syncFinished(); } };
   /** Once saved, only Close stays live while the dialog closes itself. */
   function syncFinished(): void { if (finished) for (const h of handles) if (h !== close) h.update({ disabled: true }); }
   root.append(heading, el("p", "Latest reply", "ab-label ab-quote-label"), reply, noteLabel, status, buttons);
