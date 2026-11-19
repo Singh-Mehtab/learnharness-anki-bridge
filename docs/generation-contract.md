@@ -1,6 +1,8 @@
 # Manual generation contract (0.3.0)
 
-All calls use `ctx.call`. No call silently selects a model. No session flags or coverage are implemented. Existing delivery operations remain available.
+This document records the 0.3.0 contract. For the current defaults, flags and state format, see [0.7.2 verification](0.7.2-verification.md) and the [README](../README.md).
+
+All calls use `ctx.call`. In 0.3.0, no call silently selects a model and no session flags or coverage are implemented. Existing delivery operations remain available.
 
 ## Operations
 

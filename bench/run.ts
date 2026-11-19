@@ -3,7 +3,8 @@
 // validator, retry with its correction message, and save every card for scoring.
 //
 // Usage:
-//   node bench/run.ts --mode core            # 4 core kinds, all targets
+//   node bench/run.ts --mode core            # default kinds (fact, equation), all targets
+//   node bench/run.ts --mode core --kinds fact,equation,steps   # choose kinds
 //   node bench/run.ts --mode trial           # mini-problem + spot-the-mistake, first 4 targets per set
 //   options: --model sonnet --cap 2 --sets qm,humanities,programming --dry-run
 //
@@ -17,6 +18,7 @@ import { join } from "node:path";
 import { parseArgs } from "node:util";
 import {
   CORE_KINDS,
+  DEFAULT_KINDS,
   TRIAL_KINDS,
   findProblems,
   pack,
@@ -25,6 +27,7 @@ import {
   wordCount,
   writerInstructions,
   writerPrompt,
+  duplicateIndexes,
   type Batch,
   type CardKind,
   type WriterResult,
@@ -34,7 +37,12 @@ import type { BatchRecord, BenchCard, BenchRun, BenchSet, BenchSkip } from "./ty
 const { values } = parseArgs({
   options: {
     mode: { type: "string", default: "core" },
+    kinds: { type: "string" },
+    nodes: { type: "string" },
+    "timeout-min": { type: "string", default: "10" },
     model: { type: "string", default: "sonnet" },
+    effort: { type: "string", default: "medium" },
+    constants: { type: "boolean", default: false },
     cap: { type: "string", default: "2" },
     sets: { type: "string" },
     "trial-targets": { type: "string", default: "4" },
@@ -46,7 +54,10 @@ const { values } = parseArgs({
 });
 
 const mode = values.mode === "trial" ? "trial" : "core";
-const kinds: CardKind[] = mode === "trial" ? [...TRIAL_KINDS] : [...CORE_KINDS];
+const kinds: CardKind[] = values.kinds
+  ? (values.kinds.split(",") as CardKind[])
+  : mode === "trial" ? [...TRIAL_KINDS] : [...DEFAULT_KINDS];
+for (const k of kinds) if (![...CORE_KINDS, ...TRIAL_KINDS].includes(k as never)) throw new Error(`Unknown kind: ${k}`);
 const cap = Number(values.cap);
 const retries = Number(values.retries);
 const concurrency = Number(values.concurrency);
@@ -70,7 +81,13 @@ function loadSets(): BenchSet[] {
   ].filter((f) => f.endsWith(".json"));
   const sets = files.map((f) => JSON.parse(readFileSync(f, "utf8")) as BenchSet);
   const wanted = values.sets?.split(",");
-  return wanted ? sets.filter((s) => wanted.includes(s.name)) : sets;
+  const selected = wanted ? sets.filter((s) => wanted.includes(s.name)) : sets;
+  const names = new Set<string>();
+  for (const set of selected) {
+    if (names.has(set.name)) throw new Error(`Duplicate bench fixture name: ${set.name}. Give each fixture a unique name before running the bench.`);
+    names.add(set.name);
+  }
+  return selected;
 }
 
 interface ClaudeReply {
@@ -91,6 +108,7 @@ function callClaude(prompt: string, resume?: string): Promise<ClaudeReply> {
   const args = [
     "-p",
     "--model", values.model!,
+    "--effort", values.effort!,
     "--setting-sources", "",
     "--strict-mcp-config",
     "--tools", "",
@@ -106,7 +124,7 @@ function callClaude(prompt: string, resume?: string): Promise<ClaudeReply> {
     let err = "";
     child.stdout.on("data", (d) => (out += d));
     child.stderr.on("data", (d) => (err += d));
-    const timer = setTimeout(() => child.kill("SIGTERM"), 10 * 60 * 1000);
+    const timer = setTimeout(() => child.kill("SIGTERM"), Number(values["timeout-min"]) * 60 * 1000);
     child.on("close", (code) => {
       clearTimeout(timer);
       try {
@@ -175,13 +193,18 @@ const sets = loadSets();
 const jobs: Array<{ set: BenchSet; batch: Batch }> = [];
 const skips: BenchSkip[] = [];
 for (const set of sets) {
-  const targets = mode === "trial" ? set.targets.slice(0, Number(values["trial-targets"])) : set.targets;
+  const only = values.nodes?.split(",");
+  const chosen = only ? set.targets.filter((id) => only.includes(id)) : set.targets;
+  const targets = mode === "trial" ? chosen.slice(0, Number(values["trial-targets"])) : chosen;
   const byId = new Map(set.graph.propositions.map((n) => [n.id, n]));
   const { batches, skipped } = pack(
     set.graph,
     targets,
-    (id) => ({ source: sourcePassage(byId.get(id)!, (chatId) => set.chats[chatId]) }),
-    { maxCardsPerNode: cap, enabledKinds: kinds },
+    (id) => ({
+      source: sourcePassage(byId.get(id)!, (chatId) => set.chats[chatId]),
+      ...(set.flags?.[id] ? { flagged: true, flagNote: set.flags[id].note } : {}),
+    }),
+    { maxCardsPerNode: cap, enabledKinds: kinds, constantValues: values.constants },
   );
   for (const s of skipped) {
     const n = byId.get(s.nodeId);
@@ -208,7 +231,8 @@ const results = await pool(jobs, concurrency, async (job) => {
 });
 
 const cards: BenchCard[] = [];
-for (const { set, batch, result, record } of results) {
+const requestByCard = new Map<BenchCard, number>();
+for (const [request, { set, batch, result, record }] of results.entries()) {
   if (!result || !Array.isArray(result.targets)) continue;
   const byId = new Map(set.graph.propositions.map((n) => [n.id, n]));
   const inBatch = new Set(batch.input.targets.map((t) => t.nodeId));
@@ -219,7 +243,7 @@ for (const { set, batch, result, record } of results) {
       skips.push({ set: set.name, nodeId: row.nodeId, nodeName: node.name, statement: node.statement, reason: row.skipReason ?? "", by: "model" });
     }
     row.cards.forEach((card, i) => {
-      cards.push({
+      const entry: BenchCard = {
         id: `${set.name}:${row.nodeId}:${i}`,
         set: set.name,
         subject: set.subject,
@@ -234,15 +258,25 @@ for (const { set, batch, result, record } of results) {
         frontWords: wordCount(card.front),
         backWords: wordCount(card.back),
         unvalidated: !record.accepted,
-      });
+      };
+      requestByCard.set(entry, request);
+      cards.push(entry);
     });
   }
 }
 
+// Same fact drafted by separate requests: keep the first in set order.
+const order = new Map(sets.flatMap((s) => s.targets.map((id, i) => [`${s.name}:${id}`, i] as const)));
+cards.sort((a, b) => a.set.localeCompare(b.set) || (order.get(`${a.set}:${a.nodeId}`) ?? 0) - (order.get(`${b.set}:${b.nodeId}`) ?? 0));
+const dup = duplicateIndexes(cards, (current, earlier) => !current.unvalidated && !earlier.unvalidated
+  && current.set === earlier.set && requestByCard.get(current) !== requestByCard.get(earlier));
+const duplicates = cards.flatMap((c, i) => (dup[i] >= 0 ? [{ removed: c.front, kept: cards[dup[i]].front }] : []));
+cards.splice(0, cards.length, ...cards.filter((_, i) => dup[i] < 0));
+
 const run: BenchRun = {
   runId,
   mode,
-  model: values.model!,
+  model: `${values.model!} (effort ${values.effort})`,
   createdAt: new Date().toISOString(),
   maxCardsPerNode: cap,
   enabledKinds: kinds,
@@ -256,5 +290,6 @@ const run: BenchRun = {
 const dir = join("bench-output", runId);
 mkdirSync(dir, { recursive: true });
 writeFileSync(join(dir, "run.json"), `${JSON.stringify(run, null, 2)}\n`);
+if (duplicates.length) writeFileSync(join(dir, "duplicates-removed.json"), `${JSON.stringify(duplicates, null, 2)}\n`);
 const cost = run.batches.flatMap((b) => b.attempts).reduce((n, a) => n + (a.costUsd ?? 0), 0);
-console.log(`Saved ${cards.length} cards, ${skips.length} skips to ${dir}/run.json. ${calls} calls; API-equivalent cost $${cost.toFixed(2)} (subscription, not billed).`);
+console.log(`Removed ${duplicates.length} duplicates. Saved ${cards.length} cards, ${skips.length} skips to ${dir}/run.json. ${calls} calls; API-equivalent cost $${cost.toFixed(2)} (subscription, not billed).`);

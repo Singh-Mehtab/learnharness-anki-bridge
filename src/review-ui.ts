@@ -3,6 +3,7 @@ import type { PluginFrontendContext } from "../sdk/index.d.ts";
 import { expandTagTemplate, matchTagCase, systemTags, tagSuggestions, validateTags } from "./anki/tags.ts";
 import { isWaitingCard } from "./coverage/flow.ts";
 import { KIND_NAMES } from "./drafting-ui.ts";
+import { CORE_KINDS, isStoredKind } from "./writer/types.ts";
 import type { Connection, Destination, Peers, Settings } from "./settings-ui.ts";
 import { button, confirmDialog, el, field, input, moreMenu, pill, plural, RenderScope, status, textarea } from "./ui.ts";
 import type { ButtonHandle } from "./ui.ts";
@@ -282,7 +283,7 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
     const content = el("div", undefined, "anki-bridge ab-dialog ab-manual");
     const front = textarea("", 3), back = textarea("", 3), extra = textarea("", 2);
     const kind = el("select", undefined, "ab-input ab-select");
-    for (const k of ["recall", "why", "compose", "discriminate"]) { const o = el("option", KIND_NAMES[k]); o.value = k; kind.append(o); }
+    for (const k of CORE_KINDS) { const o = el("option", KIND_NAMES[k]); o.value = k; kind.append(o); }
     const err = status();
     const actionsRow = el("div", undefined, "ab-actions ab-dialog-actions");
     content.append(el("h3", "Write a card", "ab-dialog-heading"), field("Front", front), field("Back", back), field("Extra, optional", extra, "One line with the reason or a hint."), field("Card type", kind), err, actionsRow);
@@ -331,7 +332,7 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
 
     const head = el("header", undefined, "ab-card-head");
     const title = el("div", undefined, "ab-card-title");
-    title.append(pill(KIND_NAMES[card.kind] ?? card.kind, "info"), el("span", card.nodeName || "Card", "ab-card-idea"));
+    title.append(pill(isStoredKind(card.kind) ? KIND_NAMES[card.kind] : card.kind, "info"), el("span", card.nodeName || "Card", "ab-card-idea"));
     if (card.sessionName && card.sessionName !== "Manual") title.append(el("span", card.sessionName, "ab-muted ab-card-session"));
     head.append(title, pill(STATUS[card.status].text, STATUS[card.status].tone));
     article.append(head);

@@ -5,6 +5,7 @@ import { renderMarkdown } from './render.ts';
 import { StateStore, sameDestination } from './state.ts';
 import { expandTagTemplate, systemTags, validateTags } from './tags.ts';
 import type { Card, CardKind, Destination, State } from './state.ts';
+import { isStoredKind } from '../writer/types.ts';
 import type { Generation, GenerationSettings } from '../generation/types.ts';
 
 export interface PublicSnapshot {
@@ -46,7 +47,7 @@ function data(value: unknown): Record<string, unknown> {
 // Not limited to the note type name, so a renamed note type cannot hide an earlier add.
 const query = (id: string) => `"LH_ID:${id}"`;
 const htmlText = (text: string) => text.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
-const kinds: CardKind[] = ['recall', 'why', 'compose', 'discriminate'];
+
 
 /** No Anki update/delete/scheduling operations. All delivery identities are durable before I/O. */
 export class DeliveryService {
@@ -208,10 +209,10 @@ export class DeliveryService {
         const extra = optionalText(value.extra, 'Extra');
         // Validate rendering before a card can be approved or sent.
         renderMarkdown(front); renderMarkdown(back); renderMarkdown(extra);
-        const kind = value.kind ?? 'recall';
-        if (!kinds.includes(kind as CardKind)) throw new Error('Invalid card kind.');
+        const kind = value.kind ?? 'fact';
+        if (!isStoredKind(kind)) throw new Error('Invalid card kind.');
         const id = randomUUID();
-        const card: Card = { id, front, back, extra, kind: kind as CardKind, status: 'draft',
+        const card: Card = { id, front, back, extra, kind, status: 'draft',
           nodeId: optionalText(value.nodeId, 'Node ID', `manual:${id}`),
           nodeName: optionalText(value.nodeName, 'Node name', 'Hand-written card'),
           sessionId: optionalText(value.sessionId, 'Session ID', 'manual'),

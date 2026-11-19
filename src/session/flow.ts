@@ -173,14 +173,13 @@ export function sessionNodeIds(graph: GraphLike, sessionId: string, messageOrder
   return nodes.map(n => ({ n, at: position(n) })).sort((a, b) => a.at - b.at || a.n.name.localeCompare(b.n.name)).map(x => x.n.id);
 }
 
-/** Flag notes per node for the card writer. A node can sit under several flags. */
+/** Flagged nodes and their combined notes (empty for a flag without a note). */
 export function flagNotesByNode(flags: readonly Flag[], graph: GraphLike): Map<string, string> {
   const notes = new Map<string, string[]>();
   for (const flag of flags) {
-    if (!flag.note) continue;
     for (const id of matchFlag(flag, graph)) {
       const list = notes.get(id) ?? [];
-      if (!list.includes(flag.note)) list.push(flag.note);
+      if (flag.note && !list.includes(flag.note)) list.push(flag.note);
       notes.set(id, list);
     }
   }

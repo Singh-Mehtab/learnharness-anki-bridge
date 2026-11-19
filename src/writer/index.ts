@@ -8,3 +8,4 @@ export * from "./input.ts";
 export * from "./prompt.ts";
 export * from "./schema.ts";
 export * from "./validate.ts";
+export * from "./dedupe.ts";

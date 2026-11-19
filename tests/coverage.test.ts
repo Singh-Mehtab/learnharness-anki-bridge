@@ -156,7 +156,7 @@ test('delivery mutation succeeds when warnings for a saved source cannot be refr
   await c.call('generationSettings', { model: { provider: 'scratch', id: 'writer' } });
   const p = await c.call('preflight', { nodeIds: [node.id] }); await c.call('generate', { preflightId: p.preflightId });
   await until(() => host.workers.starts.length === 1);
-  host.workers.succeed('task-1', { targets: [{ nodeId: node.id, cards: [{ kind: 'recall', front: 'Which condition makes this fixture result valid?', back: 'Assumption A.' }] }] });
+  host.workers.succeed('task-1', { targets: [{ nodeId: node.id, cards: [{ kind: 'fact', front: 'Which condition makes this fixture result valid?', back: 'Assumption A.' }] }] });
   await until(async () => (await c.call('generationStatus')).generations[0].status === 'completed');
   const [generated] = (await c.call('snapshot')).cards;
   c.ctx.learning.graph = () => { throw new Error('Graph unavailable'); };
@@ -214,7 +214,7 @@ test('dismissal racing a card-producing worker result preserves the draft and re
   await c.call('generationSettings', { model: { provider: 'scratch', id: 'writer' } });
   const p = await c.call('preflight', { nodeIds: [node.id] }); await c.call('generate', { preflightId: p.preflightId });
   await until(() => host.workers.starts.length === 1);
-  host.workers.succeed('task-1', { targets: [{ nodeId: node.id, cards: [{ kind: 'recall', front: 'Which condition makes this fixture result valid?', back: 'Assumption A.' }] }] });
+  host.workers.succeed('task-1', { targets: [{ nodeId: node.id, cards: [{ kind: 'fact', front: 'Which condition makes this fixture result valid?', back: 'Assumption A.' }] }] });
   await assert.rejects(c.call('dismissNode', { nodeId: node.id, statementHash: source.statementHash }), /waiting|settle generation/);
   await until(async () => (await c.call('generationStatus')).generations[0].status === 'completed');
   assert.equal((await c.call('snapshot')).cards.length, 1);
@@ -225,17 +225,17 @@ test('dismissal racing a card-producing worker result preserves the draft and re
 test('migrations from 1/2/3 retain supported data; corrupt and future dismissals never reset a file', async () => {
   for (const version of [1, 2, 3]) {
     const base = initialState(); const { dismissals: _d, ...old } = base;
-    const raw = { ...old, schemaVersion: version, cards: [sent()], destination: paired };
+    const raw = { ...old, schemaVersion: version, generationSettings: { cardsPerNode: 2, enabledKinds: ['recall'], model: null }, cards: [sent()], destination: paired };
     const migrated = migrateState(raw);
-    assert.equal(migrated.schemaVersion, 4); assert.deepEqual(migrated.dismissals, []);
+    assert.equal(migrated.schemaVersion, 5); assert.deepEqual(migrated.dismissals, []);
     assert.deepEqual(migrated.cards, raw.cards); assert.deepEqual(migrated.destination, paired);
-    if (version >= 2) assert.deepEqual(migrated.generationSettings, raw.generationSettings);
+    if (version >= 2) assert.deepEqual(migrated.generationSettings, base.generationSettings);
     if (version >= 3) assert.deepEqual(migrated.flags, raw.flags);
   }
   const directory = await mkdtemp(path.join(os.tmpdir(), 'anki-coverage-state-')), file = path.join(directory, 'state.json');
   try {
     for (const bad of [{ ...initialState(), dismissals: [dismiss(), dismiss()] }, { ...initialState(), dismissals: [dismiss('bad')] },
-      { ...initialState(), dismissals: [{ ...dismiss(), dismissedAt: 'not-a-date' }] }, { ...initialState(), schemaVersion: 5 }]) {
+      { ...initialState(), dismissals: [{ ...dismiss(), dismissedAt: 'not-a-date' }] }, { ...initialState(), schemaVersion: 6 }]) {
       const raw = JSON.stringify(bad); await writeFile(file, raw);
       await assert.rejects(StateStore.open(directory), /Invalid|Unsupported/); assert.equal(await readFile(file, 'utf8'), raw);
     }

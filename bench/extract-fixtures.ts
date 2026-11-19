@@ -4,6 +4,8 @@
 // because it holds the learner's own material).
 //
 // Usage: node bench/extract-fixtures.ts [--data <dir>] [--name qm] [--count 18]
+//        [--chat <chatId>]   every node from one lesson instead of a stratified pick
+//        [--flags <plugin state.json>]   copy the plugin's flags and notes for those nodes
 
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { join } from "node:path";
@@ -11,6 +13,7 @@ import { homedir } from "node:os";
 import { parseArgs } from "node:util";
 import type { BenchSet } from "./types.ts";
 import type { GraphChainLike, GraphNodeLike, ChatRecordLike } from "../src/writer/index.ts";
+import { flagNotesByNode, matchFlag, type Flag } from "../src/session/flow.ts";
 
 const { values } = parseArgs({
   options: {
@@ -18,6 +21,8 @@ const { values } = parseArgs({
     name: { type: "string", default: "qm" },
     subject: { type: "string", default: "Physics: quantum mechanics (real LearnHarness session)" },
     count: { type: "string", default: "18" },
+    chat: { type: "string" },
+    flags: { type: "string" },
   },
 });
 
@@ -44,7 +49,22 @@ const half = Math.ceil(count / 2);
 const picked = [...spaced(withChain, Math.min(half, withChain.length))];
 picked.push(...spaced(without, count - picked.length));
 const pickedIds = new Set(picked.map((n) => n.id));
-const targets = ordered.filter((n) => pickedIds.has(n.id)).map((n) => n.id);
+const fromChat = (n: GraphNodeLike) => (n.provenance ?? []).some((p) => p.chatId === values.chat);
+const targets = values.chat
+  ? [...new Set(ordered.filter(fromChat).map((n) => n.id))]
+  : ordered.filter((n) => pickedIds.has(n.id)).map((n) => n.id);
+if (!targets.length) throw new Error("No nodes matched.");
+
+// Flags: the same node matching and note joining as the plugin (src/session/flow.ts).
+const flags: NonNullable<BenchSet["flags"]> = {};
+if (values.flags) {
+  const state = JSON.parse(readFileSync(values.flags, "utf8")) as { flags?: Flag[] };
+  const graph = { propositions: nodes, chains, nodeSessions: {} };
+  const notes = flagNotesByNode(state.flags ?? [], graph);
+  for (const flag of state.flags ?? []) {
+    for (const id of matchFlag(flag, graph)) if (targets.includes(id)) flags[id] = notes.has(id) ? { note: notes.get(id) } : {};
+  }
+}
 
 // Keep only the teacher messages that nodes point at, to keep the file small.
 const wantedMessages = new Map<string, Set<string>>();
@@ -73,6 +93,7 @@ const set: BenchSet = {
   },
   chats,
   targets,
+  ...(Object.keys(flags).length ? { flags } : {}),
 };
 
 mkdirSync("bench/private", { recursive: true });

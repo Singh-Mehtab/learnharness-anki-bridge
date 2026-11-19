@@ -106,7 +106,7 @@ test('hand-written cards require explicit pairing and durable approval, then add
     const note = f.notes[0];
     assert.equal(note.fields.LH_ID, id);
     assert.equal(note.fields.LH_Node, 'node-1');
-    assert.deepEqual(note.tags, ['learnharness', 'learnharness::kind::recall']);
+    assert.deepEqual(note.tags, ['learnharness', 'learnharness::kind::fact']);
     const add = f.calls.find(c => c.action === 'addNote')!;
     assert.equal(add.params.note.options.allowDuplicate, false);
     assert.equal(add.params.note.options.duplicateScope, 'deck');
@@ -433,10 +433,11 @@ test('tags come from the send, or the saved template, and learnharness tags can 
     await f.service.command('settings', { tagTemplate: '{deck}::Lecture_01 extra', systemTags: true });
     assert.equal(f.snap().settings.tagTemplate, '{deck}::Lecture_01 extra');
     assert.equal(f.snap().settings.url, f.url, 'tag settings leave the address alone');
-    const first = await f.draft('First?');
+    await f.service.command('draft', { kind: 'equation', front: 'First?', back: 'Equation.' });
+    const first = f.snap().cards.at(-1)!.id;
     await f.approve([first]);
     await f.send([first], 'Year 3::Nuclear Physics');
-    assert.deepEqual(f.notes[0].tags, ['Year_3::Nuclear_Physics::Lecture_01', 'extra', 'learnharness', 'learnharness::kind::recall']);
+    assert.deepEqual(f.notes[0].tags, ['Year_3::Nuclear_Physics::Lecture_01', 'extra', 'learnharness', 'learnharness::kind::equation']);
     await f.service.command('settings', { systemTags: false });
     const second = await f.draft('Second?');
     await f.approve([second]);

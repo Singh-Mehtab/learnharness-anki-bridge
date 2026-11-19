@@ -14,6 +14,8 @@ import {
   validateResult,
   writerInstructions,
   writerPrompt,
+  FLAGGED_CARD_CAP,
+  duplicateIndexes,
   type GraphLike,
   type WriterInput,
 } from "../src/writer/index.ts";
@@ -126,6 +128,7 @@ test("validator catches target, kind, leak, name, format and duplicate problems"
         cards: [
           { kind: "compose", front: "Given A and B, what follows?", back: "Conclusion C" },
           { kind: "recall", front: "Old front?", back: "something else" },
+          { kind: "recall", front: "Old front?", back: "something else" },
           { kind: "recall", front: "When does Conclusion C apply? It is the rule", back: "rule" },
         ],
       },
@@ -136,7 +139,7 @@ test("validator catches target, kind, leak, name, format and duplicate problems"
   const problems = findProblems(result, i).join("\n");
   assert.match(problems, /not enabled/);
   assert.match(problems, /cap is 2/);
-  assert.match(problems, /repeats an existing card/);
+  assert.match(problems, /repeats a card in this result/);
   assert.match(problems, /must not contain the idea's name/);
   assert.match(problems, /gives the answer away/);
   assert.match(problems, /Unknown target "zzz"/);
@@ -226,7 +229,84 @@ test("instructions describe only requested kinds; prompt carries cap and kinds",
   assert.ok(core.includes("- discriminate:") && !core.includes("mini-problem"));
   const trial = writerInstructions({ kinds: ["mini-problem", "spot-the-mistake"], completion: "Return JSON." });
   assert.ok(trial.includes("- mini-problem:") && !trial.includes("- recall:") && trial.endsWith("Return JSON."));
+  assert.match(trial, /Do not turn a number from one calculation or example into a fact to memorise/);
+  assert.match(trial, /Give the inputs needed to solve it, but not the tested rule or result/);
+  assert.match(trial, /Do not give away a value or conversion the learner is meant to recall/);
+  assert.match(trial, /The back is the result and extra gives the key step/);
   const p = writerPrompt(input());
   assert.match(p, /at most 2 cards per target/);
   assert.match(p, /Enabled kinds: recall, why, compose, discriminate/);
+});
+
+// 0.7.2 (#34): fact and equation by default; flags are explicit requests.
+test("default instructions put facts first and describe every shipping kind", () => {
+  const text = writerInstructions();
+  for (const k of ["fact", "equation", "steps", "apply", "why", "compose", "discriminate"]) assert.ok(text.includes(`- ${k}:`), `missing kind ${k}`);
+  assert.ok(!text.includes("- recall:") && !text.includes("- mini-problem:"));
+  assert.ok(text.includes("Standard reference facts"));
+  assert.ok(!text.includes("Not \"What is <name>?\""), "fact cards may ask directly");
+});
+
+test("a flagged target may exceed the per-node cap, up to FLAGGED_CARD_CAP", () => {
+  const flagged = buildTarget(graph, "b", { flagged: true });
+  assert.equal(flagged.maxCards, FLAGGED_CARD_CAP);
+  assert.equal(buildTarget(graph, "b", { flagNote: "all prefixes" }).flagged, true);
+  assert.equal(buildTarget(graph, "b").maxCards, undefined);
+  const cards = (n: number) => Array.from({ length: n }, (_, i) => ({ kind: "fact", front: `Prefix question ${i}?`, back: `Answer number ${i}` }));
+  const fi = input({ enabledKinds: ["fact"], targets: [flagged] });
+  assert.deepEqual(findProblems({ targets: [{ nodeId: "b", cards: cards(5) }] }, fi), []);
+  assert.match(findProblems({ targets: [{ nodeId: "b", cards: cards(FLAGGED_CARD_CAP + 1) }] }, fi).join(), /the cap is 12/);
+  const plain = input({ enabledKinds: ["fact"], targets: [buildTarget(graph, "b")] });
+  assert.match(findProblems({ targets: [{ nodeId: "b", cards: cards(3) }] }, plain).join(), /the cap is 2/);
+  const packed = pack(graph, ["b", "c"], (id) => (id === "b" ? { flagged: true } : {}), { maxCardsPerNode: 2, enabledKinds: ["fact"] });
+  assert.equal(packed.batches[0].outputAllowance, 300 * 12 + 200 + 300 * 2 + 200);
+});
+
+test("fact cards may name the idea; apply cards may not", () => {
+  const t = buildTarget(graph, "b");
+  const fi = input({ enabledKinds: ["fact", "apply"], targets: [t] });
+  assert.deepEqual(findProblems({ targets: [{ nodeId: "b", cards: [{ kind: "fact", front: "What does Premise B say?", back: "It holds always" }] }] }, fi), []);
+  assert.match(findProblems({ targets: [{ nodeId: "b", cards: [{ kind: "apply", front: "Where does Premise B apply?", back: "Situations like this" }] }] }, fi).join(), /must not contain the idea's name/);
+});
+
+test("duplicateIndexes finds the same fact drafted by separate requests, not same-answer different facts", () => {
+  const cards = [
+    { front: "What are the SI units of the speed of light \\(c\\)?", back: "\\(\\mathrm{m\\,s^{-1}}\\)" },
+    { front: "When restoring SI units from natural units, what units do you use for \\(c\\)?", back: "\\(\\mathrm{m\\,s^{-1}}\\)" },
+    { front: "What power of ten does the SI prefix femto- (\\(\\mathrm{f}\\)) denote?", back: "$$10^{-15}$$" },
+    { front: "What power of ten does the SI prefix femto- (f) denote?", back: "\\(10^{-15}\\)" },
+    { front: "In natural units, what is the dimension of a length?", back: "\\(\\mathrm{eV^{-1}}\\)" },
+    { front: "In natural units, what is the dimension of a time interval?", back: "\\(\\mathrm{eV^{-1}}\\)" },
+    { front: "What is the approximate rest energy of a proton, in MeV?", back: "About \\(940\\ \\mathrm{MeV}\\)" },
+    { front: "Roughly what is a proton's rest energy in MeV?", back: "\\(940\\ \\mathrm{MeV}\\)" },
+  ];
+  assert.deepEqual(duplicateIndexes([...cards, { ...cards[0] }]), [...Array(cards.length).fill(-1), 0]);
+});
+
+test("duplicateIndexes leaves equivalent equations with different cues for review", () => {
+  const cards = [
+    { front: "Restoring SI units: relate a length \\(L_{\\rm SI}\\) to its natural-unit value.", back: "$$L_{\\rm SI} = \\hbar c\\,L_{\\rm NU}$$" },
+    { front: "Convert a length from natural units to SI.", back: "$$L_{\\rm SI} = \\hbar c\\, L_{\\rm NU}$$" },
+    { front: "In natural units, what is the dimension of time?", back: "\\([t] = [E]^{-1}\\)" },
+    { front: "In natural units, what is the dimension of length in terms of energy?", back: "\\([x] = [E]^{-1}\\)" },
+  ];
+  assert.deepEqual(duplicateIndexes(cards), [-1, -1, -1, -1]);
+});
+
+test("bench dedupe preserves different math and unit answers to similar cues", () => {
+  const front = "What value does \\(x\\) have?";
+  const cards = ["1.5", "15", "MeV", "meV", "y=2(a+b)", "y=2(c+d)", "y=(a+b)/c", "y=a+b/c", "\\(y=\\sin h(x)\\)", "\\(y=\\sinh(x)\\)"].map(back => ({ front, back }));
+  assert.deepEqual(duplicateIndexes(cards), Array(cards.length).fill(-1));
+});
+
+test("mini-problems with the same result are distinct unless the whole card matches", () => {
+  const square = { kind: "mini-problem", front: "Evaluate \\(x^2\\) at \\(x=2\\)", back: "4" };
+  const add = { ...square, front: "Evaluate \\(x+2\\) at \\(x=2\\)" };
+  assert.deepEqual(duplicateIndexes([square, add, { ...add, extra: "Use addition." }, { ...square }]), [-1, -1, -1, 0]);
+});
+
+test("writer instructions keep LaTeX backslashes (template-literal escapes ate them once)", () => {
+  const text = writerInstructions();
+  assert.ok(!/\((hbar|mathrm)\b/.test(text), "a bare (hbar or (mathrm means a lost backslash");
+  assert.ok(text.includes("\\(\\hbar c \\approx 197"));
 });

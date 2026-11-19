@@ -60,9 +60,10 @@ test('a session scope reaches writing with flagged and bulk intent, saved caps, 
     button(/^Write cards for 1 idea/).click();
     await until(() => !!dialog(), 'first estimate dialog');
     assert.deepEqual(calls.filter(c => c.name === 'preflight').at(-1)?.input, { nodeIds: ['n_b'], backfillNodeIds: [] });
+    assert.match(dialog()!.textContent!, /Up to 12/);
     button('Cancel').click(); await settle();
     button('Select ideas without cards (2)').click(); await settle();
-    assert.match(ideas().textContent!, /2 ideas selected, up to 4 cards/);
+    assert.match(ideas().textContent!, /2 ideas selected/);
     button(/^Write cards for 2 ideas/).click();
     await until(() => !!dialog(), 'second estimate dialog');
     assert.deepEqual(calls.filter(c => c.name === 'preflight').at(-1)?.input, { nodeIds: ['n_a', 'n_b'], backfillNodeIds: ['n_a', 'n_b'] });
@@ -72,14 +73,14 @@ test('a session scope reaches writing with flagged and bulk intent, saved caps, 
 
     const cap = container.querySelector('.ab-write-settings select') as unknown as HTMLSelectElement;
     cap.value = '4'; cap.dispatchEvent(new window.Event('change') as unknown as Event);
-    await until(() => ideas().textContent!.includes('up to 8 cards'), 'saved cap updates the selection summary');
+    await until(async () => (await f.c.call('generationStatus')).generationSettings.cardsPerNode === 4, 'saved cap');
     assert.deepEqual(calls.filter(c => c.name === 'generationSettings').at(-1)?.input, { cardsPerNode: 4 });
     button(/^Write cards for 2 ideas/).click();
     await until(() => !!dialog(), 'new cap estimate');
-    assert.match(dialog()!.textContent!, /Up to 8/);
+    assert.match(dialog()!.textContent!, /Up to 16/);
     button('Start writing').click();
     await until(() => f.host.workers.starts.length === 1, 'generation start');
-    f.host.workers.succeed('task-1', { targets: ['n_a', 'n_b'].map(nodeId => ({ nodeId, cards: [{ kind: 'recall',
+    f.host.workers.succeed('task-1', { targets: ['n_a', 'n_b'].map(nodeId => ({ nodeId, cards: [{ kind: 'fact',
       front: 'Which condition is required for the first result in this lecture to hold?', back: 'Assumption A.' }] })) });
     await until(async () => {
       await settle(); // Include the panel's normal polling interval, not a manual refresh.
@@ -109,17 +110,17 @@ test('schema 2 migration preserves a completed generation, applied result, and g
     const p = await f.c.call('preflight', { nodeIds: ['n_a'] });
     await f.c.call('generate', { preflightId: p.preflightId });
     await until(() => f.host.workers.starts.length === 1, 'generation start');
-    f.host.workers.succeed('task-1', { targets: [{ nodeId: 'n_a', cards: [{ kind: 'recall',
+    f.host.workers.succeed('task-1', { targets: [{ nodeId: 'n_a', cards: [{ kind: 'fact',
       front: 'Which condition is required for the first result in this lecture to hold?', back: 'Assumption A.' }] }] });
     await until(async () => (await f.c.call('generationStatus')).generations[0].status === 'completed', 'generation complete');
     await f.closeBackend();
     const file = path.join(f.directory, 'state.json');
     const { flags: _flags, ...state } = JSON.parse(await readFile(file, 'utf8'));
-    const v2 = { ...state, schemaVersion: 2 };
+    const v2 = { ...state, schemaVersion: 2, generationSettings: { cardsPerNode: state.generationSettings.cardsPerNode, enabledKinds: ['recall'], model: state.generationSettings.model } };
     await writeFile(file, JSON.stringify(v2));
     const store = await StateStore.open(f.directory);
     try {
-      assert.deepEqual(store.snapshot(), { ...v2, schemaVersion: 4, flags: [], dismissals: [] });
+      assert.deepEqual(store.snapshot(), { ...state, schemaVersion: 5, flags: [], dismissals: [] });
       assert.equal(store.snapshot().generations[0].tasks[0].status, 'applied');
       assert.equal(store.snapshot().cards[0].sourceSnapshot?.statement, f.host.nodes[0].statement);
     } finally { await store.close(); }

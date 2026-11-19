@@ -1,14 +1,16 @@
 import { createHash, randomUUID } from 'node:crypto';
-import type { PluginBackendContext } from '../../sdk/index.d.ts';
+import type { PluginBackendContext, PluginModelSpec } from '../../sdk/index.d.ts';
 import type { PluginTaskSnapshot } from '../../sdk/src/core/plugin-workers.d.ts';
 import type { ModelCatalogEntry } from '../../sdk/src/core/contracts/models.d.ts';
 import { StateStore } from '../anki/state.ts';
 import { DeliveryService } from '../anki/delivery.ts';
 import { renderMarkdown } from '../anki/render.ts';
-import { pack, sourcePassage, estimateTokens, outputAllowance } from '../writer/input.ts';
+import { pack, sourcePassage, estimateTokens, targetsAllowance } from '../writer/input.ts';
 import { writerInstructions, writerPrompt } from '../writer/prompt.ts';
 import { resultSchemaFor } from '../writer/schema.ts';
 import { validateResult } from '../writer/validate.ts';
+import { capFor } from '../writer/kinds.ts';
+import { isStoredKind } from '../writer/types.ts';
 import type { Batch } from '../writer/input.ts';
 import type { WriterInput, WriterResult } from '../writer/types.ts';
 import { validGenerationSettings } from './types.ts';
@@ -39,6 +41,8 @@ interface Prepared {
   binding: string;
   settings: GenerationSettings;
   model: ModelCatalogEntry;
+  /** What is sent: the override, or the host's cheap slot with its thinking level. */
+  spec: PluginModelSpec;
   batches: Batch[];
   sources: SourceSnapshot[];
   skipped: { nodeId: string; reason: string }[];
@@ -54,7 +58,7 @@ export class GenerationService {
   private readonly lifetime = new AbortController();
   private readonly drivers = new Set<Promise<void>>();
   private unregister?: () => void;
-  /** Optional per-node learner notes (0.4.0 session flags). Untrusted text; part of the prompt, so part of the preflight binding. */
+  /** Map membership means flagged, even without a note. Notes are untrusted data. */
   flagNotes?: () => Map<string, string>;
   private closed = false;
   private readonly abort = () => { this.lifetime.abort(); };
@@ -123,28 +127,61 @@ export class GenerationService {
       return;
     }
     const result = worker.result as WriterResult;
-    // Cards, the authoritative result and its application mark share one commit.
+    // Exact full content only, checked against live cards, never the previous raw
+    // result. A user edit/drop cannot make an obsolete original block a new card.
+    const currentHashes = new Map<string, string>();
+    try { for (const n of this.ctx.learning.graph().propositions) currentHashes.set(n.id, statementHash(n.statement)); }
+    catch { /* An unavailable graph prevents duplicate suppression, not recovery of valid cards. */ }
+    const contentKey = (c: { kind: string; front: string; back: string; extra?: string }) =>
+      JSON.stringify([c.kind, c.front, c.back, c.extra ?? '']);
+    // Cards, omissions and the unfiltered worker result share one commit.
     await this.delivery.save(s => {
-        const stored = s.generations.find(g => g.id === id)!.tasks.find(t => t.requestId === requestId)!;
-        if (stored.status === 'applied') return;
-        for (const target of result.targets) {
-          const source = stored.sources.find(n => n.nodeId === target.nodeId)!;
-          for (const c of target.cards) s.cards.push({ id: randomUUID(), nodeId: source.nodeId, nodeName: source.name,
+      const stored = s.generations.find(g => g.id === id)!.tasks.find(t => t.requestId === requestId)!;
+      if (stored.status === 'applied') return;
+      const matching = new Map<string, typeof s.cards>();
+      for (const card of s.cards) {
+        if (!card.requestId || card.requestId === requestId || currentHashes.get(card.nodeId) !== card.statementHash
+          || !(card.status === 'draft' || card.status === 'approved')) continue;
+        const key = contentKey(card), group = matching.get(key) ?? [];
+        group.push(card);
+        matching.set(key, group);
+      }
+      let omitted = 0;
+      for (const target of result.targets) {
+        const source = stored.sources.find(n => n.nodeId === target.nodeId)!;
+        const input = stored.input.targets.find(n => n.nodeId === target.nodeId)!;
+        const allowCrossNode = !input.flagged && !input.flagNote && !!source.sessionId;
+        for (const c of target.cards) {
+          if (!isStoredKind(c.kind)) throw new Error('Invalid card kind.');
+          if (currentHashes.get(source.nodeId) === source.statementHash && matching.get(contentKey(c))?.some(other =>
+            other.sessionId === source.sessionId && (other.nodeId === source.nodeId || allowCrossNode))) {
+            omitted++;
+            continue;
+          }
+          s.cards.push({ id: randomUUID(), nodeId: source.nodeId, nodeName: source.name,
             sessionId: source.sessionId, sessionName: source.sessionName, statementHash: source.statementHash,
-            sourceSnapshot: source, generationId: id, requestId, kind: c.kind as import('../anki/state.ts').CardKind,
+            sourceSnapshot: source, generationId: id, requestId, kind: c.kind,
             front: c.front, back: c.back, extra: c.extra ?? '', status: 'draft' });
         }
-        stored.taskId = worker.id; stored.status = 'applied'; stored.result = result; delete stored.error;
+      }
+      stored.taskId = worker.id; stored.status = 'applied'; stored.result = result; delete stored.error;
+      if (omitted) stored.duplicatesOmitted = omitted;
     });
   }
+
   private async prepare(ids: string[], backfillNodeIds: string[]): Promise<Prepared> {
     this.active();
     const settings = this.store.snapshot().generationSettings;
-    if (!settings.model) throw new Error('Choose a model explicitly before preflight.');
     const catalog = await this.ctx.inference.catalog();
     this.active();
-    const model = catalog.models.find(m => m.provider === settings.model!.provider && m.id === settings.model!.id);
-    if (!model || !catalog.providers.some(p => p.id === model.provider && p.keyPresent)) throw new Error('The selected model is unavailable. Choose an available model; no fallback is used.');
+    // Like core Flashcards: follow the host's cheap slot unless the learner overrides it.
+    const pin = settings.model ? { model: settings.model, thinkingLevel: undefined } : catalog.slots?.cheap;
+    if (!pin?.model) throw new Error('Set a cheap model in LearnHarness settings, or choose a model for Anki Bridge.');
+    const pinned = pin.model;
+    const model = catalog.models.find(m => m.provider === pinned.provider && m.id === pinned.id);
+    if (!model || !catalog.providers.some(p => p.id === model.provider && p.keyPresent)) throw new Error(settings.model ? 'The selected model is unavailable. Choose an available model; no fallback is used.' : 'The cheap model slot is unavailable. Fix it in LearnHarness settings or choose a model for Anki Bridge.');
+    if (pin.thinkingLevel !== undefined && !model.supportedLevels?.includes(pin.thinkingLevel)) throw new Error(`The cheap model does not support its configured thinking level (${pin.thinkingLevel}). Fix it in LearnHarness settings or choose an override.`);
+    const spec: PluginModelSpec = { provider: pinned.provider, id: pinned.id, ...(pin.thinkingLevel !== undefined ? { thinkingLevel: pin.thinkingLevel } : {}) };
     const graph = this.ctx.learning.graph();
     const state = this.store.snapshot(), coverage = graphCoverage(graph, state);
     const cards = state.cards.filter(c => c.status !== 'dropped');
@@ -164,16 +201,16 @@ export class GenerationService {
         source: sourcePassage(n, chatId => this.ctx.learning.getSession(chatId)) });
     }
     const notes = this.flagNotes?.();
-    const packed = pack(graph, ids, id => ({ source: sources.find(s => s.nodeId === id)?.source, flagNote: notes?.get(id) || undefined,
+    const packed = pack(graph, ids, id => ({ source: sources.find(s => s.nodeId === id)?.source, flagged: notes?.has(id), flagNote: notes?.get(id) || undefined,
       existingCards: cards.filter(c => c.nodeId === id).reverse().slice(0, 6).map(c => ({ kind: c.kind, front: c.front, back: c.back })) }),
-    { maxCardsPerNode: settings.cardsPerNode, enabledKinds: settings.enabledKinds, contextWindow: model.contextWindow, maxTokens: model.maxTokens });
+    { maxCardsPerNode: settings.cardsPerNode, enabledKinds: settings.enabledKinds, constantValues: settings.constantValues, contextWindow: model.contextWindow, maxTokens: model.maxTokens });
     const batches: Batch[] = [], skipped = [...packed.skipped];
     // The pure packer budgets source material. Also account for prompt/schema overhead
     // and the growing output reserve when the selected model has known limits.
     const overhead = estimateTokens(writerInstructions() + JSON.stringify(resultSchemaFor()));
     for (const original of packed.batches) {
       let current: WriterInput = { ...original.input, targets: [] };
-      const batch = (input: WriterInput): Batch => ({ input, inputTokens: estimateTokens(writerPrompt(input)) + overhead, outputAllowance: outputAllowance(input.targets.length, settings.cardsPerNode) });
+      const batch = (input: WriterInput): Batch => ({ input, inputTokens: estimateTokens(writerPrompt(input)) + overhead, outputAllowance: targetsAllowance(input.targets, settings.cardsPerNode) });
       const fits = (b: Batch) => (model.contextWindow === null || b.inputTokens + b.outputAllowance <= model.contextWindow) && (model.maxTokens === null || b.outputAllowance <= model.maxTokens);
       for (const target of original.input.targets) {
         const next = batch({ ...current, targets: [...current.targets, target] });
@@ -187,7 +224,7 @@ export class GenerationService {
     // Bind exactly what would be sent and spent: prompts, limits, model entry and skips.
     const coverageBinding = { destination: state.destination, nodes: coverage.nodes.filter(n => ids.includes(n.id)),
       dismissals: state.dismissals.filter(d => ids.includes(d.nodeId)) };
-    return { binding: digest({ batches, skipped, settings, model, sources, coverageBinding, backfillNodeIds }), settings, model, batches, skipped, sources };
+    return { binding: digest({ batches, skipped, settings, model, spec, sources, coverageBinding, backfillNodeIds }), settings, model, spec, batches, skipped, sources };
   }
   private async preflight(ids: string[], backfillNodeIds: string[] = []): Promise<unknown> {
     ids = nodeIds(ids); backfillNodeIds = backfillIds(backfillNodeIds, ids);
@@ -197,9 +234,9 @@ export class GenerationService {
     this.preflights.set(id, { id, nodeIds: ids, backfillNodeIds, prepared });
     const inputTokens = prepared.batches.reduce((n, b) => n + b.inputTokens, 0);
     const outputTokens = prepared.batches.reduce((n, b) => n + b.outputAllowance, 0);
-    return { preflightId: id, nodeIds: ids, backfillNodeIds, nodeCount: ids.length, maximumCards: prepared.batches.reduce((n, b) => n + b.input.targets.length * prepared.settings.cardsPerNode, 0),
+    return { preflightId: id, nodeIds: ids, backfillNodeIds, nodeCount: ids.length, maximumCards: prepared.batches.reduce((n, b) => n + b.input.targets.reduce((sum, target) => sum + capFor(target, b.input.maxCardsPerNode), 0), 0),
       inputTokens, outputTokens, estimatedCost: prepared.model.cost ? (inputTokens * prepared.model.cost.input + outputTokens * prepared.model.cost.output) / 1_000_000 : null,
-      model: prepared.settings.model, settings: prepared.settings, skipped: prepared.skipped,
+      model: prepared.spec, modelName: prepared.model.name, followsCheapSlot: !prepared.settings.model, settings: prepared.settings, skipped: prepared.skipped,
       batches: prepared.batches.map(b => ({ nodeIds: b.input.targets.map(t => t.nodeId), inputTokens: b.inputTokens, outputAllowance: b.outputAllowance })) };
   }
   async command(name: string, input: unknown = {}): Promise<unknown> {
@@ -213,9 +250,9 @@ export class GenerationService {
         return { ...graphCoverage(this.ctx.learning.graph(), this.store.snapshot()), catalog };
       }
       if (name === 'generationSettings') {
-        keys(value, ['cardsPerNode', 'enabledKinds', 'model']);
+        keys(value, ['cardsPerNode', 'enabledKinds', 'constantValues', 'model']);
         const settings = { ...this.store.snapshot().generationSettings, ...value };
-        if (!validGenerationSettings(settings)) throw new Error('Choose 1–4 cards per node, one or more core kinds, and an explicit model or null.');
+        if (!validGenerationSettings(settings)) throw new Error('Choose 1–4 cards per node, one or more available card types, a constant-values toggle, and a model override or null.');
         await this.delivery.save(s => { s.generationSettings = settings; });
       } else if (name === 'preflight') {
         keys(value, ['nodeIds', 'backfillNodeIds']);
@@ -238,7 +275,7 @@ export class GenerationService {
         if (fresh.binding !== p.prepared.binding) throw new Error('Preflight is stale. Review a new preflight before generating.');
         if (!fresh.batches.length) throw new Error('No targets fit this preflight. Review the skipped reasons.');
         const g: Generation = { id: p.id, createdAt: new Date().toISOString(), status: 'running', nodeIds: p.nodeIds, backfillNodeIds: p.backfillNodeIds,
-          settings: fresh.settings, skipped: fresh.skipped,
+          settings: fresh.settings, modelSpec: fresh.spec, skipped: fresh.skipped,
           tasks: fresh.batches.map(b => ({ requestId: randomUUID(), status: 'pending', input: b.input, outputAllowance: b.outputAllowance,
             sources: fresh.sources.filter(s => b.input.targets.some(t => t.nodeId === s.nodeId)) })) };
         try { await this.delivery.save(s => { s.generations.push(g); }); }
@@ -297,7 +334,7 @@ export class GenerationService {
         let w: PluginTaskSnapshot;
         try {
           w = this.ctx.workers.start(WORKER, { requestId: t.requestId, input: t.input, prompt: writerPrompt(t.input),
-            model: this.generation(id).settings.model!, purpose: 'user', maxTurns: 3, timeoutMs: 180_000,
+            model: this.generation(id).modelSpec ?? this.generation(id).settings.model!, purpose: 'user', maxTurns: 3, timeoutMs: 180_000,
             options: { maxTokens: t.outputAllowance } as Parameters<PluginBackendContext['workers']['start']>[1]['options'] });
         } catch (error) { await this.patch(id, t.requestId, { status: 'failed', error: errorText(error) }); return null; }
         await this.patch(id, t.requestId, { taskId: w.id, status: 'running' });

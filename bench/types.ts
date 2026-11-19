@@ -10,6 +10,8 @@ export interface BenchSet {
   chats: Record<string, ChatRecordLike>;
   /** Node IDs to write cards for. The rest of the graph is context. */
   targets: string[];
+  /** Flagged targets, with the learner's note when there is one. */
+  flags?: Record<string, { note?: string }>;
 }
 
 export interface Attempt {

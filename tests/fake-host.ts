@@ -61,6 +61,7 @@ export class FakeHost {
     models: [{ provider: 'scratch', id: 'writer', name: 'Writer', contextWindow: 200_000, maxTokens: 32_000, cost: { input: 3, output: 15, cacheRead: 0, cacheWrite: 0 } },
       { provider: 'scratch', id: 'free', name: 'Free', contextWindow: null, maxTokens: null, cost: null }],
     providers: [{ id: 'scratch', keyPresent: true }], defaults: null,
+    slots: { cheap: null } as { cheap: { model: { provider: string; id: string }; thinkingLevel?: string } | null },
   };
   catalogCalls = 0;
   context(directory: string, controller = new AbortController()) {

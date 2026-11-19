@@ -42,16 +42,16 @@ test('schema 3 migration preserves populated flags, settings, applied results an
   const host = new FakeHost(), c = host.context(directory), close = await activate(c.ctx);
   try {
     await c.call('settings', { apiKey: 'synthetic-key', url: 'http://127.0.0.1:18766/' });
-    await c.call('generationSettings', { cardsPerNode: 3, enabledKinds: ['recall'], model: { provider: 'scratch', id: 'writer' } });
+    await c.call('generationSettings', { cardsPerNode: 3, enabledKinds: ['fact'], model: { provider: 'scratch', id: 'writer' } });
     await c.call('flag', { sessionId: 'c1', messageIds: ['m1'], note: 'Preserve this note' });
     const first = await c.call('preflight', { nodeIds: ['n_a'] }); await c.call('generate', { preflightId: first.preflightId });
     await until(() => host.workers.starts.length === 1);
-    host.workers.succeed('task-1', { targets: [{ nodeId: 'n_a', cards: [{ kind: 'recall', front: 'Which condition makes this fixture result valid?', back: 'Assumption A.' }] }] });
+    host.workers.succeed('task-1', { targets: [{ nodeId: 'n_a', cards: [{ kind: 'fact', front: 'Which condition makes this fixture result valid?', back: 'Assumption A.' }] }] });
     await until(async () => (await c.call('generationStatus')).generations[0].status === 'completed');
     const second = await c.call('preflight', { nodeIds: ['n_b'] }); await c.call('generate', { preflightId: second.preflightId });
     await until(() => host.workers.starts.length === 2); await close();
     const file = path.join(directory, 'state.json'), saved = JSON.parse(await readFile(file, 'utf8'));
-    const { dismissals: _dismissals, ...old } = saved; const v3 = { ...old, schemaVersion: 3 };
+    const { dismissals: _dismissals, ...old } = saved; const v3 = { ...old, schemaVersion: 3, generationSettings: { cardsPerNode: 3, enabledKinds: ['recall', 'why'], model: old.generationSettings.model } };
     const bytes = JSON.stringify(v3) + '\n\n';
     const backup = path.join(directory, 'state.v3.bak');
     await writeFile(file, bytes);
@@ -64,7 +64,7 @@ test('schema 3 migration preserves populated flags, settings, applied results an
     try {
       assert.equal(await readFile(backup, 'utf8'), bytes);
       assert.equal((await stat(backup)).mode & 0o777, 0o600);
-      assert.deepEqual(store.snapshot(), { ...saved, dismissals: [], schemaVersion: 4 });
+      assert.deepEqual(store.snapshot(), { ...saved, dismissals: [], generationSettings: { ...saved.generationSettings, enabledKinds: ['fact', 'equation'] } });
       assert.equal(store.snapshot().flags[0].note, 'Preserve this note');
       assert.equal(store.snapshot().generations[0].tasks[0].status, 'applied');
       assert.equal(store.snapshot().generations[1].tasks[0].status, 'running');

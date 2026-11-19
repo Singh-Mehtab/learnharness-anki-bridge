@@ -44,7 +44,7 @@ async function setup(options: { handler?: (name: string, input: any) => unknown;
     call: async (name: string, input: any) => {
       if (name === "coverageContext") coverageReads++;
       if (name === "coverageContext") return { nodes: [], missing: [], cardsPerNode: 2, paired: true, pairingWarning: false };
-      if (name === "generationStatus") return { generationSettings: { cardsPerNode: 2, enabledKinds: ["recall"], model: null }, generations: [] };
+      if (name === "generationStatus") return { generationSettings: { cardsPerNode: 2, enabledKinds: ["fact", "equation"], constantValues: false, model: null }, generations: [] };
       if (name === "sessions") return { sessions: [], unresolved: [] };
       calls.push({ name, input });
       const handled = await options.handler?.(name, input);
@@ -364,7 +364,7 @@ test("a hand-written card is added through a dialog", async () => {
     const [front, back] = Array.from(dialog.querySelectorAll("textarea")) as unknown as HTMLTextAreaElement[];
     front.value = "Front text"; back.value = "Back text";
     f.button("Add card", dialog).click(); await tick();
-    assert.deepEqual(f.calls.find(c => c.name === "draft")!.input, { front: "Front text", back: "Back text", extra: "", kind: "recall" });
+    assert.deepEqual(f.calls.find(c => c.name === "draft")!.input, { front: "Front text", back: "Back text", extra: "", kind: "fact" });
     assert.equal(f.dialog(), null);
     assert.match(f.review().textContent!, /Front text/);
   } finally { await f.dispose(); }

@@ -19,7 +19,7 @@ const scratch = (t: { after: (fn: () => void) => void }) => {
 // Source-based scoring of a fresh run is still needed for that.
 test("writer guidance covers the observed factual, assumption and semantic-leak failures", () => {
   const text = writerInstructions();
-  for (const rule of ["even by paraphrase", "necessary assumptions explicit", "not an exhaustive claim", "not required", "built-in types", "Never invent a diagnosis", "front, back AND extra", "cap is a maximum, not a quota", "Prefer one strong card"]) {
+  for (const rule of ["even by paraphrase", "necessary assumptions explicit", "not an exhaustive claim", "not required", "built-in types", "Never invent a diagnosis", "front, back AND extra", "cap is a maximum, not a quota", "One card per fact", "tests multiplication, not the prefix", "explicit request"]) {
     assert.ok(text.includes(rule), `missing guidance: ${rule}`);
   }
   assert.match(text, /Front: about 30 words/);
@@ -27,6 +27,8 @@ test("writer guidance covers the observed factual, assumption and semantic-leak 
   const html = readFileSync(new URL("../bench/score.html", import.meta.url), "utf8");
   assert.ok(html.includes(`words(card.frontWords, ${LENGTH_TARGETS.front})`));
   assert.ok(html.includes(`words(card.backWords, ${LENGTH_TARGETS.back})`));
+  // A click in the note field must not move focus back to the card (typing was impossible).
+  assert.ok(html.includes(`setFocus(el, !ev.target.closest("input, textarea, label"))`));
 });
 
 test("runner caps concurrent CLI launches, including failed/budget-limited jobs, without real model calls", (t) => {
@@ -38,7 +40,7 @@ test("runner caps concurrent CLI launches, including failed/budget-limited jobs,
 const fs = require('node:fs');
 fs.appendFileSync(process.env.FAKE_CALL_LOG, 'call\\n');
 const input = process.env.FAKE_BAD ? {targets:[]} : JSON.parse(process.argv.at(-1).split('\\n\\n').at(-1));
-process.stdout.write(JSON.stringify({session_id:'fake',structured_output:{targets:process.env.FAKE_BAD ? [] : input.targets.map(t=>({nodeId:t.nodeId,cards:[{kind:'recall',front:'Which consequence follows here?',back:'Distinct result'}]}))}}));
+process.stdout.write(JSON.stringify({session_id:'fake',structured_output:{targets:process.env.FAKE_BAD ? [] : input.targets.map(t=>({nodeId:t.nodeId,cards:[{kind:'fact',front:'Which consequence follows here?',back:'Distinct result'}]}))}}));
 `, { mode: 0o755 });
   mkdirSync(join(dir, "bench/private"), { recursive: true });
   mkdirSync(join(dir, "bench/fixtures"));
@@ -60,6 +62,34 @@ process.stdout.write(JSON.stringify({session_id:'fake',structured_output:{target
   assert.equal(correction.status, 0, correction.stderr);
   assert.equal(readFileSync(log, "utf8"), "call\ncall\ncall\ncall\n");
   assert.match(correction.stdout, /FAILED after 3 attempt/);
+});
+
+test("bench dedupe keeps separate fixtures, same-request cards and failed-validation cards", (t) => {
+  const dir = scratch(t), bin = join(dir, "bin");
+  mkdirSync(bin);
+  mkdirSync(join(dir, "bench/private"), { recursive: true });
+  mkdirSync(join(dir, "bench/fixtures"));
+  writeFileSync(join(bin, "claude"), `#!/usr/bin/env node
+const input = JSON.parse(process.argv.at(-1).split('\\n\\n').at(-1));
+const targets = input.targets.map(t => ({nodeId:t.nodeId,cards:[{kind:'fact',front:'Which consequence follows here?',back:'Distinct result'}]}));
+if (input.targets.some(t => t.nodeId === 'bad')) targets.push({nodeId:'unknown',cards:[],skipReason:'Not a requested target.'});
+process.stdout.write(JSON.stringify({session_id:'fake',structured_output:{targets}}));
+`, { mode: 0o755 });
+  for (const [name, ids] of [["a", ["bad", "first", "same", "later"]], ["b", ["other"]]] as const) {
+    const nodes = ids.map(id => ({ id, name: `Topic ${id}`, statement: "Supported fact. ".repeat(id === 'first' || id === 'same' ? 5 : 1100) }));
+    writeFileSync(join(dir, `bench/private/${name}.json`), JSON.stringify({ name, subject: "test", origin: "hand-written", graph: { propositions: nodes, chains: [] }, chats: {}, targets: nodes.map(n => n.id) }));
+  }
+  const env = { ...process.env, PATH: `${bin}${delimiter}${process.env.PATH}` };
+  const r = spawnSync(process.execPath, [runner, "--sets", "a,b", "--max-calls", "10", "--retries", "0"], { cwd: dir, env, encoding: "utf8" });
+  assert.equal(r.status, 0, r.stderr);
+  const run = JSON.parse(readFileSync(join(dir, "bench-output", readdirSync(join(dir, "bench-output"))[0], "run.json"), "utf8"));
+  assert.deepEqual(run.batches.map((b: { nodeIds: string[] }) => b.nodeIds), [["bad"], ["first", "same"], ["later"], ["other"]]);
+  assert.deepEqual(run.cards.map((c: {nodeId: string; unvalidated: boolean}) => [c.nodeId, c.unvalidated]), [["bad", true], ["first", false], ["same", false], ["other", false]]);
+  const other = JSON.parse(readFileSync(join(dir, "bench/private/b.json"), "utf8"));
+  writeFileSync(join(dir, "bench/private/b.json"), JSON.stringify({ ...other, name: "a" }));
+  const duplicateSet = spawnSync(process.execPath, [runner, "--sets", "a", "--dry-run"], { cwd: dir, env, encoding: "utf8" });
+  assert.notEqual(duplicateSet.status, 0);
+  assert.match(duplicateSet.stderr, /Duplicate bench fixture name: a/);
 });
 
 function summaryFixture(dir: string) {
