@@ -2,9 +2,9 @@
 
 Anki Bridge turns what you learn in [LearnHarness](https://github.com/amosblomqvist/learnharness) into Anki cards. A model drafts cards from the ideas in your knowledge graph. You check and edit each one, and only the cards you approve go to Anki through AnkiConnect.
 
-> Version 0.7.0 is a personal-use candidate. There is no public release yet. Anki Bridge is an unofficial community plugin and is not affiliated with Anki or LearnHarness.
+> Version 0.7.1 is a personal-use candidate. There is no public release yet. Anki Bridge is an unofficial community plugin and is not affiliated with Anki or LearnHarness.
 
-![Anki Bridge inside LearnHarness. One card has just been sent to a lecture deck with a lecture tag, and the next draft shows its answer as rendered maths.](docs/images/0.7.0-write-and-review.png)
+![Anki Bridge inside LearnHarness. A green panel confirms that one card was sent, naming the lecture deck and tag, with Show in Anki and Dismiss buttons. The next draft below shows its answer as rendered maths.](docs/images/0.7.1-write-and-review.png)
 
 ## What it does
 
@@ -30,7 +30,7 @@ Under "Ideas from", pick one teaching session or your whole graph. In a session,
 
 ### 2. Write cards
 
-Choose a model, the card types you want and the most cards per idea. There are four types. Recall asks for a fact, definition or formula. Why asks for the reason behind an idea. Compose combines linked ideas to reach this one. Contrast tells the idea apart from a similar one.
+Choose a model, the card types you want and the most cards per idea. There are four types. Recall gives a new example or question where the idea applies. Why asks for the reason behind an idea. Compose combines linked ideas to reach this one. Contrast tells the idea apart from a similar one.
 
 Write cards shows the size and estimated cost of the run before anything starts. The model drafts in the background, so you can leave the page. Progress also shows under Background agents.
 
@@ -38,7 +38,7 @@ Write cards shows the size and estimated cost of the run before anything starts.
 
 ### 3. Review and send
 
-Each card shows Front, Back and Extra side by side with the maths rendered. Edit opens the TeX source with a live preview underneath. Approve the cards you're happy with, check the deck and tags, then send. The deck field suggests your Anki decks and tells you when a name is new.
+Each card shows Front, Back and Extra side by side with the maths rendered. Edit opens the TeX source with a live preview underneath. Approve the cards you're happy with, check the deck and tags, then send. The deck field suggests your Anki decks and tells you when a name is new. The tags field suggests tags already in your collection as you type. After a send, a panel says how many cards went to which deck and tags, with a button to show them in Anki.
 
 ![Editing a card. The front and back text boxes hold TeX source, the rendered preview sits under each one, and the idea the card was written from is folded away below.](docs/images/0.7.0-edit.png)
 
@@ -53,7 +53,7 @@ npm ci
 npm run package:plugin
 ```
 
-This writes `anki-bridge-v0.7.0.zip` at the repository root. Then:
+This writes `anki-bridge-v0.7.1.zip` at the repository root. Then:
 
 1. In LearnHarness, open Settings → Community plugins and copy the plugins folder path. Quit LearnHarness.
 2. Unzip the archive and move the `anki-bridge` folder into the plugins folder.
@@ -65,7 +65,7 @@ The [install guide](docs/install.md) covers upgrading without losing drafts, rol
 
 ## Flag replies during a lesson
 
-In a teaching session, Flag for Anki in the top bar marks the teacher's latest reply. You can add a note for the writer. `Cmd/Ctrl+Shift+A` flags straight away and offers the note in a short confirmation. Make cards opens Anki Bridge with that session's flagged ideas ticked.
+In a teaching session, Flag for Anki in the top bar marks the teacher's latest reply. You can add a note for the writer. `Cmd/Ctrl+Shift+A` flags straight away and offers the note in a short confirmation. After you flag a reply or save a note, the dialog says so and closes itself. Make cards opens Anki Bridge with that session's flagged ideas ticked.
 
 A flag covers every idea LearnHarness extracts from that reply. Extraction runs after the reply finishes, so a new flag can show as waiting for a short time.
 
@@ -73,9 +73,9 @@ A flag covers every idea LearnHarness extracts from that reply. Extraction runs 
 
 ## Tags
 
-Set "Tags for new cards" in the Anki Bridge settings. Separate tags with spaces. `{deck}` becomes the deck name with spaces replaced by underscores. With the template `{deck}::Lecture_01` and the deck `Year 3::Nuclear Physics`, cards get the tag `Year_3::Nuclear_Physics::Lecture_01`. Anki treats tags that differ only in case as the same tag, so this matches an existing `YEAR_3::Nuclear_Physics` hierarchy.
+Set "Tags for new cards" in the Anki Bridge settings. Separate tags with spaces. `{deck}` becomes the deck name with spaces replaced by underscores. With the template `{deck}::Lecture_01` and the deck `Year 3::Nuclear Physics`, cards get the tag `Year_3::Nuclear_Physics::Lecture_01`. Anki treats tags that differ only in case as the same tag. If your collection already has `YEAR_3::…` tags, the send step shows the tag as `YEAR_3::Nuclear_Physics::Lecture_01` to match.
 
-The send step shows the tags before each send, and you can change them there. Cards also get `learnharness` and a card-type tag such as `learnharness::kind::why`. You can turn these off in settings.
+The send step shows the tags before each send, and you can change them there. As you type, it suggests matching tags from your Anki collection. With an empty field, or after a space, it suggests only the tags under the deck's own tag, such as earlier lectures. Cards also get `learnharness` and a card-type tag such as `learnharness::kind::why`. You can turn these off in settings.
 
 ## Settings
 
@@ -95,6 +95,7 @@ The Anki Bridge settings hold the AnkiConnect address and optional key, the Anki
 ## Privacy and safety
 
 - Writing cards sends the chosen ideas to the model provider you picked, along with their linked ideas, an excerpt of the session reply each idea came from (flagged or not), your flag notes and any existing cards for those ideas. The Write cards dialog lists this before anything is sent.
+- From Anki, the bridge reads the open profile's name, its deck names and its tag names, for the deck and tag suggestions. It only looks up notes it sent itself, to check they still exist. Anki returns those notes' fields with the answer, and the bridge doesn't use them. It doesn't read your other notes or your review history.
 - The optional AnkiConnect key is stored in plain text in the plugin's `data/` folder. Never share that folder. Use AnkiConnect on your own machine.
 - Community plugins run local code with LearnHarness's permissions. Install builds you trust.
 - Adding missing fields and resetting styling and templates only change the bridge's own note type, and both ask you to confirm first.
@@ -102,13 +103,14 @@ The Anki Bridge settings hold the AnkiConnect address and optional key, the Anki
 ## Limitations
 
 - Card quality hasn't been benchmarked yet. An early trial on quantum mechanics lecture ideas kept 24 of 32 cards as written or with small edits. See [development notes](docs/development.md#card-quality-evidence).
-- The 0.7.0 interface was checked in a scratch LearnHarness with made-up data and a stand-in for AnkiConnect. Delivery to real Anki was tested in 0.2.0. See [0.7.0 verification](docs/0.7.0-verification.md).
+- The 0.7.0 and 0.7.1 interfaces were checked in a scratch LearnHarness with made-up data and a stand-in for AnkiConnect, in a browser rather than the desktop window. Delivery to real Anki was tested in 0.2.0. See [0.7.1 verification](docs/0.7.1-verification.md).
+- Most cards test applying an idea to a new case. The writer doesn't yet make plain fact cards, such as unit prefixes or a formula to memorise ([#34](https://github.com/Singh-Mehtab/learnharness-anki-bridge/issues/34)). Card types are being reworked next.
 - Tested only on macOS with LearnHarness 0.6.1.
 
 ## Roadmap
 
-- Done: drafting from the graph, session flags, coverage labels, delivery to Anki and the 0.7.0 redesign. See the [changelog](CHANGELOG.md).
-- Next: a card-quality benchmark on real lecture graphs, then a longer personal trial.
+- Done: drafting from the graph, session flags, coverage labels, delivery to Anki, the 0.7.0 redesign and the 0.7.1 fixes. See the [changelog](CHANGELOG.md).
+- Next: rework the card types so the writer also makes fact cards for things to memorise, then a card-quality benchmark on real lecture graphs and a longer personal trial.
 - After that: a public release, then a listing in the LearnHarness community plugin list.
 - Ideas, not scheduled: sending cards you keep failing in Anki back to LearnHarness as weak spots, and practice sessions aimed at those weak spots.
 

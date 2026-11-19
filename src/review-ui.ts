@@ -1,6 +1,6 @@
 // Step 3: check each card, approve it and send approved cards to a deck.
 import type { PluginFrontendContext } from "../sdk/index.d.ts";
-import { expandTagTemplate, validateTags } from "./anki/tags.ts";
+import { expandTagTemplate, matchTagCase, systemTags, tagSuggestions, validateTags } from "./anki/tags.ts";
 import { isWaitingCard } from "./coverage/flow.ts";
 import { KIND_NAMES } from "./drafting-ui.ts";
 import type { Connection, Destination, Peers, Settings } from "./settings-ui.ts";
@@ -35,16 +35,20 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
   const deck = input(""); deck.setAttribute("list", "anki-bridge-decks"); deck.spellcheck = false; deck.placeholder = "Year 3::Nuclear Physics";
   const decks = el("datalist"); decks.id = "anki-bridge-decks";
   const deckHint = el("span", undefined, "ab-muted ab-deck-hint");
-  const tags = input(""); tags.spellcheck = false; tags.placeholder = "No tags";
+  const tags = input(""); tags.setAttribute("list", "anki-bridge-tags"); tags.spellcheck = false; tags.placeholder = "No tags"; tags.autocomplete = "off";
+  const tagOptions = el("datalist"); tagOptions.id = "anki-bridge-tags";
   const tagHint = el("span", undefined, "ab-muted");
   const deckField = field("Deck", deck); deckField.append(deckHint);
   const tagField = field("Tags", tags); tagField.append(tagHint);
   const sendActions = el("div", undefined, "ab-actions ab-send-actions");
-  sendBar.append(deckField, decks, tagField, sendActions);
+  sendBar.append(deckField, decks, tagField, tagOptions, sendActions);
   const feedback = status();
+  /** A clear confirmation after a send, kept until the next action or dismissed (#32). */
+  const sentPanel = el("div", undefined, "ab-sent");
+  sentPanel.setAttribute("role", "status"); sentPanel.hidden = true;
   const list = el("div", undefined, "ab-cards");
   const history = el("details", undefined, "ab-history");
-  host.append(banner, sendBar, feedback, list, history);
+  host.append(banner, sendBar, feedback, sentPanel, list, history);
 
   const menuSlot = options.headerAside;
   let state: Snapshot | undefined, connection: Connection | undefined, connectionError = "";
@@ -57,10 +61,35 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
   const alive = () => !disposed && !signal.aborted && !ctx.signal.aborted;
   const scope = new RenderScope(signal), barScope = new RenderScope(signal), bannerScope = new RenderScope(signal);
   let approveAll: ButtonHandle | undefined, sendAll: ButtonHandle | undefined;
+  const sentScope = new RenderScope(signal);
+  function hideSent(): void { sentScope.reset(); sentPanel.replaceChildren(); sentPanel.hidden = true; }
+  function showSent(ids: string[], deckSent: string, tagsSent: string[]): void {
+    const s = sentScope.reset();
+    const icon = el("span", undefined, "ab-sent-icon"); icon.setAttribute("aria-hidden", "true");
+    icon.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>';
+    const text = el("div", undefined, "ab-sent-text");
+    text.append(el("p", `${plural(ids.length, "card")} sent to Anki`, "ab-sent-title"), el("p", `Deck ${deckSent}`, "ab-sent-detail"));
+    // Show every tag the send added, including the automatic ones (delivery.ts adds them per card).
+    const auto = state?.settings.systemTags === false ? [] : ids.flatMap(id => { const c = state?.cards.find(card => card.id === id); return c ? systemTags(c.kind) : []; });
+    const allTags = [...new Set([...tagsSent, ...auto])];
+    if (allTags.length) text.append(el("p", `Tags ${allTags.join(" ")}`, "ab-sent-detail"));
+    const actionsBox = el("div", undefined, "ab-actions");
+    if (state?.destination) button(ctx, actionsBox, s, { label: "Show in Anki", onClick: async () => {
+      // Not run(): that would clear this confirmation.
+      try { await ctx.call("show", { ids }); } catch (error) { if (alive()) feedback.show(message(error), "error"); }
+    } });
+    button(ctx, actionsBox, s, { label: "Dismiss", variant: "ghost", onClick: hideSent });
+    sentPanel.replaceChildren(icon, text, actionsBox);
+    sentPanel.hidden = false;
+    // Restart the entrance animation for a second send in a row.
+    sentPanel.classList.remove("ab-sent-enter"); void sentPanel.offsetWidth; sentPanel.classList.add("ab-sent-enter");
+    sentPanel.scrollIntoView?.({ block: "nearest", behavior: "smooth" });
+  }
 
   async function run(action: () => Promise<string | void>): Promise<void> {
     if (!alive() || busy) return;
     busy = true; actions++; syncBar();
+    hideSent();
     feedback.show("Working…");
     try { const done = await action(); if (alive()) { render(); feedback.show(done ?? "", "success"); } }
     catch (error) { if (alive()) { render(); feedback.show(message(error), "error"); } }
@@ -115,9 +144,17 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
   const destinationKey = (d: Destination | null | undefined) => d ? `${d.url}\n${d.profile}` : "";
   /** Decks are looked up only while the saved address is the paired one, as the backend requires for sending. */
   const lookupKey = () => state?.destination && state.settings.url === state.destination.url ? destinationKey(state.destination) : "";
-  let decksFor = "";
+  let decksFor = "", lookups = 0;
   /** Deck names shown for the profile in Anki, or none while that profile isn't the paired one. */
   const knownDecks = () => connection && lookupKey() && connection.profile === state?.destination?.profile ? connection.decks : undefined;
+  /** Tag names in that profile, for suggestions and matching the collection's casing. */
+  const knownTags = () => knownDecks() ? connection?.tags ?? [] : [];
+  function syncTagSuggestions(): void {
+    const next = tagSuggestions(tags.value, knownTags(), deckName());
+    const now = [...tagOptions.children].map(o => (o as HTMLOptionElement).value);
+    if (next.length === now.length && next.every((v, i) => v === now[i])) return;
+    tagOptions.replaceChildren(...next.map(value => { const o = el("option"); o.value = value; return o; }));
+  }
   async function loadDecks(): Promise<void> {
     const asked = lookupKey();
     if (!asked) {
@@ -131,11 +168,12 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
       decksFor = asked; connection = undefined; connectionError = "";
       decks.replaceChildren(); syncDeck();
     }
+    const lookup = ++lookups;
     let next: Connection | undefined, error = "";
     try { next = await ctx.call<Connection>("connection"); }
     catch (e) { error = message(e); }
-    // Ignore answers for an address or profile that has since changed.
-    if (!alive() || lookupKey() !== asked) return;
+    // Ignore answers for an address or profile that has since changed, and any answer a newer lookup replaces (#19).
+    if (!alive() || lookupKey() !== asked || lookup !== lookups) return;
     connection = next; connectionError = error;
     decks.replaceChildren(...(knownDecks() ?? []).map(name => { const o = el("option"); o.value = name; return o; }));
     syncDeck(); renderBanner();
@@ -158,11 +196,13 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
     }
     // A template that uses {deck} waits for a deck name rather than inventing one.
     const waitsForDeck = !name && !!state?.settings.tagTemplate.includes("{deck}");
-    if (!tagsTouched && state) tags.value = waitsForDeck ? "" : expandTagTemplate(state.settings.tagTemplate, name).join(" ");
+    if (!tagsTouched && state) tags.value = waitsForDeck ? "" : expandTagTemplate(state.settings.tagTemplate, name).map(t => matchTagCase(t, knownTags())).join(" ");
+    syncTagSuggestions();
     let tagProblem = "";
     try { validateTags(tagList()); } catch (error) { tagProblem = message(error); }
     const extra = state?.settings.systemTags ? " The learnharness tags are added too." : "";
-    tagHint.textContent = tagProblem || (tagList().length ? `Separate tags with spaces.${extra}` : waitsForDeck && !tagsTouched ? `Tags fill in from your template once you choose a deck.${extra}` : `No tags yet. Set a default in settings.${extra}`);
+    const suggested = knownTags().length ? " Your Anki tags are suggested as you type." : "";
+    tagHint.textContent = tagProblem || (tagList().length ? `Separate tags with spaces.${suggested}${extra}` : waitsForDeck && !tagsTouched ? `Tags fill in from your template once you choose a deck.${extra}` : `No tags yet. Set a default in settings.${suggested}${extra}`);
     tagHint.dataset.tone = tagProblem ? "error" : "";
     syncBar();
   }
@@ -185,17 +225,18 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
   async function send(ids: string[]): Promise<string> {
     const blocked = sendBlocker();
     if (blocked) throw new Error(blocked);
-    const name = deckName(), sentTags = tags.value;
+    const name = deckName(), sentTags = tags.value, sentTagList = validateTags(tagList());
     // The send uses these values, so they can't change underneath it.
     deck.readOnly = true; tags.readOnly = true;
-    try { await call("send", { ids, deck: name, tags: validateTags(tagList()), expectedDestination: state?.destination }); }
+    try { await call("send", { ids, deck: name, tags: sentTagList, expectedDestination: state?.destination }); }
     finally { deck.readOnly = false; tags.readOnly = false; }
     if (deckName() === name) deckTouched = false;
     const sent = ids.filter(id => state?.cards.find(c => c.id === id)?.status === "sent").length;
     // Tags typed for this send apply to this send only.
     if (sent === ids.length && tags.value === sentTags) tagsTouched = false;
     void loadDecks();
-    return sent === ids.length ? `Sent ${plural(sent, "card")} to ${name}.` : `Sent ${sent} of ${plural(ids.length, "card")}. Check the cards marked Send failed.`;
+    if (sent === ids.length) { showSent(ids, name, sentTagList); return ""; }
+    return `Sent ${sent} of ${plural(ids.length, "card")}. Check the cards marked Send failed.`;
   }
 
   function renderBar(): void {
@@ -252,6 +293,7 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
       if (busy) { err.show("Wait for the current action to finish, then add the card.", "error"); return; }
       // Counted like other actions, so an older background read can't hide the new card.
       busy = true; actions++; syncBar();
+      hideSent();
       try {
         await call("draft", { front: front.value, back: back.value, extra: extra.value, kind: kind.value });
         close(); render(); feedback.show("Card added for review.", "success");
@@ -408,7 +450,9 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
     const waiting = state.cards.filter(c => c.status !== "sent" && c.status !== "dropped");
     if (!waiting.length) {
       const empty = el("div", undefined, "ab-empty-card");
-      empty.append(el("p", "No cards to review.", "ab-empty-title"), el("p", "Cards you write in step 2 appear here. You can also write one by hand from the menu.", "ab-muted"));
+      const anySent = state.cards.some(c => c.status === "sent");
+      empty.append(el("p", anySent ? "Nothing left to review." : "No cards to review.", "ab-empty-title"),
+        el("p", anySent ? "Your sent cards are listed below. Write more in step 2, or write one by hand from the menu." : "Cards you write in step 2 appear here. You can also write one by hand from the menu.", "ab-muted"));
       list.append(empty);
     }
     // Saved order, so a card stays in place when it is approved.
@@ -440,6 +484,6 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
       await backgroundRefresh();
       if (alive() && !focus()) feedback.show("No cards for this idea are waiting for review.");
     },
-    dispose: () => { disposed = true; options.peers.delete(refreshFromPeer); unsubscribe(); scope.dispose(); barScope.dispose(); bannerScope.dispose(); },
+    dispose: () => { disposed = true; options.peers.delete(refreshFromPeer); unsubscribe(); scope.dispose(); barScope.dispose(); bannerScope.dispose(); sentScope.dispose(); },
   };
 }

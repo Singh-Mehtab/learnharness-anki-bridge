@@ -6,7 +6,7 @@ import type { ButtonHandle } from "./ui.ts";
 
 export interface Destination { url: string; profile: string }
 export interface Settings { url: string; lastDeck: string; hasApiKey: boolean; tagTemplate: string; systemTags: boolean }
-export interface Connection { profile: string | null; decks: string[] }
+export interface Connection { profile: string | null; decks: string[]; tags?: string[] }
 /** Live mounts of this activation. A change in one refreshes the others. */
 export type Peers = Set<() => void>;
 

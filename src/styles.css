@@ -16,7 +16,9 @@
 .anki-bridge .ab-label { display: block; font-size: 12px; font-weight: 600; margin-bottom: 5px; }
 .anki-bridge .ab-field { display: block; min-width: 0; }
 .anki-bridge .ab-field > .ab-muted { display: block; margin-top: 5px; }
-.anki-bridge .ab-input { display: block; width: 100%; border: 1px solid var(--ab-border); border-radius: 6px; padding: 7px 10px; background: var(--background, transparent); color: inherit; font: inherit; }
+.anki-bridge .ab-input { display: block; width: 100%; border: 1px solid var(--ab-border); border-radius: 6px; padding: 7px 10px; background: var(--background, transparent); color: inherit; font: inherit;
+  /* JetBrains Mono draws "::" as one ligature whose ink reaches into the previous cell. Inputs can clip that ink and hide a colon (#30), so typed text shows each character as typed. */
+  font-variant-ligatures: none; }
 .anki-bridge .ab-input:focus-visible { outline: 2px solid var(--ring, #888); outline-offset: 1px; }
 .anki-bridge textarea.ab-input { resize: vertical; min-height: 4.5em; font-family: var(--font-mono, ui-monospace, monospace); font-size: 13px; }
 .anki-bridge .ab-select { width: auto; padding-right: 28px; }
@@ -159,6 +161,24 @@
 .anki-bridge .ab-empty-card { border: 1px dashed var(--ab-border); border-radius: 10px; padding: 20px; text-align: center; display: grid; gap: 4px; }
 .anki-bridge .ab-empty-title { font-weight: 600; }
 .anki-bridge .ab-history { margin-top: 16px; }
+/* Send confirmation (#32): a tinted panel with a drawn check, then it stays put until the next action. */
+.anki-bridge .ab-sent { display: flex; align-items: center; gap: 14px; margin: 12px 0; padding: 14px 16px; border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--ab-good) 45%, var(--ab-border)); background: color-mix(in srgb, var(--ab-good) 10%, transparent); }
+.anki-bridge .ab-sent[hidden] { display: none; }
+.anki-bridge .ab-sent-icon { display: grid; place-items: center; flex: none; width: 36px; height: 36px; border-radius: 999px; color: var(--ab-good); background: color-mix(in srgb, var(--ab-good) 18%, transparent); }
+.anki-bridge .ab-sent-icon svg { width: 20px; height: 20px; }
+.anki-bridge .ab-sent-text { flex: 1; min-width: 0; display: grid; gap: 2px; }
+.anki-bridge .ab-sent-title { margin: 0; font-size: 15px; font-weight: 600; }
+.anki-bridge .ab-sent-detail { margin: 0; font-size: 12px; color: var(--ab-muted); overflow-wrap: anywhere; }
+.anki-bridge .ab-sent > .ab-actions { flex: none; }
+@media (prefers-reduced-motion: no-preference) {
+  .anki-bridge .ab-sent-enter { animation: ab-sent-in 260ms ease-out; }
+  .anki-bridge .ab-sent-enter .ab-sent-icon { animation: ab-sent-pop 420ms cubic-bezier(.2, 1.4, .4, 1); }
+  .anki-bridge .ab-sent-enter .ab-sent-icon path { stroke-dasharray: 24; stroke-dashoffset: 24; animation: ab-sent-draw 360ms 140ms ease-out forwards; }
+}
+@keyframes ab-sent-in { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+@keyframes ab-sent-pop { 0% { transform: scale(.6); } 100% { transform: scale(1); } }
+@keyframes ab-sent-draw { to { stroke-dashoffset: 0; } }
 .anki-bridge .ab-history > summary { cursor: pointer; font-size: 13px; color: var(--ab-muted); padding: 4px 0; }
 
 /* Dialogs */

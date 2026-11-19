@@ -41,15 +41,57 @@ test("connection sends v6 POST requests with body key for an open profile", asyn
     req.on("end", () => {
       const request = JSON.parse(body);
       requests.push(request);
-      const result = { version: 6, getActiveProfile: "Scratch", deckNames: ["Default", "Test"] }[request.action as string];
+      const result = { version: 6, getActiveProfile: "Scratch", deckNames: ["Default", "Test"], getTags: ["YEAR_3::NPP1"] }[request.action as string];
       res.end(JSON.stringify({ result, error: null }));
     });
   });
   try {
     const client = new AnkiClient({ url: http.url, apiKey: "secret" });
-    assert.deepEqual(await client.connection(), { profile: "Scratch", decks: ["Default", "Test"] });
-    assert.deepEqual(requests, ["version", "getActiveProfile", "deckNames"].map((action) => ({ action, version: 6, key: "secret", params: {} })));
+    assert.deepEqual(await client.connection(), { profile: "Scratch", decks: ["Default", "Test"], tags: ["YEAR_3::NPP1"] });
+    assert.deepEqual(requests, ["version", "getActiveProfile", "deckNames", "getTags"].map((action) => ({ action, version: 6, key: "secret", params: {} })));
   } finally { await http.close(); }
+});
+
+test("a failed tag lookup still returns the profile and decks", async () => {
+  const http = await server((req, res) => {
+    let body = ""; req.on("data", chunk => { body += chunk; });
+    req.on("end", () => {
+      const { action } = JSON.parse(body) as { action: string };
+      if (action === "getTags") { res.end(JSON.stringify({ result: null, error: "unsupported action" })); return; }
+      res.end(JSON.stringify({ result: { version: 6, getActiveProfile: "Scratch", deckNames: ["Default"] }[action], error: null }));
+    });
+  });
+  try { assert.deepEqual(await new AnkiClient({ url: http.url }).connection(), { profile: "Scratch", decks: ["Default"], tags: [] }); }
+  finally { await http.close(); }
+});
+
+test("a tag lookup that times out or is refused keeps the decks; pairing skips it", async () => {
+  let port = 0;
+  const actions: string[] = [];
+  const http = await server((req, res) => {
+    let body = ""; req.on("data", chunk => { body += chunk; });
+    req.on("end", () => {
+      const { action } = JSON.parse(body) as { action: string };
+      actions.push(action);
+      if (action === "getTags") return; // Never answers.
+      res.end(JSON.stringify({ result: { version: 6, getActiveProfile: "Scratch", deckNames: ["Default"] }[action], error: null }));
+    });
+  });
+  try {
+    assert.deepEqual(await new AnkiClient({ url: http.url, timeoutMs: 100 }).connection(), { profile: "Scratch", decks: ["Default"], tags: [] });
+    actions.length = 0;
+    assert.deepEqual(await new AnkiClient({ url: http.url, timeoutMs: 100 }).connection({ tags: false }), { profile: "Scratch", decks: ["Default"], tags: [] });
+    assert.deepEqual(actions, ["version", "getActiveProfile", "deckNames"]);
+    port = Number(new URL(http.url).port);
+  } finally { await http.close(); }
+  // Anki quits between deckNames and getTags: the port now refuses connections.
+  let calls = 0;
+  const refusing = new AnkiClient({ url: `http://127.0.0.1:${port}`, timeoutMs: 1000 });
+  const answers: Record<string, unknown> = { version: 6, getActiveProfile: "Scratch", deckNames: ["Default"] };
+  const real = refusing.call.bind(refusing);
+  (refusing as unknown as { call: (action: string) => Promise<unknown> }).call = async (action: string) => { calls++; return action === "getTags" ? real(action) : answers[action]; };
+  assert.deepEqual(await refusing.connection(), { profile: "Scratch", decks: ["Default"], tags: [] });
+  assert.equal(calls, 4);
 });
 
 test("a cleared optional API key is omitted, not sent as an empty authentication attempt", async () => {
@@ -81,7 +123,7 @@ test("connection returns null profile without requesting decks from a closed col
   });
   try {
     const client = new AnkiClient({ url: http.url });
-    assert.deepEqual(await client.connection(), { profile: null, decks: [] });
+    assert.deepEqual(await client.connection(), { profile: null, decks: [], tags: [] });
     assert.deepEqual(actions, ["version", "getActiveProfile"]);
     await assert.rejects(client.call("deckNames"), kind("api"));
   } finally { await http.close(); }

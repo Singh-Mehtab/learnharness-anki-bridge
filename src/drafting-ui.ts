@@ -17,7 +17,8 @@ const kinds: readonly Kind[] = ["recall", "why", "compose", "discriminate"];
 /** Learner-facing names. "discriminate" stays the stored and prompt name. */
 export const KIND_NAMES: Record<string, string> = { recall: "Recall", why: "Why", compose: "Compose", discriminate: "Contrast" };
 export const KIND_HELP: Record<Kind, string> = {
-  recall: "State a fact, definition or formula.",
+  // Matches the writer prompt: a new case where the idea applies, not the bare fact (#34).
+  recall: "Use the idea in a new example or question.",
   why: "Explain the reason behind the idea.",
   compose: "Combine linked ideas to reach this one.",
   discriminate: "Tell the idea apart from a similar one.",

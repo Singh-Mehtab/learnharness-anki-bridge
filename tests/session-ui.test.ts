@@ -122,8 +122,9 @@ test("the shortcut confirmation closes itself unless the learner engages", async
   } finally { t.mock.timers.reset(); await f.close(); }
 });
 
-test("the top-bar button opens a note dialog before flagging", async () => {
-  const f = setup((_name, input) => flagView({ note: (input as { note?: string }).note ?? "" }));
+test("the top-bar button opens a note dialog, flags, confirms and closes itself (#33)", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const f = setup((_name, input) => flagView({ status: "matched", nodeIds: ["n1", "n2"], note: (input as { note?: string }).note ?? "" }));
   try {
     registerSessionActions(f.ctx, new SessionRequests());
     await f.actions.get("flag-for-anki")!.run(sessionContext());
@@ -132,37 +133,96 @@ test("the top-bar button opens a note dialog before flagging", async () => {
     const note = content.querySelector("input")!;
     note.value = "I got the sign wrong";
     f.buttonIn(content, "Flag").click();
-    await tick();
+    for (let i = 0; i < 5; i++) await Promise.resolve();
     assert.deepEqual(f.calls, [{ name: "flag", input: { sessionId: "s1", messageIds: ["a1"], note: "I got the sign wrong" } }]);
-    assert.equal(note.value, "I got the sign wrong");
     assert.match(content.textContent!, /Flagged for Anki/);
-    f.buttonIn(content, "Save note");
-    f.buttonIn(content, "Close").click();
+    assert.match(content.textContent!, /Flagged with your note\. 2 ideas from this reply\./);
+    assert.equal(note.readOnly, true);
+    assert.equal(f.buttonIn(content, "Flag").disabled, true, "a second save can't run while it closes");
+    // Engaging with the dialog doesn't keep a finished one open.
+    content.dispatchEvent(new f.window.Event("pointerdown") as never);
+    t.mock.timers.tick(1600);
     assert.equal(f.dialog(), undefined);
-  } finally { await f.close(); }
+  } finally { t.mock.timers.reset(); await f.close(); }
 });
 
-test("an empty note in the click dialog preserves the saved note through repeated saves", async () => {
+test("the top-bar Flag on a reply flagged with a note shows that note so it can be cleared", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  let saved = "earlier note";
+  let release!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  const f = setup(async (_name, input) => {
+    await held;
+    const note = (input as { note?: string }).note;
+    if (note !== undefined) saved = note;
+    return flagView({ note: saved, created: false });
+  });
+  const settle = async () => { for (let i = 0; i < 5; i++) await Promise.resolve(); };
+  try {
+    registerSessionActions(f.ctx, new SessionRequests());
+    await f.actions.get("flag-for-anki")!.run(sessionContext());
+    const content = f.dialog()!.content;
+    const note = content.querySelector("input")!;
+    const enter = () => note.dispatchEvent(new f.window.KeyboardEvent("keydown", { key: "Enter", bubbles: true }) as never);
+    enter(); enter();
+    assert.equal(f.calls.length, 1, "pressing Enter twice while saving submits only once");
+    release(); await settle();
+    assert.equal(saved, "earlier note", "a blank first submit keeps the note");
+    assert.match(content.textContent!, /Already flagged for Anki/);
+    assert.equal(note.value, "earlier note");
+    assert.equal(note.readOnly, false);
+    t.mock.timers.tick(5000);
+    assert.ok(f.dialog(), "stays open so the learner can edit the note");
+    note.value = "";
+    f.buttonIn(content, "Save note").click(); await settle();
+    assert.equal(saved, "");
+    assert.match(content.textContent!, /Note removed\./);
+    t.mock.timers.tick(1600);
+    assert.equal(f.dialog(), undefined);
+  } finally { t.mock.timers.reset(); await f.close(); }
+});
+
+test("Save note after a shortcut flag saves, says so and closes; Close still closes at once", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
   let saved = "kept";
   const f = setup((_name, input) => {
     const note = (input as { note?: string }).note;
     if (note !== undefined) saved = note;
-    return flagView({ note: saved });
+    return flagView({ note: saved, created: false });
   });
+  const settle = async () => { for (let i = 0; i < 5; i++) await Promise.resolve(); };
+  try {
+    registerSessionActions(f.ctx, new SessionRequests());
+    await f.actions.get("flag-for-anki")!.run(sessionContext({ placement: "keyboard" }));
+    let content = f.dialog()!.content;
+    content.dispatchEvent(new f.window.Event("pointerdown") as never);
+    f.buttonIn(content, "Save note").click(); await settle();
+    assert.equal(saved, "kept", "an unchanged note is kept");
+    assert.match(content.textContent!, /Saved\./);
+    t.mock.timers.tick(1600);
+    assert.equal(f.dialog(), undefined);
+
+    await f.actions.get("flag-for-anki")!.run(sessionContext({ placement: "keyboard" }));
+    content = f.dialog()!.content;
+    content.dispatchEvent(new f.window.Event("pointerdown") as never);
+    content.querySelector("input")!.value = "";
+    f.buttonIn(content, "Save note").click(); await settle();
+    assert.equal(saved, ""); // Clearing a populated field is still an explicit erase.
+    assert.match(content.textContent!, /Note removed\./);
+    f.buttonIn(content, "Close").click();
+    assert.equal(f.dialog(), undefined);
+  } finally { t.mock.timers.reset(); await f.close(); }
+});
+
+test("an empty note in the click dialog keeps a note saved earlier", async () => {
+  const f = setup(() => flagView({ note: "kept" }));
   try {
     registerSessionActions(f.ctx, new SessionRequests());
     await f.actions.get("flag-for-anki")!.run(sessionContext());
     f.buttonIn(f.dialog()!.content, "Flag").click();
     await tick();
     assert.deepEqual(f.calls[0].input, { sessionId: "s1", messageIds: ["a1"] });
-    const note = f.dialog()!.content.querySelector("input")!;
-    assert.equal(note.value, "kept");
-    f.buttonIn(f.dialog()!.content, "Save note").click(); await tick();
-    assert.equal(saved, "kept");
-    assert.deepEqual(f.calls.at(-1)?.input, { sessionId: "s1", messageIds: ["a1"], note: "kept" });
-    note.value = "";
-    f.buttonIn(f.dialog()!.content, "Save note").click(); await tick();
-    assert.equal(saved, ""); // Clearing a populated field is still an explicit erase.
+    assert.equal(f.dialog()!.content.querySelector("input")!.value, "kept");
   } finally { await f.close(); }
 });
 
