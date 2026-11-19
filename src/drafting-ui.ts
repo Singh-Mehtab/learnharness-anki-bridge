@@ -168,6 +168,7 @@ export function mountDrafting(ctx: PluginFrontendContext, ideasHost: HTMLElement
     fact("Model", p.model.id);
     fact("Model calls", `${p.batches.length}, or up to ${p.batches.length * 3} if answers need fixing`);
     fact("Cost", p.estimatedCost === null ? "No estimate for this model" : `About $${p.estimatedCost.toFixed(4)} for the first attempt`);
+    fact("Sent to the model", "These ideas, linked ideas, an excerpt of the reply each idea came from, your flag notes and existing cards for these ideas");
     body.append(facts);
     if (p.skipped.length) {
       const skipped = el("ul", undefined, "ab-skipped");
@@ -213,6 +214,8 @@ export function mountDrafting(ctx: PluginFrontendContext, ideasHost: HTMLElement
       const cancelled = generation.tasks.filter(t => t.status === "cancelled");
       const cards = applied.reduce((n, t) => n + (t.result?.targets ?? []).reduce((m, x) => m + x.cards.length, 0), 0);
       const ideas = generation.nodeIds.length;
+      // Count the ideas that actually got cards, not every idea selected.
+      const carded = new Set(applied.flatMap(t => (t.result?.targets ?? []).filter(x => x.cards.length).map(x => x.nodeId))).size;
       const head = el("div", undefined, "ab-progress-head");
       const text = el("p", undefined, "ab-progress-text");
       const actions = el("div", undefined, "ab-actions");
@@ -231,7 +234,7 @@ export function mountDrafting(ctx: PluginFrontendContext, ideasHost: HTMLElement
         }, false) }));
       } else {
         const summary = generation.status === "completed" && !failed.length
-          ? `Wrote ${plural(cards, "card")} for ${plural(ideas, "idea")}.`
+          ? `Wrote ${plural(cards, "card")} for ${plural(carded, "idea")}.`
           : !cards && failed.length && !cancelled.length ? `Couldn't write cards. ${failed.length === 1 ? "The model call failed." : `${failed.length} model calls failed.`}`
           : `Wrote ${plural(cards, "card")}. ${[failed.length ? `${plural(failed.length, "batch", "batches")} failed` : "", cancelled.length ? `${plural(cancelled.length, "batch", "batches")} cancelled` : ""].filter(Boolean).join(", ")}.`;
         text.append(el("strong", summary), el("span", cards ? " Review them in step 3." : "", "ab-muted"));

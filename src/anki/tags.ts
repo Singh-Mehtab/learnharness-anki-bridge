@@ -9,7 +9,7 @@ export const deckTag = (deck: string): string =>
 
 /** Space-separated template; {deck} becomes the deck path as a tag. */
 export function expandTagTemplate(template: string, deck: string): string[] {
-  const expanded = template.replace(/\{deck\}/giu, deckTag(deck));
+  const expanded = template.replace(/\{deck\}/giu, () => deckTag(deck));
   return [...new Set(expanded.split(/\s+/u).filter(Boolean))];
 }
 

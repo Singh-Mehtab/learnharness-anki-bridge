@@ -34,13 +34,13 @@ Choose a model, the card types you want and the most cards per idea. There are f
 
 Write cards shows the size and estimated cost of the run before anything starts. The model drafts in the background, so you can leave the page. Progress also shows under Background agents.
 
-![The Write cards dialog lists 5 ideas, up to 10 cards, the model, the number of model calls and an estimated cost, with Cancel and Start writing buttons.](docs/images/0.7.0-write-dialog.png)
+![The Write cards dialog lists 5 ideas, up to 10 cards, the model, the number of model calls, an estimated cost and what is sent to the model, with Cancel and Start writing buttons.](docs/images/0.7.0-write-dialog.png)
 
 ### 3. Review and send
 
 Each card shows Front, Back and Extra side by side with the maths rendered. Edit opens the TeX source with a live preview underneath. Approve the cards you're happy with, check the deck and tags, then send. The deck field suggests your Anki decks and tells you when a name is new.
 
-![Editing a card. The front and back text boxes hold TeX source, and the rendered preview sits under each one.](docs/images/0.7.0-edit.png)
+![Editing a card. The front and back text boxes hold TeX source, the rendered preview sits under each one, and the idea the card was written from is folded away below.](docs/images/0.7.0-edit.png)
 
 ## Install
 
@@ -94,7 +94,7 @@ The Anki Bridge settings hold the AnkiConnect address and optional key, the Anki
 
 ## Privacy and safety
 
-- Writing cards sends the chosen ideas, their linked ideas, and for flagged ideas the teacher's reply and your note, to the model provider you picked.
+- Writing cards sends the chosen ideas to the model provider you picked, along with their linked ideas, an excerpt of the session reply each idea came from (flagged or not), your flag notes and any existing cards for those ideas. The Write cards dialog lists this before anything is sent.
 - The optional AnkiConnect key is stored in plain text in the plugin's `data/` folder. Never share that folder. Use AnkiConnect on your own machine.
 - Community plugins run local code with LearnHarness's permissions. Install builds you trust.
 - Adding missing fields and resetting styling and templates only change the bridge's own note type, and both ask you to confirm first.

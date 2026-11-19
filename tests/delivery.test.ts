@@ -20,7 +20,7 @@ async function fixture() {
   let failFront = '';
   let dropAfterAdd = false;
   let switchAfterAdd = false;
-  let addGate: Promise<void> | undefined, deckGate: Promise<void> | undefined;
+  let addGate: Promise<void> | undefined, deckGate: Promise<void> | undefined, versionGate: Promise<void> | undefined;
   let enterAdd!: () => void, finishAdd!: () => void;
   const addEntered = new Promise<void>(r => { enterAdd = r; });
   const addCompleted = new Promise<void>(r => { finishAdd = r; });
@@ -34,7 +34,7 @@ async function fixture() {
       calls.push({ action, params });
       let result: unknown = null;
       let error: string | null = null;
-      if (action === 'version') result = 6;
+      if (action === 'version') { if (versionGate) await versionGate; result = 6; }
       else if (action === 'getActiveProfile') result = profile;
       else if (action === 'deckNames') { if (deckGate) await deckGate; result = ['Default']; }
       else if (action === 'modelNames') result = fields.length ? ['LearnHarness Basic'] : [];
@@ -83,7 +83,7 @@ async function fixture() {
   const close = async () => { await service.close(); server.closeAllConnections(); await new Promise<void>((resolve, reject) => server.close(e => e ? reject(e) : resolve())); await rm(directory, { recursive: true, force: true }); };
   return { directory, url, calls, notes, errors, snap, draft, pair, approve, send, reopen, close, addEntered, addCompleted, get service() { return service; }, get store() { return store; },
     setProfile: (v: string | null) => { profile = v; }, setFields: (v: string[]) => { fields = v; }, setCss: (v: string) => { css = v; },
-    failFront: (v: string) => { failFront = v; }, dropAfterAdd: () => { dropAfterAdd = true; }, switchAfterAdd: () => { switchAfterAdd = true; }, gate: (v: Promise<void>) => { addGate = v; }, gateDecks: (v: Promise<void>) => { deckGate = v; } };
+    failFront: (v: string) => { failFront = v; }, dropAfterAdd: () => { dropAfterAdd = true; }, switchAfterAdd: () => { switchAfterAdd = true; }, gate: (v: Promise<void>) => { addGate = v; }, gateDecks: (v: Promise<void>) => { deckGate = v; }, gateVersion: (v: Promise<void>) => { versionGate = v; } };
 }
 
 test('hand-written cards require explicit pairing and durable approval, then add one note at a time', async () => {
@@ -318,6 +318,20 @@ test('backend errors do not echo the saved API key into the frontend', async () 
     f.errors.set('version', 'Rejected scratch-key-for-redaction');
     await assert.rejects(f.service.command('connection'), error => error instanceof Error && error.message === 'Rejected [API key hidden]');
   } finally { await f.close(); }
+});
+
+test('a connection check hides the key it used even if the saved key changes meanwhile', async () => {
+  const f = await fixture(); let release!: () => void;
+  try {
+    await f.service.command('settings', { apiKey: 'first-key-for-redaction' });
+    f.errors.set('version', 'Rejected first-key-for-redaction');
+    f.gateVersion(new Promise<void>(r => { release = r; }));
+    const checking = f.service.command('connection');
+    while (!f.calls.some(c => c.action === 'version')) await new Promise(r => setTimeout(r, 5));
+    await f.service.command('settings', { apiKey: 'second-key' });
+    release();
+    await assert.rejects(checking, error => error instanceof Error && error.message === 'Rejected [API key hidden]');
+  } finally { release?.(); await f.close(); }
 });
 
 test('disable during a send preserves uncertainty and restart reconciles a late accepted note', async () => {

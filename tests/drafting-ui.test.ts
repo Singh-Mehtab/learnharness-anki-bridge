@@ -210,6 +210,17 @@ test("a running batch has the progress panel to itself", async () => {
   } finally { await f.close(); }
 });
 
+test("the summary counts ideas that got cards, and lists the skipped ones", async () => {
+  const f = setup();
+  try {
+    f.state.generations.push({ id: "g", status: "completed", nodeIds: ["n_a", "n_b", "n_c"], skipped: [{ nodeId: "n_c", reason: "Too long" }], settings: {}, createdAt: "", tasks: [
+      { requestId: "r", status: "applied", input: {}, outputAllowance: 1, sources: [], result: { targets: [{ nodeId: "n_a", cards: [{}, {}] }, { nodeId: "n_b", cards: [], skipReason: "Couldn't check it" }] } }] });
+    await f.panel.setScope(undefined); await tick();
+    assert.match(f.text(), /Wrote 2 cards for 1 idea\./);
+    assert.match(f.text(), /2 ideas skipped/);
+  } finally { await f.close(); }
+});
+
 test("failed batches show the provider message, not raw JSON", async () => {
   const f = setup();
   try {

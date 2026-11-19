@@ -30,6 +30,7 @@ async function setup(options: { handler?: (name: string, input: any) => unknown;
   const actions = new Map<string, { run: (context?: unknown) => void }>();
   const placements: Array<{ actionId: string; location: string }> = [];
   const resyncs = new Set<() => void>();
+  let coverageReads = 0;
   const ctx = {
     signal: activation.signal,
     cleanup: (fn: () => void) => cleanups.push(fn),
@@ -41,6 +42,7 @@ async function setup(options: { handler?: (name: string, input: any) => unknown;
     onResync: (listener: () => void) => { resyncs.add(listener); return () => { resyncs.delete(listener); }; },
     app: { openView: (id: string) => { openedView = id; }, openSettings: () => { settingsOpened++; } },
     call: async (name: string, input: any) => {
+      if (name === "coverageContext") coverageReads++;
       if (name === "coverageContext") return { nodes: [], missing: [], cardsPerNode: 2, paired: true, pairingWarning: false };
       if (name === "generationStatus") return { generationSettings: { cardsPerNode: 2, enabledKinds: ["recall"], model: null }, generations: [] };
       if (name === "sessions") return { sessions: [], unresolved: [] };
@@ -91,6 +93,7 @@ async function setup(options: { handler?: (name: string, input: any) => unknown;
       actions.get("open-bridge")?.run(); return openedView;
     },
     settingsOpened: () => settingsOpened,
+    coverageReads: () => coverageReads,
     resync: async () => { for (const listener of resyncs) listener(); await tick(); },
     dispose: async () => { controller.abort(); if (typeof cleanup === "function") await cleanup(); cleanups.forEach(fn => fn()); await window.happyDOM.close(); },
   };
@@ -140,6 +143,9 @@ test("changing the address clears a key typed for the previous one", async () =>
     f.type(key, "typed-for-old");
     f.type(url, "http://127.0.0.1:9999");
     assert.equal(key.value, "");
+    assert.match(s.host.textContent!, /The key you typed was cleared because the address changed\./);
+    f.type(key, "typed-for-new");
+    assert.doesNotMatch(s.host.textContent!, /The key you typed was cleared/);
     s.close();
   } finally { await f.dispose(); }
 });
@@ -466,4 +472,68 @@ test("choosing a profile for the first time loads deck suggestions on the open p
     assert.deepEqual(options, ["Scratch", "New::Deck"]);
     s.close();
   } finally { await f.dispose(); }
+});
+
+test("deck and tags are locked while a send runs", async () => {
+  const state = fixture(); state.cards = [card("a", { status: "approved" })];
+  let release!: () => void;
+  const held = new Promise<void>(r => { release = r; });
+  const f = await setup({ state, handler: async name => { if (name === "send") await held; return undefined; } });
+  try {
+    f.button("Send 1 card to Anki").click(); await tick();
+    assert.equal(f.deck().readOnly, true); assert.equal(f.tags().readOnly, true);
+    release(); await tick();
+    assert.equal(f.deck().readOnly, false); assert.equal(f.tags().readOnly, false);
+    assert.match(f.status()!, /Sent 1 card to Scratch\./);
+  } finally { release(); await f.dispose(); }
+});
+
+test("switching profiles refreshes step 1 and drops the old profile's decks", async () => {
+  const state = fixture();
+  let profile = "Throwaway", decks = ["Scratch", "New::Deck"];
+  const f = await setup({ state, connection: () => ({ profile, decks }) });
+  try {
+    const options = () => Array.from(f.container.querySelectorAll("#anki-bridge-decks option") as unknown as ArrayLike<HTMLOptionElement>).map(o => o.value);
+    assert.deepEqual(options(), ["Scratch", "New::Deck"]);
+    const s = await f.mountSettings();
+    const before = f.coverageReads();
+    profile = "Second"; decks = ["Other deck"];
+    f.button("Switch to the open profile", s.host).click(); await tick();
+    // By the time the page reloads its decks, Anki has the first profile open again.
+    profile = "Throwaway"; decks = ["Scratch", "New::Deck"];
+    f.button("Use this profile", f.dialog()!).click(); await tick(); await tick();
+    assert.deepEqual(state.destination, { url: "http://127.0.0.1:8765/", profile: "Second" });
+    assert.ok(f.coverageReads() > before, "ideas in Anki are recounted for the new profile");
+    assert.deepEqual(options(), [], "Anki has another profile open, so its decks aren't offered");
+    f.type(f.deck(), "Scratch");
+    assert.match(f.container.textContent!, /Open the Second profile in Anki to check this deck name\./);
+    s.close();
+  } finally { await f.dispose(); }
+});
+
+test("a refresh asked for during a read gets a newer read, not the old answer", async () => {
+  const state = fixture(); state.cards = [card("a")];
+  let release: (() => void) | undefined, hold = false;
+  const f = await setup({ state, handler: async name => {
+    if (name !== "snapshot" || !hold) return undefined;
+    hold = false;
+    const old = structuredClone(state);
+    await new Promise<void>(r => { release = r; });
+    return old;
+  } });
+  try {
+    const s = await f.mountSettings();
+    const template = Array.from(s.host.querySelectorAll("input") as ArrayLike<HTMLInputElement>).find(i => i.placeholder?.startsWith("YEAR_3"))!;
+    const reads = () => f.calls.filter(c => c.name === "snapshot").length;
+    hold = true;
+    f.type(template, "{deck}::Lecture_02", "change"); await tick();
+    const first = reads();
+    assert.ok(release, "the page started a read after the settings change");
+    state.cards.push(card("b"));
+    f.type(template, "{deck}::Lecture_03", "change"); await tick();
+    release!(); await tick(); await tick();
+    assert.ok(reads() > first, "a second read started after the first finished");
+    assert.match(f.review().textContent!, /Idea b/);
+    s.close();
+  } finally { release?.(); await f.dispose(); }
 });

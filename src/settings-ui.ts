@@ -94,18 +94,20 @@ export function mountSettings(ctx: PluginFrontendContext, container: HTMLElement
     pairButton?.update({ disabled: busy });
     removeKey?.update({ disabled: busy });
   }
+  let keyCleared = false;
   function urlAdvice(): void {
     const changed = state?.settings.hasApiKey && endpoint(url.value) !== endpoint(savedUrl);
     urlHint.textContent = (/localhost/i.test(url.value) ? "Use 127.0.0.1 instead of localhost, which can fail over IPv6." : "Usually http://127.0.0.1:8765. Use the root address, not an API path.")
-      + (changed ? " Saving a different address removes the saved API key." : "");
+      + (changed ? " Saving a different address removes the saved API key." : "")
+      + (keyCleared ? " The key you typed was cleared because the address changed. Type it again for this address." : "");
   }
   let lastEndpoint = "";
   url.oninput = () => {
     // A typed key belongs to the address beside it.
-    if (endpoint(url.value) !== lastEndpoint) { key.value = ""; lastEndpoint = endpoint(url.value) ?? ""; }
+    if (endpoint(url.value) !== lastEndpoint) { keyCleared ||= !!key.value; key.value = ""; lastEndpoint = endpoint(url.value) ?? ""; }
     urlAdvice(); syncButtons();
   };
-  key.oninput = syncButtons;
+  key.oninput = () => { if (keyCleared) { keyCleared = false; urlAdvice(); } syncButtons(); };
 
   async function act(target: ReturnType<typeof status>, action: () => Promise<string | void>, working = "Working…"): Promise<void> {
     if (!alive() || busy) return;
@@ -133,7 +135,7 @@ export function mountSettings(ctx: PluginFrontendContext, container: HTMLElement
     const value: { url: string; apiKey?: string } = { url: url.value };
     if (key.value) value.apiKey = key.value;
     await apply("settings", value);
-    key.value = "";
+    key.value = ""; keyCleared = false; urlAdvice();
     return "Saved. Test the connection to check it.";
   }, "Saving…") });
   testButton = button(ctx, connectionActions, signal, { label: "Test connection", onClick: () => {

@@ -70,10 +70,11 @@ export class DeliveryService {
     const { url, apiKey } = this.store.snapshot().settings;
     return new AnkiClient({ url, apiKey, timeoutMs: this.options.timeoutMs, signal: this.lifetime.signal });
   }
-  private message(error: unknown): string {
-    const message = error instanceof Error ? error.message : String(error);
-    const key = this.store.snapshot().settings.apiKey;
-    return key ? message.split(key).join('[API key hidden]') : message;
+  /** Hides the saved key, plus any key a request captured before the saved one changed. */
+  private message(error: unknown, ...used: string[]): string {
+    let message = error instanceof Error ? error.message : String(error);
+    for (const key of new Set([this.store.snapshot().settings.apiKey, ...used])) if (key) message = message.split(key).join('[API key hidden]');
+    return message;
   }
   reportRecoveryError(error: unknown): void { this.recoveryError = this.message(error); }
   snapshot(includeSource = true): PublicSnapshot {
@@ -159,8 +160,10 @@ export class DeliveryService {
     // A read-only Anki query; holding the writer fence here would block approvals while Anki is slow or closed.
     if (name === 'connection') {
       this.active();
-      try { return await this.client().connection(); }
-      catch (error) { throw new Error(this.message(error)); }
+      // Settings can change while this runs outside the fence, so the request's own key is redacted too.
+      const { url, apiKey } = this.store.snapshot().settings;
+      try { return await new AnkiClient({ url, apiKey, timeoutMs: this.options.timeoutMs, signal: this.lifetime.signal }).connection(); }
+      catch (error) { throw new Error(this.message(error, apiKey)); }
     }
     return this.exclusive(async () => {
       this.active();

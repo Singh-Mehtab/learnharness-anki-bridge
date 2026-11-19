@@ -101,7 +101,8 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
       if (!alive() || fresh === "busy") return;
       const before = destinationKey(state?.destination);
       state = fresh; render();
-      if (destinationKey(fresh.destination) !== before) void loadDecks();
+      // A new profile changes which decks exist and which ideas count as in Anki.
+      if (destinationKey(fresh.destination) !== before) { void loadDecks(); void options.onChanged().catch(() => undefined); }
     } catch (error) {
       refreshPending = true;
       if (alive()) feedback.show(`Couldn't refresh the cards: ${message(error)}`, "error");
@@ -109,16 +110,24 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
   }
   function refreshFromPeer(): void { void backgroundRefresh(); }
   const destinationKey = (d: Destination | null | undefined) => d ? `${d.url}\n${d.profile}` : "";
+  let decksFor = "";
+  /** Deck names shown for the profile in Anki, or none while that profile isn't the paired one. */
+  const knownDecks = () => connection && connection.profile === state?.destination?.profile ? connection.decks : undefined;
   async function loadDecks(): Promise<void> {
     if (!state?.destination) return;
     const asked = destinationKey(state.destination);
+    if (asked !== decksFor) {
+      // Don't offer the old profile's decks while the new one loads.
+      decksFor = asked; connection = undefined; connectionError = "";
+      decks.replaceChildren(); syncDeck();
+    }
     let next: Connection | undefined, error = "";
     try { next = await ctx.call<Connection>("connection"); }
     catch (e) { error = message(e); }
     // Ignore answers for a profile that has since changed.
     if (!alive() || destinationKey(state?.destination) !== asked) return;
     connection = next; connectionError = error;
-    decks.replaceChildren(...(connection?.decks ?? []).map(name => { const o = el("option"); o.value = name; return o; }));
+    decks.replaceChildren(...(knownDecks() ?? []).map(name => { const o = el("option"); o.value = name; return o; }));
     syncDeck(); renderBanner();
   }
 
@@ -130,9 +139,10 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
     const name = deckName();
     if (!name) deckHint.textContent = "Type a deck name, or pick one of your decks.";
     else if (!connection) deckHint.textContent = connectionError ? "Open Anki to check this deck name." : "";
-    else if (connection.decks.includes(name)) deckHint.textContent = "Existing deck.";
+    else if (!knownDecks()) deckHint.textContent = `Open the ${state?.destination?.profile ?? "chosen"} profile in Anki to check this deck name.`;
+    else if (knownDecks()!.includes(name)) deckHint.textContent = "Existing deck.";
     else {
-      const close = connection.decks.find(d => d.toLocaleLowerCase() === name.toLocaleLowerCase());
+      const close = knownDecks()!.find(d => d.toLocaleLowerCase() === name.toLocaleLowerCase());
       deckHint.textContent = close ? `New deck. Did you mean ${close}?` : "New deck. Anki Bridge creates it when you send.";
     }
     // A template that uses {deck} waits for a deck name rather than inventing one.
@@ -164,12 +174,15 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
   async function send(ids: string[]): Promise<string> {
     const blocked = sendBlocker();
     if (blocked) throw new Error(blocked);
-    const name = deckName();
-    await call("send", { ids, deck: name, tags: validateTags(tagList()), expectedDestination: state?.destination });
-    deckTouched = false;
+    const name = deckName(), sentTags = tags.value;
+    // The send uses these values, so they can't change underneath it.
+    deck.readOnly = true; tags.readOnly = true;
+    try { await call("send", { ids, deck: name, tags: validateTags(tagList()), expectedDestination: state?.destination }); }
+    finally { deck.readOnly = false; tags.readOnly = false; }
+    if (deckName() === name) deckTouched = false;
     const sent = ids.filter(id => state?.cards.find(c => c.id === id)?.status === "sent").length;
     // Tags typed for this send apply to this send only.
-    if (sent === ids.length) tagsTouched = false;
+    if (sent === ids.length && tags.value === sentTags) tagsTouched = false;
     void loadDecks();
     return sent === ids.length ? `Sent ${plural(sent, "card")} to ${name}.` : `Sent ${sent} of ${plural(ids.length, "card")}. Check the cards marked Send failed.`;
   }
@@ -225,10 +238,14 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
     const close = () => { dialogScope.abort(); handle?.dispose(); };
     button(ctx, actionsRow, dialogScope.signal, { label: "Cancel", variant: "ghost", onClick: close });
     button(ctx, actionsRow, dialogScope.signal, { label: "Add card", variant: "default", onClick: async () => {
+      if (busy) { err.show("Wait for the current action to finish, then add the card.", "error"); return; }
+      // Counted like other actions, so an older background read can't hide the new card.
+      busy = true; actions++; syncBar();
       try {
         await call("draft", { front: front.value, back: back.value, extra: extra.value, kind: kind.value });
         close(); render(); feedback.show("Card added for review.", "success");
       } catch (error) { err.show(message(error), "error"); }
+      finally { busy = false; if (alive()) syncBar(); if (refreshPending && alive()) void backgroundRefresh(); }
     } });
     handle = ctx.ui.openDialog({ title: "Write a card", content, onClose: close }, { signal: dialogScope.signal });
   }
@@ -324,7 +341,7 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
     };
     if (editable) {
       if (isEditing) {
-        button(ctx, left, s, { label: "Cancel", onClick: () => { edits.delete(card.id); editing.delete(card.id); render(); } });
+        button(ctx, left, s, { label: "Cancel", onClick: () => { edits.delete(card.id); editing.delete(card.id); feedback.show(""); render(); } });
         button(ctx, right, s, { label: "Save", variant: "default", onClick: () => run(async () => {
           // Typing during the save would be lost when the editor closes.
           for (const area of Object.values(inputs)) if (area) area.readOnly = true;
@@ -334,7 +351,7 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
           return card.status === "draft" ? "" : "Saved. Edited cards go back to draft, so approve it again.";
         }) });
       } else {
-        button(ctx, left, s, { label: "Edit", onClick: () => { editing.add(card.id); render(); article.ownerDocument.querySelector<HTMLTextAreaElement>(`[data-keep="card-${card.id}-front"]`)?.focus(); } });
+        button(ctx, left, s, { label: "Edit", onClick: () => { editing.add(card.id); feedback.show(""); render(); article.ownerDocument.querySelector<HTMLTextAreaElement>(`[data-keep="card-${card.id}-front"]`)?.focus(); } });
         button(ctx, left, s, { label: "Drop", onClick: () => run(async () => { await call("drop", { ids: [card.id] }); edits.delete(card.id); return "Card dropped."; }) });
         if (card.status === "draft") button(ctx, right, s, { label: "Approve", onClick: () => run(async () => { await call("approve", { ids: [card.id] }); }) });
         if (card.status === "approved" || card.status === "failed") button(ctx, right, s, { label: card.status === "failed" ? "Retry send" : "Send this card", onClick: () => run(() => send([card.id])) });
