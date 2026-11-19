@@ -8,7 +8,7 @@ import type { ButtonHandle } from "./ui.ts";
 interface DraftingSnapshot { generationSettings: GenerationSettings; generations: Generation[] }
 interface Preflight {
   preflightId: string; nodeCount: number; maximumCards: number; inputTokens: number; outputTokens: number;
-  estimatedCost: number | null; model: { provider: string; id: string };
+  estimatedCost: number | null; model: { provider: string; id: string; thinkingLevel?: string }; modelName?: string; followsCheapSlot?: boolean;
   batches: Array<{ nodeIds: string[] }>; skipped: Array<{ nodeId: string; reason: string }>;
 }
 interface SessionFlowNodes { session: { id: string; title: string; exists: boolean }; nodes: CoverageRow[]; missing?: CoverageRow[]; cardsPerNode: number; paired: boolean; pairingWarning?: boolean }
@@ -166,7 +166,7 @@ export function mountDrafting(ctx: PluginFrontendContext, ideasHost: HTMLElement
     const fact = (term: string, value: string) => { facts.append(el("dt", term), el("dd", value)); };
     fact("Ideas", String(p.nodeCount));
     fact("Cards", `Up to ${p.maximumCards}`);
-    fact("Model", p.model.id);
+    fact("Model", `${p.modelName ?? p.model.id}${p.model.thinkingLevel ? `, ${p.model.thinkingLevel} thinking` : ""}${p.followsCheapSlot ? " (LearnHarness cheap model)" : ""}`);
     fact("Model calls", `${p.batches.length}, or up to ${p.batches.length * 3} if answers need fixing`);
     fact("Cost", p.estimatedCost === null ? "No estimate for this model" : `About $${p.estimatedCost.toFixed(4)} for the first attempt`);
     fact("Sent to the model", "These ideas, linked ideas, an excerpt of the reply each idea came from, your flag notes and existing cards for these ideas");
@@ -193,7 +193,7 @@ export function mountDrafting(ctx: PluginFrontendContext, ideasHost: HTMLElement
   let writeButton: ButtonHandle | undefined;
   function syncWrite(): void {
     const count = picker.ids.length;
-    const blocked = picker.isStale || !count || !state?.generationSettings?.model || state.generations.some(g => g.status === "running");
+    const blocked = picker.isStale || !count || !state || state.generations.some(g => g.status === "running");
     writeButton?.update({ disabled: blocked, label: count ? `Write cards for ${plural(count, "idea")}` : "Write cards" });
   }
 
@@ -269,9 +269,19 @@ export function mountDrafting(ctx: PluginFrontendContext, ideasHost: HTMLElement
       renderActivity(); return;
     }
     const settings = state.generationSettings;
+    // Default follows the host's cheap slot, like core Flashcards; the picker is an override.
     const modelBox = el("div", undefined, "ab-model");
     const modelField = el("div", undefined, "ab-field ab-field-inline");
-    modelField.append(el("span", "Model to write cards", "ab-label"), modelBox);
+    const follow = el("label", undefined, "ab-chip");
+    const followBox = el("input"); followBox.type = "checkbox"; followBox.checked = !settings.model;
+    follow.append(followBox, document.createTextNode(" Use the LearnHarness cheap model"));
+    follow.title = "Uses the model and thinking level set for the cheap slot in LearnHarness settings.";
+    modelBox.hidden = !settings.model;
+    modelField.append(el("span", "Model to write cards", "ab-label"), follow, modelBox);
+    followBox.addEventListener("change", () => {
+      modelBox.hidden = followBox.checked;
+      if (followBox.checked && settings.model) { invalidate(); void run(async () => { await snapshot("generationSettings", { model: null }); }); }
+    }, { signal });
     widgets.push(ctx.ui.mountModelPicker(modelBox, { value: settings.model ?? undefined, onChange: value => {
       invalidate();
       return run(async () => { await snapshot("generationSettings", { model: value }); });
@@ -320,8 +330,7 @@ export function mountDrafting(ctx: PluginFrontendContext, ideasHost: HTMLElement
       await estimateAndStart(() => ctx.call<Preflight>("preflight", { nodeIds: ids, backfillNodeIds: backfill }));
     }, false) });
     widgets.push(writeButton);
-    if (!settings.model) writeBar.append(el("span", "Choose a model first. There is no automatic fallback.", "ab-muted"));
-    else writeBar.append(el("span", "The model only drafts. You check every card before anything reaches Anki.", "ab-muted"));
+    writeBar.append(el("span", "The model only drafts. You check every card before anything reaches Anki.", "ab-muted"));
     renderActivity();
   }
   const unsubscribe = ctx.onResync(() => { invalidate(); void run(async () => { await load(); await onCardsChanged(); }); });

@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import type { PluginBackendContext } from '../../sdk/index.d.ts';
+import type { PluginBackendContext, PluginModelSpec } from '../../sdk/index.d.ts';
 import type { PluginTaskSnapshot } from '../../sdk/src/core/plugin-workers.d.ts';
 import type { ModelCatalogEntry } from '../../sdk/src/core/contracts/models.d.ts';
 import { StateStore } from '../anki/state.ts';
@@ -39,6 +39,8 @@ interface Prepared {
   binding: string;
   settings: GenerationSettings;
   model: ModelCatalogEntry;
+  /** What is sent: the override, or the host's cheap slot with its thinking level. */
+  spec: PluginModelSpec;
   batches: Batch[];
   sources: SourceSnapshot[];
   skipped: { nodeId: string; reason: string }[];
@@ -140,11 +142,15 @@ export class GenerationService {
   private async prepare(ids: string[], backfillNodeIds: string[]): Promise<Prepared> {
     this.active();
     const settings = this.store.snapshot().generationSettings;
-    if (!settings.model) throw new Error('Choose a model explicitly before preflight.');
     const catalog = await this.ctx.inference.catalog();
     this.active();
-    const model = catalog.models.find(m => m.provider === settings.model!.provider && m.id === settings.model!.id);
-    if (!model || !catalog.providers.some(p => p.id === model.provider && p.keyPresent)) throw new Error('The selected model is unavailable. Choose an available model; no fallback is used.');
+    // Like core Flashcards: follow the host's cheap slot unless the learner overrides it.
+    const pin = settings.model ? { model: settings.model, thinkingLevel: undefined } : catalog.slots?.cheap;
+    if (!pin?.model) throw new Error('Set a cheap model in LearnHarness settings, or choose a model for Anki Bridge.');
+    const pinned = pin.model;
+    const model = catalog.models.find(m => m.provider === pinned.provider && m.id === pinned.id);
+    if (!model || !catalog.providers.some(p => p.id === model.provider && p.keyPresent)) throw new Error(settings.model ? 'The selected model is unavailable. Choose an available model; no fallback is used.' : 'The cheap model slot is unavailable. Fix it in LearnHarness settings or choose a model for Anki Bridge.');
+    const spec: PluginModelSpec = { provider: pinned.provider, id: pinned.id, ...(pin.thinkingLevel && model.supportedLevels?.includes(pin.thinkingLevel) ? { thinkingLevel: pin.thinkingLevel } : {}) };
     const graph = this.ctx.learning.graph();
     const state = this.store.snapshot(), coverage = graphCoverage(graph, state);
     const cards = state.cards.filter(c => c.status !== 'dropped');
@@ -187,7 +193,7 @@ export class GenerationService {
     // Bind exactly what would be sent and spent: prompts, limits, model entry and skips.
     const coverageBinding = { destination: state.destination, nodes: coverage.nodes.filter(n => ids.includes(n.id)),
       dismissals: state.dismissals.filter(d => ids.includes(d.nodeId)) };
-    return { binding: digest({ batches, skipped, settings, model, sources, coverageBinding, backfillNodeIds }), settings, model, batches, skipped, sources };
+    return { binding: digest({ batches, skipped, settings, model, spec, sources, coverageBinding, backfillNodeIds }), settings, model, spec, batches, skipped, sources };
   }
   private async preflight(ids: string[], backfillNodeIds: string[] = []): Promise<unknown> {
     ids = nodeIds(ids); backfillNodeIds = backfillIds(backfillNodeIds, ids);
@@ -199,7 +205,7 @@ export class GenerationService {
     const outputTokens = prepared.batches.reduce((n, b) => n + b.outputAllowance, 0);
     return { preflightId: id, nodeIds: ids, backfillNodeIds, nodeCount: ids.length, maximumCards: prepared.batches.reduce((n, b) => n + b.input.targets.length * prepared.settings.cardsPerNode, 0),
       inputTokens, outputTokens, estimatedCost: prepared.model.cost ? (inputTokens * prepared.model.cost.input + outputTokens * prepared.model.cost.output) / 1_000_000 : null,
-      model: prepared.settings.model, settings: prepared.settings, skipped: prepared.skipped,
+      model: prepared.spec, modelName: prepared.model.name, followsCheapSlot: !prepared.settings.model, settings: prepared.settings, skipped: prepared.skipped,
       batches: prepared.batches.map(b => ({ nodeIds: b.input.targets.map(t => t.nodeId), inputTokens: b.inputTokens, outputAllowance: b.outputAllowance })) };
   }
   async command(name: string, input: unknown = {}): Promise<unknown> {
@@ -238,7 +244,7 @@ export class GenerationService {
         if (fresh.binding !== p.prepared.binding) throw new Error('Preflight is stale. Review a new preflight before generating.');
         if (!fresh.batches.length) throw new Error('No targets fit this preflight. Review the skipped reasons.');
         const g: Generation = { id: p.id, createdAt: new Date().toISOString(), status: 'running', nodeIds: p.nodeIds, backfillNodeIds: p.backfillNodeIds,
-          settings: fresh.settings, skipped: fresh.skipped,
+          settings: fresh.settings, modelSpec: fresh.spec, skipped: fresh.skipped,
           tasks: fresh.batches.map(b => ({ requestId: randomUUID(), status: 'pending', input: b.input, outputAllowance: b.outputAllowance,
             sources: fresh.sources.filter(s => b.input.targets.some(t => t.nodeId === s.nodeId)) })) };
         try { await this.delivery.save(s => { s.generations.push(g); }); }
@@ -297,7 +303,7 @@ export class GenerationService {
         let w: PluginTaskSnapshot;
         try {
           w = this.ctx.workers.start(WORKER, { requestId: t.requestId, input: t.input, prompt: writerPrompt(t.input),
-            model: this.generation(id).settings.model!, purpose: 'user', maxTurns: 3, timeoutMs: 180_000,
+            model: this.generation(id).modelSpec ?? this.generation(id).settings.model!, purpose: 'user', maxTurns: 3, timeoutMs: 180_000,
             options: { maxTokens: t.outputAllowance } as Parameters<PluginBackendContext['workers']['start']>[1]['options'] });
         } catch (error) { await this.patch(id, t.requestId, { status: 'failed', error: errorText(error) }); return null; }
         await this.patch(id, t.requestId, { taskId: w.id, status: 'running' });

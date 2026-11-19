@@ -277,3 +277,13 @@ test("duplicateIndexes finds the same fact drafted by separate requests, not sam
   ];
   assert.deepEqual(duplicateIndexes(cards), [-1, 0, -1, 2, -1, -1, -1, 6]);
 });
+
+test("duplicateIndexes treats the same whole equation as one fact, however it is asked", () => {
+  const cards = [
+    { front: "Restoring SI units: relate a length \\(L_{\\rm SI}\\) to its natural-unit value.", back: "$$L_{\\rm SI} = \\hbar c\\,L_{\\rm NU}$$" },
+    { front: "Convert a length from natural units to SI.", back: "$$L_{\\rm SI} = \\hbar c\\, L_{\\rm NU}$$" },
+    { front: "In natural units, what is the dimension of time?", back: "\\([t] = [E]^{-1}\\)" },
+    { front: "In natural units, what is the dimension of length in terms of energy?", back: "\\([x] = [E]^{-1}\\)" },
+  ];
+  assert.deepEqual(duplicateIndexes(cards), [-1, 0, -1, -1]);
+});

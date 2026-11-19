@@ -19,12 +19,21 @@ async function withHost(run: (host: FakeHost, directory: string) => Promise<void
 }
 const statePath = (directory: string) => path.join(directory, 'state.json');
 
-test('preflight requires an explicit available model and starts no model work', () => withHost(async (host, directory) => {
+test('preflight follows the cheap slot unless overridden, needs an available model and starts no model work', () => withHost(async (host, directory) => {
   const c = host.context(directory); const close = await activate(c.ctx);
   try {
     const snap = await c.call('generationStatus');
     assert.deepEqual(snap.generationSettings, { cardsPerNode: 2, enabledKinds: ['recall', 'why', 'compose', 'discriminate'], model: null });
-    await assert.rejects(c.call('preflight', { nodeIds: ['n_a'] }), /Choose a model/);
+    await assert.rejects(c.call('preflight', { nodeIds: ['n_a'] }), /cheap model/);
+    // Default: the host's cheap slot with its thinking level, like core Flashcards.
+    (host.catalog.models[0] as { supportedLevels?: string[] }).supportedLevels = ['low', 'medium'];
+    host.catalog.slots.cheap = { model: { provider: 'scratch', id: 'writer' }, thinkingLevel: 'medium' };
+    const cheap = await c.call('preflight', { nodeIds: ['n_a'] });
+    assert.deepEqual(cheap.model, { provider: 'scratch', id: 'writer', thinkingLevel: 'medium' });
+    assert.equal(cheap.followsCheapSlot, true);
+    host.catalog.slots.cheap = { model: { provider: 'scratch', id: 'missing' } };
+    await assert.rejects(c.call('preflight', { nodeIds: ['n_a'] }), /cheap model slot is unavailable/);
+    host.catalog.slots.cheap = null;
     await assert.rejects(c.call('generationSettings', { cardsPerNode: 5 }), /1–4/);
     await assert.rejects(c.call('generationSettings', { enabledKinds: [] }), /1–4/);
     await c.call('generationSettings', { model: { provider: 'scratch', id: 'missing' } });

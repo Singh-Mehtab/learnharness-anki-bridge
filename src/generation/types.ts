@@ -33,6 +33,8 @@ export interface Generation {
   backfillNodeIds?: string[];
   status: 'running' | 'completed' | 'cancelled' | 'interrupted' | 'failed';
   settings: GenerationSettings;
+  /** Model and thinking level resolved at start (0.7.2). Absent on older batches, which used settings.model. */
+  modelSpec?: { provider: string; id: string; thinkingLevel?: string };
   tasks: GenerationTask[];
   skipped: { nodeId: string; reason: string }[];
   /** Dismissed from the page by the learner (0.7.0). */
@@ -77,6 +79,8 @@ export function validateGenerations(settings: unknown, generations: unknown): vo
     if (!object(g) || typeof g.id !== 'string' || !g.id || ids.has(g.id) || typeof g.createdAt !== 'string' || !strings(g.nodeIds) || !validGenerationSettings(g.settings) || !['running', 'completed', 'cancelled', 'interrupted', 'failed'].includes(String(g.status)) || !Array.isArray(g.tasks) || !Array.isArray(g.skipped) || g.skipped.some(s => !object(s) || typeof s.nodeId !== 'string' || typeof s.reason !== 'string')) throw new Error('Invalid generation batch.');
     if (g.backfillNodeIds !== undefined && (!strings(g.backfillNodeIds) || new Set(g.backfillNodeIds).size !== g.backfillNodeIds.length || g.backfillNodeIds.some(id => !(g.nodeIds as string[]).includes(id)))) throw new Error('Invalid generation backfill targets.');
     if (g.hidden !== undefined && typeof g.hidden !== 'boolean') throw new Error('Invalid generation visibility.');
+    if (g.modelSpec !== undefined && !(object(g.modelSpec) && typeof g.modelSpec.provider === 'string' && !!g.modelSpec.provider && typeof g.modelSpec.id === 'string' && !!g.modelSpec.id && (g.modelSpec.thinkingLevel === undefined || typeof g.modelSpec.thinkingLevel === 'string'))) throw new Error('Invalid generation model.');
+    if (g.modelSpec === undefined && g.status === 'running' && !g.settings.model) throw new Error('Invalid generation model.');
     ids.add(g.id);
     for (const t of g.tasks) {
       if (!object(t) || typeof t.requestId !== 'string' || !t.requestId || requests.has(t.requestId) || (t.taskId !== undefined && typeof t.taskId !== 'string') || !['pending', 'running', 'applied', 'failed', 'cancelled', 'interrupted'].includes(String(t.status)) || !validWriterInput(t.input) || !Array.isArray(t.sources) || !t.sources.every(validSource) || !Number.isSafeInteger(t.outputAllowance) || Number(t.outputAllowance) <= 0 || (t.error !== undefined && typeof t.error !== 'string') || (t.status === 'applied' && !object(t.result))) throw new Error('Invalid generation task.');

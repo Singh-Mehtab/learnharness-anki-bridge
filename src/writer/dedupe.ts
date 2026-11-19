@@ -11,6 +11,8 @@ const STOP = new Set(
   "what which when where does with from into that this than then they them their there these those have give gives given state write what's about roughly approximately usually value units unit".split(" "),
 );
 
+const normaliseFull = (text: string): string => text.replace(/\\(approx|simeq|sim|geq?|leq?|gtrsim|lesssim)|[≈~<>]/g, "").replace(/\s+/g, "");
+
 /** Answer text reduced to its core: maths markup, spacing, approximation
  *  signs and a trailing aside removed, and only the right-hand side of a short
  *  "x = value" kept, so "[\hbar] = eV s (energy x time)" matches "eV s". */
@@ -59,11 +61,13 @@ export function questionSymbols(front: string): string {
 
 /** For each card, the index of an earlier card it duplicates, or -1. */
 export function duplicateIndexes(cards: readonly { front: string; back: string }[]): number[] {
-  const keys = cards.map((c) => ({ answer: normaliseAnswer(c.back), question: words(c.front), symbols: questionSymbols(c.front) }));
+  const keys = cards.map((c) => ({ equation: /=/.test(normaliseFull(c.back)), answer: normaliseAnswer(c.back), question: words(c.front), symbols: questionSymbols(c.front) }));
   return keys.map((k, i) => {
     for (let j = 0; j < i; j++) {
       const other = keys[j];
       if (!k.answer || k.answer !== other.answer) continue;
+      // A whole equation is one fact however it is asked. Short answers ("eV^-1") are not.
+      if (k.equation && k.answer.length >= 10) return j;
       if (overlap(k.question, other.question) >= DUPLICATE_OVERLAP || (k.symbols && k.symbols === other.symbols)) return j;
     }
     return -1;

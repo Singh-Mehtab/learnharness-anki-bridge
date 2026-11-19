@@ -27,6 +27,7 @@ import {
   wordCount,
   writerInstructions,
   writerPrompt,
+  duplicateIndexes,
   type Batch,
   type CardKind,
   type WriterResult,
@@ -40,6 +41,8 @@ const { values } = parseArgs({
     nodes: { type: "string" },
     "timeout-min": { type: "string", default: "10" },
     model: { type: "string", default: "sonnet" },
+    effort: { type: "string", default: "medium" },
+    constants: { type: "boolean", default: false },
     cap: { type: "string", default: "2" },
     sets: { type: "string" },
     "trial-targets": { type: "string", default: "4" },
@@ -99,6 +102,7 @@ function callClaude(prompt: string, resume?: string): Promise<ClaudeReply> {
   const args = [
     "-p",
     "--model", values.model!,
+    "--effort", values.effort!,
     "--setting-sources", "",
     "--strict-mcp-config",
     "--tools", "",
@@ -194,7 +198,7 @@ for (const set of sets) {
       source: sourcePassage(byId.get(id)!, (chatId) => set.chats[chatId]),
       ...(set.flags?.[id] ? { flagged: true, flagNote: set.flags[id].note } : {}),
     }),
-    { maxCardsPerNode: cap, enabledKinds: kinds },
+    { maxCardsPerNode: cap, enabledKinds: kinds, constantValues: values.constants },
   );
   for (const s of skipped) {
     const n = byId.get(s.nodeId);
@@ -252,10 +256,17 @@ for (const { set, batch, result, record } of results) {
   }
 }
 
+// Same fact drafted by separate requests: keep the first in set order.
+const order = new Map(sets.flatMap((s) => s.targets.map((id, i) => [`${s.name}:${id}`, i] as const)));
+cards.sort((a, b) => a.set.localeCompare(b.set) || (order.get(`${a.set}:${a.nodeId}`) ?? 0) - (order.get(`${b.set}:${b.nodeId}`) ?? 0));
+const dup = duplicateIndexes(cards);
+const duplicates = cards.flatMap((c, i) => (dup[i] >= 0 ? [{ removed: c.front, kept: cards[dup[i]].front }] : []));
+cards.splice(0, cards.length, ...cards.filter((_, i) => dup[i] < 0));
+
 const run: BenchRun = {
   runId,
   mode,
-  model: values.model!,
+  model: `${values.model!} (effort ${values.effort})`,
   createdAt: new Date().toISOString(),
   maxCardsPerNode: cap,
   enabledKinds: kinds,
@@ -269,5 +280,6 @@ const run: BenchRun = {
 const dir = join("bench-output", runId);
 mkdirSync(dir, { recursive: true });
 writeFileSync(join(dir, "run.json"), `${JSON.stringify(run, null, 2)}\n`);
+if (duplicates.length) writeFileSync(join(dir, "duplicates-removed.json"), `${JSON.stringify(duplicates, null, 2)}\n`);
 const cost = run.batches.flatMap((b) => b.attempts).reduce((n, a) => n + (a.costUsd ?? 0), 0);
-console.log(`Saved ${cards.length} cards, ${skips.length} skips to ${dir}/run.json. ${calls} calls; API-equivalent cost $${cost.toFixed(2)} (subscription, not billed).`);
+console.log(`Removed ${duplicates.length} duplicates. Saved ${cards.length} cards, ${skips.length} skips to ${dir}/run.json. ${calls} calls; API-equivalent cost $${cost.toFixed(2)} (subscription, not billed).`);

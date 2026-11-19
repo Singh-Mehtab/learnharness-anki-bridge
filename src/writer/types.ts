@@ -94,6 +94,8 @@ export interface WriterInput {
   version: 1;
   maxCardsPerNode: number;
   enabledKinds: CardKind[];
+  /** Card numerical values of physical constants. Off unless the learner opts in. */
+  constantValues?: boolean;
   targets: WriterTarget[];
 }
 

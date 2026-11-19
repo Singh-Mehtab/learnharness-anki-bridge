@@ -69,7 +69,7 @@ function setup(options: { catalogUnavailable?: boolean; initialGraphFailure?: bo
   const has = (label: string | RegExp) => buttons().some(b => typeof label === "string" ? b.textContent === label : label.test(b.textContent ?? ""));
   const event = (type: string) => new window.Event(type) as unknown as Event;
   const box = () => ideas.querySelector("li input[type=checkbox]") as unknown as HTMLInputElement;
-  return { ideas, write, text, calls, state, graph, session, button, has, box, event, panel,
+  return { doc, ideas, write, text, calls, state, graph, session, button, has, box, event, panel,
     select: (on: boolean) => { const b = box(); b.checked = on; b.dispatchEvent(event("change")); },
     pickModel: (v: { provider: string; id: string }) => model!(v),
     dialog: () => doc.querySelector(".ab-dialog"),
@@ -89,15 +89,20 @@ function setup(options: { catalogUnavailable?: boolean; initialGraphFailure?: bo
     close: async () => { panel.dispose(); controller.abort(); await window.happyDOM.close(); } };
 }
 
-test("writing needs a selection and a model, confirms the estimate in a dialog, then starts once", async () => {
+test("writing needs a selection, defaults to the cheap model, confirms the estimate in a dialog, then starts once", async () => {
   const f = setup();
   try {
     await f.panel.setScope(undefined); await tick();
-    assert.match(f.text(), /Choose a model first/);
+    assert.match(f.text(), /Use the LearnHarness cheap model/);
+    const follow = f.doc.querySelector(".ab-model")!.previousElementSibling!.querySelector("input") as unknown as HTMLInputElement;
+    assert.equal(follow.checked, true, "follows the cheap slot by default");
+    assert.equal((f.doc.querySelector(".ab-model") as unknown as HTMLElement).hidden, true, "override picker hidden");
     assert.equal(f.button("Write cards").disabled, true);
     f.select(true); await tick();
     assert.match(f.text(), /1 idea selected, up to 2 cards/);
-    assert.equal(f.button("Write cards for 1 idea").disabled, true, "no model yet");
+    assert.equal(f.button("Write cards for 1 idea").disabled, false, "no explicit model needed");
+    follow.checked = false; follow.dispatchEvent(f.event("change")); await tick();
+    assert.equal((f.doc.querySelector(".ab-model") as unknown as HTMLElement).hidden, false, "override picker shown");
     await f.pickModel({ provider: "scratch", id: "writer" }); await tick();
     assert.deepEqual(f.calls.find(c => c.name === "generationSettings")!.input, { model: { provider: "scratch", id: "writer" } });
     f.button("Write cards for 1 idea").click(); await tick();
