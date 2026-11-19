@@ -135,10 +135,15 @@ function progress() {
   document.getElementById("progress").textContent = `${done} / ${total} scored`;
 }
 
-function setFocus(el) {
+// takeFocus false marks the card current without moving keyboard focus, so a
+// click into its note field keeps the caret there.
+function setFocus(el, takeFocus = true) {
   if (focusEl) focusEl.classList.remove("focus");
   focusEl = el;
-  if (el) { el.classList.add("focus"); el.focus({ preventScroll: true }); el.scrollIntoView({ block: "nearest", behavior: "smooth" }); }
+  if (el) {
+    el.classList.add("focus");
+    if (takeFocus) { el.focus({ preventScroll: true }); el.scrollIntoView({ block: "nearest", behavior: "smooth" }); }
+  }
 }
 
 function cardEl(entry, card, sourceText) {
@@ -177,7 +182,7 @@ function cardEl(entry, card, sourceText) {
   el.querySelectorAll("[data-f]").forEach((b) => b.addEventListener("change", () => { sc[b.dataset.f] = b.checked; save(entry); }));
   el.querySelector("input[type=text]").addEventListener("input", (ev) => { sc.note = ev.target.value; save(entry); });
   el.querySelector(".back").addEventListener("click", (ev) => ev.currentTarget.classList.remove("hidden"));
-  el.addEventListener("click", () => setFocus(el));
+  el.addEventListener("click", (ev) => setFocus(el, !ev.target.closest("input, textarea, label")));
   return el;
 }
 
@@ -227,7 +232,10 @@ function render() {
 }
 
 document.addEventListener("keydown", (ev) => {
-  if (ev.target.tagName === "INPUT" && ev.target.type === "text") return;
+  if (ev.target.closest?.("input[type=text], textarea")) {
+    if (ev.key === "Escape") { ev.target.blur(); setFocus(ev.target.closest(".card")); }
+    return;
+  }
   const cards = [...document.querySelectorAll(".card")];
   const i = cards.indexOf(focusEl);
   if (["1", "2", "3", "4"].includes(ev.key) && focusEl) {

@@ -27,6 +27,8 @@ test("writer guidance covers the observed factual, assumption and semantic-leak 
   const html = readFileSync(new URL("../bench/score.html", import.meta.url), "utf8");
   assert.ok(html.includes(`words(card.frontWords, ${LENGTH_TARGETS.front})`));
   assert.ok(html.includes(`words(card.backWords, ${LENGTH_TARGETS.back})`));
+  // A click in the note field must not move focus back to the card (typing was impossible).
+  assert.ok(html.includes(`setFocus(el, !ev.target.closest("input, textarea, label"))`));
 });
 
 test("runner caps concurrent CLI launches, including failed/budget-limited jobs, without real model calls", (t) => {
