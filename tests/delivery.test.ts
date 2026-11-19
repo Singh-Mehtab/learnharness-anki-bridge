@@ -20,7 +20,7 @@ async function fixture() {
   let failFront = '';
   let dropAfterAdd = false;
   let switchAfterAdd = false;
-  let addGate: Promise<void> | undefined;
+  let addGate: Promise<void> | undefined, deckGate: Promise<void> | undefined;
   let enterAdd!: () => void, finishAdd!: () => void;
   const addEntered = new Promise<void>(r => { enterAdd = r; });
   const addCompleted = new Promise<void>(r => { finishAdd = r; });
@@ -36,7 +36,7 @@ async function fixture() {
       let error: string | null = null;
       if (action === 'version') result = 6;
       else if (action === 'getActiveProfile') result = profile;
-      else if (action === 'deckNames') result = ['Default'];
+      else if (action === 'deckNames') { if (deckGate) await deckGate; result = ['Default']; }
       else if (action === 'modelNames') result = fields.length ? ['LearnHarness Basic'] : [];
       else if (action === 'modelFieldNames') result = fields;
       else if (action === 'modelStyling') result = { css };
@@ -83,7 +83,7 @@ async function fixture() {
   const close = async () => { await service.close(); server.closeAllConnections(); await new Promise<void>((resolve, reject) => server.close(e => e ? reject(e) : resolve())); await rm(directory, { recursive: true, force: true }); };
   return { directory, url, calls, notes, errors, snap, draft, pair, approve, send, reopen, close, addEntered, addCompleted, get service() { return service; }, get store() { return store; },
     setProfile: (v: string | null) => { profile = v; }, setFields: (v: string[]) => { fields = v; }, setCss: (v: string) => { css = v; },
-    failFront: (v: string) => { failFront = v; }, dropAfterAdd: () => { dropAfterAdd = true; }, switchAfterAdd: () => { switchAfterAdd = true; }, gate: (v: Promise<void>) => { addGate = v; } };
+    failFront: (v: string) => { failFront = v; }, dropAfterAdd: () => { dropAfterAdd = true; }, switchAfterAdd: () => { switchAfterAdd = true; }, gate: (v: Promise<void>) => { addGate = v; }, gateDecks: (v: Promise<void>) => { deckGate = v; } };
 }
 
 test('hand-written cards require explicit pairing and durable approval, then add one note at a time', async () => {
@@ -433,4 +433,18 @@ test('tags come from the send, or the saved template, and learnharness tags can 
     assert.equal(f.notes.length, 2);
     await assert.rejects(f.service.command('settings', { systemTags: 'yes' }), /Invalid system tags/);
   } finally { await f.close(); }
+});
+
+test('a slow connection check does not hold the writer fence, so approval still works', async () => {
+  const f = await fixture(); let release!: () => void;
+  try {
+    await f.pair(); const id = await f.draft();
+    f.gateDecks(new Promise<void>(r => { release = r; }));
+    const checking = f.service.command('connection');
+    while (!f.calls.some(c => c.action === 'deckNames')) await new Promise(r => setTimeout(r, 5));
+    await f.approve([id]);
+    assert.equal(f.snap().cards[0].status, 'approved');
+    release();
+    assert.deepEqual((await checking as { decks: string[] }).decks, ['Default']);
+  } finally { release?.(); await f.close(); }
 });

@@ -1,7 +1,7 @@
 // Settings page: connection, destination profile, tags and note type upkeep.
 // Card review lives on the main page; nothing here sends cards.
 import type { PluginFrontendContext } from "../sdk/index.d.ts";
-import { button, confirmDialog, el, field, input, plural, status } from "./ui.ts";
+import { button, confirmDialog, el, field, input, plural, RenderScope, status } from "./ui.ts";
 import type { ButtonHandle } from "./ui.ts";
 
 export interface Destination { url: string; profile: string }
@@ -35,7 +35,8 @@ export function mountSettings(ctx: PluginFrontendContext, container: HTMLElement
   const root = el("div", undefined, "anki-bridge ab-settings");
   container.append(root);
   let state: SettingsSnapshot | undefined;
-  let disposed = false, busy = false;
+  let disposed = false, busy = false, tagsQueued = false;
+  const keyScope = new RenderScope(signal);
   const alive = () => !disposed && !signal.aborted && !ctx.signal.aborted;
 
   // Connection
@@ -111,7 +112,12 @@ export function mountSettings(ctx: PluginFrontendContext, container: HTMLElement
     busy = true; syncButtons(); target.show(working);
     try { const done = await action(); if (alive()) target.show(done ?? "", "success"); }
     catch (error) { if (alive()) target.show(message(error), "error"); }
-    finally { busy = false; if (alive()) syncButtons(); }
+    finally {
+      busy = false;
+      if (alive()) syncButtons();
+      // A tag change made during another save is saved now, with the latest values.
+      if (tagsQueued && alive()) { tagsQueued = false; void saveTags(); }
+    }
   }
   async function apply(name: string, value?: unknown): Promise<void> {
     const next = await ctx.call<SettingsSnapshot>(name, value);
@@ -171,12 +177,15 @@ export function mountSettings(ctx: PluginFrontendContext, container: HTMLElement
     return "Styling and templates reset.";
   }) });
 
-  const saveTags = () => act(tagStatus, async () => {
+  const saveTags = (): Promise<void> => {
+    if (busy) { tagsQueued = true; return Promise.resolve(); }
+    return act(tagStatus, async () => {
     if (!state) return;
     if (template.value === state.settings.tagTemplate && systemTags.checked === state.settings.systemTags) return "";
     await apply("settings", { tagTemplate: template.value, systemTags: systemTags.checked });
     return "Tags saved.";
   }, "Saving…");
+  };
   template.onchange = () => { void saveTags(); };
   systemTags.onchange = () => { void saveTags(); };
 
@@ -184,19 +193,29 @@ export function mountSettings(ctx: PluginFrontendContext, container: HTMLElement
     const urlTouched = state !== undefined && endpoint(url.value) !== endpoint(state.settings.url);
     state = next;
     savedUrl = next.settings.url;
-    if (!urlTouched) { url.value = next.settings.url || "http://127.0.0.1:8765"; lastEndpoint = endpoint(url.value) ?? ""; }
+    if (!urlTouched) {
+      const before = endpoint(url.value);
+      url.value = next.settings.url || "http://127.0.0.1:8765";
+      // A typed key belongs to the address it was typed beside, so drop it if a refresh changes that address.
+      if (endpoint(url.value) !== before) key.value = "";
+      lastEndpoint = endpoint(url.value) ?? "";
+    }
     key.placeholder = next.settings.hasApiKey ? "Saved key. Type a new one to replace it." : "None";
+    const ks = keyScope.reset();
     keySaved.replaceChildren();
     removeKey = undefined;
     if (next.settings.hasApiKey) {
       keySaved.append(el("span", "An API key is saved for this address.", "ab-muted"));
-      removeKey = button(ctx, keySaved, signal, { label: "Remove saved key", onClick: () => act(connectionStatus, async () => {
+      removeKey = button(ctx, keySaved, ks, { label: "Remove saved key", onClick: () => act(connectionStatus, async () => {
         await apply("settings", { url: savedUrl, apiKey: "" });
         return "Saved key removed.";
       }) });
     }
-    if (document.activeElement !== template) template.value = next.settings.tagTemplate;
-    systemTags.checked = next.settings.systemTags;
+    // Leave unsaved tag edits alone; a queued save will send them.
+    if (!tagsQueued) {
+      if (document.activeElement !== template) template.value = next.settings.tagTemplate;
+      systemTags.checked = next.settings.systemTags;
+    }
     const d = next.destination;
     destinationText.replaceChildren();
     if (d) {
@@ -216,5 +235,5 @@ export function mountSettings(ctx: PluginFrontendContext, container: HTMLElement
   peers.add(refreshFromPeer);
   const unsubscribe = ctx.onResync(() => { void load(); });
   void load();
-  return () => { disposed = true; peers.delete(refreshFromPeer); unsubscribe(); root.remove(); };
+  return () => { disposed = true; peers.delete(refreshFromPeer); unsubscribe(); keyScope.dispose(); root.remove(); };
 }

@@ -113,7 +113,7 @@ test("writing needs a selection and a model, confirms the estimate in a dialog, 
     f.button("Cancel").click(); await tick();
     assert.deepEqual(f.calls.find(c => c.name === "cancelGeneration")!.input, { id: "p1" });
     assert.match(f.text(), /Cancelled\. Finished cards are kept/);
-    f.button("Retry the rest").click(); await tick();
+    f.button("Try again").click(); await tick();
     assert.deepEqual(f.calls.filter(c => c.name === "retryGeneration").map(c => c.input), [{ id: "p1" }]);
     assert.ok(f.dialog(), "retry confirms its own estimate");
     assert.equal(f.calls.filter(c => c.name === "generate").length, 1);
@@ -182,7 +182,7 @@ test("polling updates progress without rebuilding the model picker and refreshes
   } finally { await f.close(); }
 });
 
-test("finished batches can be dismissed, and only the latest one stays on the page", async () => {
+test("finished batches can be dismissed, and dismissing the latest one empties the panel", async () => {
   const f = setup();
   try {
     const done = (id: string, cards: number) => ({ id, status: "completed", nodeIds: ["n_a"], skipped: [], settings: {}, createdAt: "", tasks: [
@@ -192,7 +192,21 @@ test("finished batches can be dismissed, and only the latest one stays on the pa
     assert.match(f.text(), /Wrote 3 cards/); assert.doesNotMatch(f.text(), /Wrote 1 card\b/);
     f.button("Dismiss").click(); await tick();
     assert.deepEqual(f.calls.find(c => c.name === "dismissGeneration")!.input, { id: "new" });
-    assert.match(f.text(), /Wrote 1 card\b/, "the next undismissed batch shows");
+    assert.doesNotMatch(f.text(), /Wrote \d+ cards?\b/, "dismissing the latest result leaves the panel empty");
+  } finally { await f.close(); }
+});
+
+test("a running batch has the progress panel to itself", async () => {
+  const f = setup();
+  try {
+    f.state.generations.push(
+      { id: "old", status: "completed", nodeIds: ["n_a"], skipped: [], settings: {}, createdAt: "", tasks: [
+        { requestId: "r-old", status: "applied", input: {}, outputAllowance: 1, sources: [], result: { targets: [{ nodeId: "n_a", cards: [{}] }] } }] },
+      { id: "now", status: "running", nodeIds: ["n_b"], skipped: [], settings: {}, createdAt: "", tasks: [
+        { requestId: "r-now", status: "running", input: {}, outputAllowance: 1, sources: [] }] });
+    await f.panel.setScope(undefined); await tick();
+    assert.match(f.text(), /Writing cards for 1 idea/);
+    assert.doesNotMatch(f.text(), /Wrote 1 card\b/);
   } finally { await f.close(); }
 });
 

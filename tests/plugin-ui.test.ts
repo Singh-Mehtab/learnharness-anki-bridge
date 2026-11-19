@@ -54,6 +54,7 @@ async function setup(options: { handler?: (name: string, input: any) => unknown;
       if (name === "approve") state.cards.filter(c => input.ids.includes(c.id)).forEach(c => { c.status = "approved"; });
       if (name === "drop") state.cards.filter(c => input.ids.includes(c.id)).forEach(c => { c.status = "dropped"; });
       if (name === "draft") state.cards.push(card(`manual-${state.cards.length}`, { front: input.front, back: input.back, extra: input.extra, kind: input.kind, nodeName: "Hand-written card", sessionName: "Manual" }));
+      if (name === "send") state.settings.lastDeck = input.deck;
       if (name === "send") state.cards.filter(c => input.ids.includes(c.id)).forEach(c => { Object.assign(c, { status: "sent", noteId: 7, deck: input.deck, destination: paired() }); });
       return structuredClone(state);
     },
@@ -275,9 +276,15 @@ test("approve and send use named calls with deck, tags and destination; an empty
     assert.equal(f.review().querySelector(".ab-card")!.getAttribute("data-status"), "approved", "the approved card stays in place");
     f.type(f.deck(), "");
     assert.match(f.container.textContent!, /Type a deck name/);
+    assert.equal(f.tags().value, "", "no invented deck in the tags");
+    assert.match(f.container.textContent!, /Tags fill in from your template once you choose a deck\./);
     f.button("Send 1 card to Anki").click(); await tick();
     assert.match(f.status()!, /Choose a deck first\./);
-    assert.equal(f.calls.some(c => c.name === "send"), false);
+    assert.equal(f.deck().value, "", "the error does not refill the last deck");
+    await f.resync();
+    assert.equal(f.deck().value, "", "nor does a background refresh");
+    f.button("Send 1 card to Anki").click(); await tick();
+    assert.equal(f.calls.some(c => c.name === "send"), false, "a second click still sends nothing");
     f.type(f.deck(), "New::Deck");
     assert.match(f.container.textContent!, /Existing deck\./);
     f.type(f.deck(), "Brand new");
@@ -287,6 +294,9 @@ test("approve and send use named calls with deck, tags and destination; an empty
     assert.deepEqual(f.calls.find(c => c.name === "send")!.input, { ids: ["a"], deck: "Brand new", tags: ["YEAR_3::NPP", "extra"], expectedDestination: paired() });
     assert.match(f.status()!, /Sent 1 card to Brand new\./);
     assert.match(f.container.textContent!, /Sent cards \(1\)/);
+    assert.equal(f.deck().value, "Brand new", "the deck just used stays");
+    f.type(f.deck(), "Other deck");
+    assert.equal(f.tags().value, "Other_deck::Lecture_01", "tags typed for one send don't stick to the next");
   } finally { await f.dispose(); }
 });
 
@@ -376,4 +386,84 @@ test("late results after unmount are ignored", async () => {
   await f.dispose();
   release(); await tick();
   assert.doesNotMatch(container.textContent ?? "", /late failure/);
+});
+
+test("a background refresh keeps focus and the caret in the card being edited", async () => {
+  const state = fixture(); state.cards = [card("a"), card("b")];
+  const f = await setup({ state });
+  try {
+    f.button("Edit", f.review().querySelector(".ab-card")!).click(); await tick();
+    const area = () => f.review().querySelector('[data-keep="card-a-back"]') as unknown as HTMLTextAreaElement;
+    area().focus(); f.type(area(), "Answer with more"); area().setSelectionRange(3, 6);
+    state.cards.push(card("c"));
+    await f.resync();
+    assert.match(f.review().textContent!, /Idea c/, "the refresh rendered");
+    assert.equal(f.doc.activeElement, area(), "the same editor has focus");
+    assert.deepEqual([area().selectionStart, area().selectionEnd], [3, 6]);
+    assert.equal(area().value, "Answer with more");
+  } finally { await f.dispose(); }
+});
+
+test("the editor is read-only while a save is in flight, so late typing can't be lost", async () => {
+  const state = fixture(); state.cards = [card("a")];
+  let release!: () => void;
+  const held = new Promise<void>(r => { release = r; });
+  const f = await setup({ state, handler: async name => { if (name === "edit") await held; return undefined; } });
+  try {
+    f.button("Edit", f.review().querySelector(".ab-card")!).click(); await tick();
+    const front = f.review().querySelector('[data-keep="card-a-front"]') as unknown as HTMLTextAreaElement;
+    f.type(front, "New question");
+    f.button("Save").click(); await tick();
+    assert.equal(front.readOnly, true);
+    release(); await tick();
+    assert.deepEqual(f.calls.find(c => c.name === "edit")!.input, { id: "a", front: "New question", back: "Answer", extra: "" });
+  } finally { release(); await f.dispose(); }
+});
+
+test("a refresh that changes the saved address drops a key typed for the old one", async () => {
+  const f = await setup();
+  try {
+    const s = await f.mountSettings();
+    const key = s.host.querySelector('input[type="password"]') as unknown as HTMLInputElement;
+    f.type(key, "typed-for-8765");
+    f.state.settings.url = "http://127.0.0.1:9999/";
+    await f.resync();
+    assert.equal((s.host.querySelector('input[type="url"]') as unknown as HTMLInputElement).value, "http://127.0.0.1:9999/");
+    assert.equal(key.value, "", "the typed key is not carried to the new address");
+    s.close();
+  } finally { await f.dispose(); }
+});
+
+test("a tag change made while another tag save runs is saved afterwards, not dropped", async () => {
+  let release!: () => void;
+  const held = new Promise<void>(r => { release = r; });
+  let first = true;
+  const f = await setup({ handler: async (name, input) => { if (name === "settings" && input.tagTemplate !== undefined && first) { first = false; await held; } return undefined; } });
+  try {
+    const s = await f.mountSettings();
+    const inputs = s.host.querySelectorAll("input");
+    const template = Array.from(inputs as ArrayLike<HTMLInputElement>).find(i => i.placeholder?.startsWith("YEAR_3"))!;
+    const box = s.host.querySelector('input[type="checkbox"]') as unknown as HTMLInputElement;
+    f.type(template, "{deck}::Lecture_02", "change"); await tick();
+    box.checked = false; box.dispatchEvent(f.event("change")); await tick();
+    release(); await tick();
+    const saves = f.calls.filter(c => c.name === "settings").map(c => c.input);
+    assert.deepEqual(saves.at(-1), { tagTemplate: "{deck}::Lecture_02", systemTags: false });
+    assert.equal(box.checked, false, "the first save's answer doesn't undo the second change");
+    s.close();
+  } finally { release(); await f.dispose(); }
+});
+
+test("choosing a profile for the first time loads deck suggestions on the open page", async () => {
+  const state = fixture(); state.destination = null;
+  const f = await setup({ state });
+  try {
+    assert.equal(f.calls.some(c => c.name === "connection"), false, "no profile, no deck lookup");
+    const s = await f.mountSettings();
+    f.button("Use the open profile", s.host).click(); await tick();
+    f.button("Use this profile", f.dialog()!).click(); await tick(); await tick();
+    const options = Array.from(f.container.querySelectorAll("#anki-bridge-decks option") as unknown as ArrayLike<HTMLOptionElement>).map(o => o.value);
+    assert.deepEqual(options, ["Scratch", "New::Deck"]);
+    s.close();
+  } finally { await f.dispose(); }
 });

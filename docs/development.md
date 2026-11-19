@@ -66,4 +66,4 @@ The 0.2.0 tests used LearnHarness 0.6.1, Anki 26.08.1 and AnkiConnect builds 26.
 
 ## Keeping the README current
 
-Every version change, including patches, must update the README in the same PR. Keep the current version, completed work, test evidence, limitations and screenshots accurate. Mark unmerged or planned work explicitly. Repository instructions enforce this rule for coding agents.
+Every version change, including patches, updates the README in the same PR. The README is the product page. It covers what Anki Bridge does, how to use it with current screenshots, how to install it, its limitations and a short roadmap. Version history goes in `CHANGELOG.md`, and test evidence goes in the version's verification note in `docs/`. Mark unmerged or planned work explicitly.

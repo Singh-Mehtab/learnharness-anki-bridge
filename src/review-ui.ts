@@ -53,7 +53,7 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
   const edits = new Map<string, Fields>();
   const editing = new Set<string>();
   const alive = () => !disposed && !signal.aborted && !ctx.signal.aborted;
-  const scope = new RenderScope(signal), barScope = new RenderScope(signal);
+  const scope = new RenderScope(signal), barScope = new RenderScope(signal), bannerScope = new RenderScope(signal);
   let approveAll: ButtonHandle | undefined, sendAll: ButtonHandle | undefined;
 
   async function run(action: () => Promise<string | void>): Promise<void> {
@@ -77,7 +77,7 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
       throw error;
     }
   }
-  let reading: Promise<Snapshot | "busy"> | undefined;
+  let reading: Promise<Snapshot | "busy"> | undefined, queuedRead: Promise<Snapshot | "busy"> | undefined;
   async function fetchSnapshot(): Promise<Snapshot | "busy"> {
     for (;;) {
       const started = actions;
@@ -86,9 +86,11 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
       if (started === actions) return fresh;
     }
   }
+  /** Each caller gets a snapshot read that started after its request. */
   function readSnapshot(): Promise<Snapshot | "busy"> {
-    reading ??= fetchSnapshot().finally(() => { reading = undefined; });
-    return reading;
+    if (!reading) { reading = fetchSnapshot().finally(() => { reading = undefined; }); return reading; }
+    queuedRead ??= reading.catch(() => undefined).then(() => { queuedRead = undefined; return readSnapshot(); });
+    return queuedRead;
   }
   async function backgroundRefresh(): Promise<void> {
     if (!alive()) return;
@@ -97,18 +99,25 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
     try {
       const fresh = await readSnapshot();
       if (!alive() || fresh === "busy") return;
+      const before = destinationKey(state?.destination);
       state = fresh; render();
+      if (destinationKey(fresh.destination) !== before) void loadDecks();
     } catch (error) {
       refreshPending = true;
       if (alive()) feedback.show(`Couldn't refresh the cards: ${message(error)}`, "error");
     }
   }
-  function refreshFromPeer(): void { void backgroundRefresh(); void loadDecks(); }
+  function refreshFromPeer(): void { void backgroundRefresh(); }
+  const destinationKey = (d: Destination | null | undefined) => d ? `${d.url}\n${d.profile}` : "";
   async function loadDecks(): Promise<void> {
     if (!state?.destination) return;
-    try { connection = await ctx.call<Connection>("connection"); connectionError = ""; }
-    catch (error) { connection = undefined; connectionError = message(error); }
-    if (!alive()) return;
+    const asked = destinationKey(state.destination);
+    let next: Connection | undefined, error = "";
+    try { next = await ctx.call<Connection>("connection"); }
+    catch (e) { error = message(e); }
+    // Ignore answers for a profile that has since changed.
+    if (!alive() || destinationKey(state?.destination) !== asked) return;
+    connection = next; connectionError = error;
     decks.replaceChildren(...(connection?.decks ?? []).map(name => { const o = el("option"); o.value = name; return o; }));
     syncDeck(); renderBanner();
   }
@@ -126,11 +135,13 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
       const close = connection.decks.find(d => d.toLocaleLowerCase() === name.toLocaleLowerCase());
       deckHint.textContent = close ? `New deck. Did you mean ${close}?` : "New deck. Anki Bridge creates it when you send.";
     }
-    if (!tagsTouched && state) tags.value = expandTagTemplate(state.settings.tagTemplate, name || "Deck").join(" ");
+    // A template that uses {deck} waits for a deck name rather than inventing one.
+    const waitsForDeck = !name && !!state?.settings.tagTemplate.includes("{deck}");
+    if (!tagsTouched && state) tags.value = waitsForDeck ? "" : expandTagTemplate(state.settings.tagTemplate, name).join(" ");
     let tagProblem = "";
     try { validateTags(tagList()); } catch (error) { tagProblem = message(error); }
     const extra = state?.settings.systemTags ? " The learnharness tags are added too." : "";
-    tagHint.textContent = tagProblem || (tagList().length ? `Separate tags with spaces.${extra}` : `No tags yet. Set a default in settings.${extra}`);
+    tagHint.textContent = tagProblem || (tagList().length ? `Separate tags with spaces.${extra}` : waitsForDeck && !tagsTouched ? `Tags fill in from your template once you choose a deck.${extra}` : `No tags yet. Set a default in settings.${extra}`);
     tagHint.dataset.tone = tagProblem ? "error" : "";
     syncBar();
   }
@@ -157,6 +168,8 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
     await call("send", { ids, deck: name, tags: validateTags(tagList()), expectedDestination: state?.destination });
     deckTouched = false;
     const sent = ids.filter(id => state?.cards.find(c => c.id === id)?.status === "sent").length;
+    // Tags typed for this send apply to this send only.
+    if (sent === ids.length) tagsTouched = false;
     void loadDecks();
     return sent === ids.length ? `Sent ${plural(sent, "card")} to ${name}.` : `Sent ${sent} of ${plural(ids.length, "card")}. Check the cards marked Send failed.`;
   }
@@ -221,12 +234,13 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
   }
 
   function renderBanner(): void {
+    const bs = bannerScope.reset();
     banner.replaceChildren();
     if (!state) return;
     const note = (text: string, tone: "warn" | "bad" = "warn", action?: { label: string; run: () => void }) => {
       const box = el("div", undefined, "ab-banner"); box.dataset.tone = tone;
       box.append(el("span", text));
-      if (action) button(ctx, box, scope.signal, { label: action.label, size: "xs", onClick: action.run });
+      if (action) button(ctx, box, bs, { label: action.label, size: "xs", onClick: action.run });
       banner.append(box);
     };
     if (state.recoveryError) note(`An earlier send needs checking: ${state.recoveryError}`, "bad");
@@ -255,7 +269,8 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
     const notices: string[] = [];
     if (card.lastError) notices.push(card.lastError);
     if (card.sourceMissing) notices.push("The idea this card came from is no longer in the graph. Check the card before approving.");
-    else if (card.sourceChanged) notices.push("The idea has changed since this card was written. Check it against the source below.");
+    else if (card.sourceChanged) notices.push("The idea has changed since this card was written. Compare the card with the current idea in step 1.");
+    else if (card.sourceUnavailable) notices.push("Couldn't check whether the idea has changed. Refresh the cards to try again.");
     if (card.status === "sending") notices.push("Anki Bridge isn't sure this card reached Anki. Use Check unconfirmed sends in the menu.");
     for (const text of notices) article.append(el("p", text, card.lastError === text || card.status === "sending" ? "ab-card-error" : "ab-card-warning"));
 
@@ -296,7 +311,7 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
 
     if (card.sourceStatement) {
       const source = el("details", undefined, "ab-card-source");
-      source.append(el("summary", "Source idea"), el("p", card.sourceStatement));
+      source.append(el("summary", "Idea when this card was written"), el("p", card.sourceStatement));
       article.append(source);
     }
 
@@ -311,6 +326,8 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
       if (isEditing) {
         button(ctx, left, s, { label: "Cancel", onClick: () => { edits.delete(card.id); editing.delete(card.id); render(); } });
         button(ctx, right, s, { label: "Save", variant: "default", onClick: () => run(async () => {
+          // Typing during the save would be lost when the editor closes.
+          for (const area of Object.values(inputs)) if (area) area.readOnly = true;
           const now = edits.get(card.id) ?? card;
           if (!saved()) await call("edit", { id: card.id, front: now.front, back: now.back, extra: now.extra });
           edits.delete(card.id); editing.delete(card.id);
@@ -333,14 +350,27 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
 
   function render(): void {
     if (!alive()) return;
+    // Keep the caret in a card editor across background refreshes.
+    const active = host.ownerDocument.activeElement as HTMLTextAreaElement | null;
+    const keep = active?.tagName === "TEXTAREA" && list.contains(active) ? { key: active.dataset.keep, start: active.selectionStart, end: active.selectionEnd, dir: active.selectionDirection } : undefined;
     const s = scope.reset();
     list.replaceChildren();
+    try { draw(s); }
+    finally {
+      if (keep?.key) {
+        const area = [...list.querySelectorAll<HTMLTextAreaElement>("textarea[data-keep]")].find(a => a.dataset.keep === keep.key);
+        if (area) { area.focus(); area.setSelectionRange?.(keep.start, keep.end, keep.dir ?? undefined); }
+      }
+    }
+  }
+  function draw(s: AbortSignal): void {
     renderBanner();
     if (!state) {
       button(ctx, list, s, { label: "Try loading again", onClick: () => run(async () => { await call("snapshot"); }) });
       return;
     }
-    if (!deckTouched || !deck.value) deck.value = state.settings.lastDeck;
+    // Only fill the deck the learner hasn't touched. A cleared field stays clear.
+    if (!deckTouched) deck.value = state.settings.lastDeck;
     renderBar();
     syncDeck();
     const waiting = state.cards.filter(c => c.status !== "sent" && c.status !== "dropped");
@@ -378,6 +408,6 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
       await backgroundRefresh();
       if (alive() && !focus()) feedback.show("No cards for this idea are waiting for review.");
     },
-    dispose: () => { disposed = true; options.peers.delete(refreshFromPeer); unsubscribe(); scope.dispose(); barScope.dispose(); },
+    dispose: () => { disposed = true; options.peers.delete(refreshFromPeer); unsubscribe(); scope.dispose(); barScope.dispose(); bannerScope.dispose(); },
   };
 }

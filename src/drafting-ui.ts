@@ -110,6 +110,8 @@ export function mountDrafting(ctx: PluginFrontendContext, ideasHost: HTMLElement
     queue = queue.then(async () => {
       try {
         if (!alive() || !shouldRun()) return;
+        // An earlier error stops applying once the next action starts.
+        if (feedback.dataset.tone === "error") feedback.show("");
         await action();
         if (alive()) { if (rerender) render(); else renderActivity(); }
       } catch (error) { if (alive()) feedback.show(error instanceof Error ? error.message : String(error), "error"); }
@@ -173,7 +175,11 @@ export function mountDrafting(ctx: PluginFrontendContext, ideasHost: HTMLElement
       body.append(el("p", `${plural(p.skipped.length, "idea")} will be skipped:`, "ab-muted"), skipped);
     }
     body.append(el("p", "Cards are written in the background. You can leave this page; progress also shows under Background agents.", "ab-muted"));
-    if (!p.batches.length) throw new Error("None of these ideas can be carded right now. Check the skipped reasons.");
+    if (!p.batches.length) {
+      const reasons = p.skipped.slice(0, 3).map(skip => `${name(skip.nodeId)}: ${skip.reason}`);
+      if (p.skipped.length > 3) reasons.push(`and ${plural(p.skipped.length - 3, "more idea")}.`);
+      throw new Error(["None of these ideas can be carded right now.", ...reasons].join(" "));
+    }
     const ok = await confirmDialog(ctx, signal, { title: "Write cards", body, confirm: "Start writing" });
     if (!ok || !alive()) return;
     if (at !== revision || picker.isStale) throw new Error("The selection changed while the dialog was open. Press Write cards again.");
@@ -194,9 +200,10 @@ export function mountDrafting(ctx: PluginFrontendContext, ideasHost: HTMLElement
     activity.replaceChildren();
     syncWrite();
     if (!state) return;
-    // Only the running batch and the latest unfinished or undismissed one stay on the page.
-    const visible = [...state.generations].reverse().filter(g => !g.hidden);
-    const shown = [...visible.filter(g => g.status === "running"), ...visible.filter(g => g.status !== "running").slice(0, 1)];
+    // One panel: the running run, or else the latest run's result until it is dismissed.
+    const newest = [...state.generations].reverse();
+    const running = newest.filter(g => g.status === "running");
+    const shown = running.length ? running.slice(0, 1) : newest.slice(0, 1).filter(g => !g.hidden);
     for (const generation of shown) {
       const panel = el("div", undefined, "ab-progress");
       panel.dataset.status = generation.status;
@@ -230,7 +237,7 @@ export function mountDrafting(ctx: PluginFrontendContext, ideasHost: HTMLElement
         text.append(el("strong", summary), el("span", cards ? " Review them in step 3." : "", "ab-muted"));
         const errors = [...new Set(failed.map(t => readableError(t.error)).filter(Boolean))];
         if (errors.length) panel.append(el("p", errors.join(" "), "ab-progress-error"));
-        if (failed.length || cancelled.length) activityWidgets.push(button(ctx, actions, signal, { label: "Retry the rest", onClick: () => run(async () => {
+        if (failed.length || cancelled.length) activityWidgets.push(button(ctx, actions, signal, { label: applied.length ? "Retry the rest" : "Try again", onClick: () => run(async () => {
           await estimateAndStart(() => ctx.call<Preflight>("retryGeneration", { id: generation.id }));
         }, false) }));
         activityWidgets.push(button(ctx, actions, signal, { label: "Dismiss", onClick: () => run(async () => {
@@ -279,8 +286,14 @@ export function mountDrafting(ctx: PluginFrontendContext, ideasHost: HTMLElement
       box.title = KIND_HELP[kind]; chip.title = KIND_HELP[kind];
       box.onchange = () => {
         invalidate();
-        const next = kinds.filter(k => k === kind ? box.checked : enabled.includes(k));
-        void run(async () => { await snapshot("generationSettings", { enabledKinds: next }); });
+        const wanted = box.checked;
+        // Apply each toggle to the latest saved types, so quick toggles don't undo each other.
+        void run(async () => {
+          const current = (state?.generationSettings?.enabledKinds ?? enabled) as Kind[];
+          const next = kinds.filter(k => k === kind ? wanted : current.includes(k));
+          if (!next.length) return;
+          await snapshot("generationSettings", { enabledKinds: next });
+        });
       };
       chip.append(box, el("span", KIND_NAMES[kind]));
       chips.append(chip);

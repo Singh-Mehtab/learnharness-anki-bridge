@@ -156,6 +156,12 @@ export class DeliveryService {
   }
   async command(name: string, input: unknown = {}): Promise<unknown> {
     if (name === 'snapshot') return this.snapshot();
+    // A read-only Anki query; holding the writer fence here would block approvals while Anki is slow or closed.
+    if (name === 'connection') {
+      this.active();
+      try { return await this.client().connection(); }
+      catch (error) { throw new Error(this.message(error)); }
+    }
     return this.exclusive(async () => {
       this.active();
       const value = data(input);
@@ -181,8 +187,6 @@ export class DeliveryService {
           if (tagTemplate !== undefined) s.settings.tagTemplate = tagTemplate;
           if (keepSystemTags !== undefined) s.settings.systemTags = keepSystemTags;
         });
-      } else if (name === 'connection') {
-        return this.client().connection();
       } else if (name === 'pair') {
         if (value.confirmed !== true) throw new Error('Confirm the destination change before pairing.');
         const connection = await this.client().connection();

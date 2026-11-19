@@ -171,7 +171,9 @@ export function mountSources(ctx: PluginFrontendContext, container: HTMLElement,
   signal.addEventListener("abort", () => noteScope.abort(), { once: true });
 
   async function run(action: () => Promise<void>, quiet = false): Promise<void> {
-    if (!alive() || busy) return;
+    if (!alive()) return;
+    // A choice made while a load runs is loaded straight after it.
+    if (busy) { refreshPending = true; return; }
     busy = true; picker.disabled = true;
     try { await action(); if (alive()) { render(); if (!quiet) feedback.textContent = ""; } }
     catch (error) { if (alive()) { render(); feedback.textContent = error instanceof Error ? error.message : String(error); feedback.dataset.tone = "error"; } }
