@@ -15,7 +15,6 @@ const DOTS = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width=
 /** Short coverage labels for one idea. Tones only colour the text. */
 function rowPills(n: CoverageRow): HTMLElement[] {
   const c = n.coverage, out: HTMLElement[] = [];
-  if (n.flagged) out.push(pill("Flagged", "warn"));
   if (c?.generating) out.push(pill("Writing…", "info"));
   if (c?.dismissed) out.push(pill("Not carding", "neutral"));
   else if (c?.state === "source-changed") out.push(pill("Changed since carded", "warn"));
@@ -24,8 +23,9 @@ function rowPills(n: CoverageRow): HTMLElement[] {
   if (n.cards.sentElsewhere) out.push(pill(`${n.cards.sentElsewhere} in another profile`, "neutral"));
   if (c?.unresolved) out.push(pill(`${c.unresolved} unconfirmed`, "bad"));
   if (c?.deletedNotes) out.push(pill(`${c.deletedNotes} deleted in Anki`, "neutral"));
+  // Flagged says nothing about cards, so a flagged idea without any still shows No cards (#17).
   if (!out.length && !n.cards.sent && !n.cards.waiting && c?.state !== "source-missing") out.push(pill("No cards", "neutral"));
-  return out;
+  return n.flagged ? [pill("Flagged", "warn"), ...out] : out;
 }
 
 /** Selectable idea list. Selection belongs to the view, never to an asynchronous read. */

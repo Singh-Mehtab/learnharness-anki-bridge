@@ -193,3 +193,13 @@ test("current dismissal remains visible and restorable when the primary label is
     await f.menu("repaired", "Make cards for this idea again"); assert.deepEqual(f.mutations, [["restoreNode", "repaired", "a".repeat(64)]]);
   } finally { await f.close(); }
 });
+
+test("a flagged idea without cards says No cards next to Flagged (#17)", async () => {
+  const f = setup(true);
+  try {
+    f.picker.update({ ...f.view, nodes: [row("alpha", {}, { flagged: true }), row("beta", { state: "sent", base: "sent", uncarded: false }, { flagged: true, cards: { waiting: 0, sent: 1, sentElsewhere: 0 } })] });
+    const pills = (id: string) => Array.from(f.box(id).closest(".ab-idea")!.querySelectorAll(".ab-pill")).map(p => p.textContent);
+    assert.deepEqual(pills("alpha"), ["Flagged", "No cards"]);
+    assert.deepEqual(pills("beta"), ["Flagged", "1 in Anki"]);
+  } finally { await f.close(); }
+});

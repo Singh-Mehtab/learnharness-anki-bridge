@@ -298,7 +298,17 @@ test("approve and send use named calls with deck, tags and destination; an empty
     f.type(f.tags(), "YEAR_3::NPP extra");
     f.button("Send 1 card to Anki").click(); await tick();
     assert.deepEqual(f.calls.find(c => c.name === "send")!.input, { ids: ["a"], deck: "Brand new", tags: ["YEAR_3::NPP", "extra"], expectedDestination: paired() });
-    assert.match(f.status()!, /Sent 1 card to Brand new\./);
+    const sent = f.container.querySelector(".ab-sent") as unknown as HTMLElement;
+    assert.equal(sent.hidden, false, "a send shows the confirmation panel (#32)");
+    assert.equal(sent.getAttribute("role"), "status");
+    assert.match(sent.textContent!, /1 card sent to Anki/);
+    assert.match(sent.textContent!, /Deck Brand new/);
+    assert.match(sent.textContent!, /Tags YEAR_3::NPP extra/);
+    f.button("Show in Anki", sent).click(); await tick();
+    assert.deepEqual(f.calls.at(-1), { name: "show", input: { ids: ["a"] } });
+    assert.equal(sent.hidden, false, "showing the cards keeps the confirmation");
+    f.button("Dismiss", sent).click();
+    assert.equal(sent.hidden, true);
     assert.match(f.container.textContent!, /Sent cards \(1\)/);
     assert.equal(f.deck().value, "Brand new", "the deck just used stays");
     f.type(f.deck(), "Other deck");
@@ -319,7 +329,7 @@ test("approving all drafts and dropping all unsent cards need confirmation", asy
     await f.more("Drop all unsent cards (2)"); await tick();
     f.button("Drop cards", f.dialog()!).click(); await tick();
     assert.deepEqual(f.calls.find(c => c.name === "drop")!.input, { ids: ["a", "b"] });
-    assert.match(f.container.textContent!, /No cards to review/);
+    assert.match(f.container.textContent!, /Nothing left to review\./, "dropped cards leave only the sent one");
   } finally { await f.dispose(); }
 });
 
@@ -490,7 +500,7 @@ test("deck and tags are locked while a send runs", async () => {
     assert.equal(f.deck().readOnly, true); assert.equal(f.tags().readOnly, true);
     release(); await tick();
     assert.equal(f.deck().readOnly, false); assert.equal(f.tags().readOnly, false);
-    assert.match(f.status()!, /Sent 1 card to Scratch\./);
+    assert.match(f.container.querySelector(".ab-sent")!.textContent!, /1 card sent to Anki.*Deck Scratch/);
   } finally { release(); await f.dispose(); }
 });
 
@@ -597,5 +607,37 @@ test("loading again after a failed first load also loads deck suggestions", asyn
     f.button("Try loading again").click(); await tick(); await tick();
     const options = Array.from(f.container.querySelectorAll("#anki-bridge-decks option") as unknown as ArrayLike<HTMLOptionElement>).map(o => o.value);
     assert.deepEqual(options, ["Scratch", "New::Deck"]);
+  } finally { await f.dispose(); }
+});
+
+test("tags suggest the profile's Anki tags and take their casing from the collection (#31, #28)", async () => {
+  const state = fixture(); state.settings.lastDeck = "Year 3::NPP1";
+  const f = await setup({ state, connection: () => ({ profile: "Throwaway", decks: ["Year 3::NPP1"], tags: ["YEAR_3::NPP1::Lecture_01", "YEAR_3::QM3", "physics"] }) });
+  try {
+    const options = () => Array.from(f.container.querySelectorAll("#anki-bridge-tags option") as unknown as ArrayLike<HTMLOptionElement>).map(o => o.value);
+    assert.equal(f.tags().getAttribute("list"), "anki-bridge-tags");
+    assert.equal(f.tags().value, "YEAR_3::NPP1::Lecture_01", "the template's {deck} follows the collection's YEAR_3 casing");
+    assert.match(f.container.textContent!, /Your Anki tags are suggested as you type\./);
+    f.type(f.tags(), "YEAR_3::NPP1::Lecture_01 ph");
+    assert.deepEqual(options(), ["YEAR_3::NPP1::Lecture_01 physics"]);
+    f.type(f.tags(), "y");
+    assert.deepEqual(options(), ["YEAR_3::NPP1::Lecture_01", "YEAR_3::QM3"]);
+  } finally { await f.dispose(); }
+});
+
+test("an older deck lookup that finishes last can't replace a newer one's suggestions (#19)", async () => {
+  const answers: Array<(value: unknown) => void> = [];
+  const f = await setup({ connection: () => new Promise(resolve => answers.push(resolve)) });
+  try {
+    const options = () => Array.from(f.container.querySelectorAll("#anki-bridge-decks option") as unknown as ArrayLike<HTMLOptionElement>).map(o => o.value);
+    answers.shift()!({ profile: "Throwaway", decks: ["First"] }); await tick();
+    assert.deepEqual(options(), ["First"]);
+    await f.more("Refresh cards"); await tick();
+    await f.more("Refresh cards"); await tick();
+    assert.equal(answers.length, 2);
+    const [older, newer] = answers;
+    newer!({ profile: "Throwaway", decks: ["Newer"] }); await tick();
+    older!({ profile: "Throwaway", decks: ["Older"] }); await tick();
+    assert.deepEqual(options(), ["Newer"]);
   } finally { await f.dispose(); }
 });

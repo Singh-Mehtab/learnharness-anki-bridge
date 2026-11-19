@@ -1,6 +1,6 @@
 # Install Anki Bridge
 
-Anki Bridge 0.7.0 is a personal-use candidate, not a public release. You need the `anki-bridge-v0.7.0.zip` install archive, not GitHub's automatically generated source zip. The archive contains built plugin code. You don't need Node.js or npm to install it.
+Anki Bridge 0.7.1 is a personal-use candidate, not a public release. You need the `anki-bridge-v0.7.1.zip` install archive, not GitHub's automatically generated source zip. The archive contains built plugin code. You don't need Node.js or npm to install it.
 
 ## Requirements
 
@@ -24,7 +24,7 @@ LearnHarness community plugins run local code with your app's permissions. Only 
 
 If there is no `dist/` or you find `dist/data/`, stop before moving anything.
 
-To roll back to 0.6.1, 0.6.0 or 0.5.0, quit LearnHarness and put back only the old `dist/`. Keep the current `data/`. These versions use the same state format. Older versions ignore the 0.7.0 tag settings and the dismissed state of finished runs. Use the pre-upgrade data backup only if the current data is missing or damaged. If possible, keep a private copy of the current data first. Restoring the backup loses any newer drafts, settings and delivery records. It does not undo cards already sent to Anki.
+To roll back to 0.7.0, 0.6.1, 0.6.0 or 0.5.0, quit LearnHarness and put back only the old `dist/`. Keep the current `data/`. These versions use the same state format. Older versions ignore the 0.7.0 tag settings and the dismissed state of finished runs. Use the pre-upgrade data backup only if the current data is missing or damaged. If possible, keep a private copy of the current data first. Restoring the backup loses any newer drafts, settings and delivery records. It does not undo cards already sent to Anki.
 
 ## Connect and send a card
 
@@ -52,4 +52,4 @@ npm ci
 npm run package:plugin
 ```
 
-This rebuilds `dist/` and writes `anki-bridge-v0.7.0.zip` at the repo root. The archive contains only the manifest, bundled code, stylesheet and license notices. It excludes plugin data, credentials, bench results and agent files.
+This rebuilds `dist/` and writes `anki-bridge-v0.7.1.zip` at the repo root. The archive contains only the manifest, bundled code, stylesheet and license notices. It excludes plugin data, credentials, bench results and agent files.

@@ -20,6 +20,8 @@ interface SessionList { sessions: SessionSummary[]; unresolved: FlagView[] }
 export interface DraftRequest { sessionId: string; nodeIds: string[]; backfillNodeIds: string[] }
 
 export const FLAG_SHORTCUT = "mod+shift+a";
+/** How long the saved confirmation stays before the flag dialog closes. */
+export const FLAG_DIALOG_CLOSE_MS = 1500;
 
 function option(text: string, value: string): HTMLOptionElement { const o = el("option", text); o.value = value; return o; }
 
@@ -56,8 +58,8 @@ export class SessionRequests {
 
 function openFlagDialog(ctx: PluginFrontendContext, target: { sessionId: string; turn: TeacherTurn }, immediate?: FlagView): void {
   const scope = new AbortController();
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const done = () => { clearTimeout(timer); ctx.signal.removeEventListener("abort", done); scope.abort(); };
+  let timer: ReturnType<typeof setTimeout> | undefined, closing: ReturnType<typeof setTimeout> | undefined;
+  const done = () => { clearTimeout(timer); clearTimeout(closing); ctx.signal.removeEventListener("abort", done); scope.abort(); };
   ctx.signal.addEventListener("abort", done, { once: true });
   const root = el("div", undefined, "anki-bridge ab-dialog ab-flag");
   const heading = el("h3", !immediate ? "Flag for Anki" : immediate.created ? "Flagged for Anki" : "Already flagged for Anki", "ab-dialog-heading");
@@ -75,21 +77,27 @@ function openFlagDialog(ctx: PluginFrontendContext, target: { sessionId: string;
       setDisabled(true);
       try { await action(); }
       catch (error) { status.textContent = error instanceof Error ? error.message : String(error); status.dataset.tone = "error"; }
-      finally { setDisabled(false); }
+      finally { setDisabled(false); syncFinished(); }
     } });
     handles.push(handle);
     return handle;
   };
   let current = immediate;
   const describe = (view: FlagView) => flagStatusText(view);
-  const show = (view: FlagView) => {
-    current = view; note.value = view.note; heading.textContent = "Flagged for Anki"; status.textContent = describe(view); status.dataset.tone = "muted";
-    primary.update({ label: "Save note" }); close.update({ label: "Close" });
+  /** After a flag or note is saved, confirm it and close shortly after (#33). */
+  const finish = (view: FlagView, saved: string) => {
+    current = view; note.value = view.note; note.readOnly = true; heading.textContent = "Flagged for Anki";
+    status.textContent = `${saved} ${describe(view)}`; status.dataset.tone = "success";
+    finished = true; close.update({ label: "Close" });
+    clearTimeout(timer); closing = setTimeout(done, FLAG_DIALOG_CLOSE_MS);
   };
+  let finished = false;
   const submit = async () => {
-    const value = note.value.trim();
+    if (finished) return;
+    const value = note.value.trim(), noteChange = !!immediate && value !== (current?.note ?? "");
     // Omitting an empty note keeps any note already on this reply's flag.
-    show(await ctx.call<FlagView>("flag", { sessionId: target.sessionId, messageIds: target.turn.messageIds, ...(value || current ? { note: value } : {}) }));
+    const view = await ctx.call<FlagView>("flag", { sessionId: target.sessionId, messageIds: target.turn.messageIds, ...(value || current ? { note: value } : {}) });
+    finish(view, immediate ? (noteChange ? (value ? "Note saved." : "Note removed.") : "Saved.") : value ? "Flagged with your note." : "Flagged.");
   };
   let primaryAction: () => Promise<void> = submit;
   note.onkeydown = (event) => { if (event.key === "Enter") { event.preventDefault(); void primaryAction(); } };
@@ -97,7 +105,9 @@ function openFlagDialog(ctx: PluginFrontendContext, target: { sessionId: string;
   // Undo only a flag this shortcut press created; never an earlier flag and its note.
   if (immediate?.created) button("Undo flag", async () => { await ctx.call("unflag", { id: immediate.id }); done(); });
   const primary = button(immediate ? "Save note" : "Flag", submit, "default");
-  primaryAction = async () => { clearTimeout(timer); setDisabled(true); try { await submit(); } catch (error) { status.textContent = error instanceof Error ? error.message : String(error); status.dataset.tone = "error"; } finally { setDisabled(false); } };
+  primaryAction = async () => { clearTimeout(timer); setDisabled(true); try { await submit(); } catch (error) { status.textContent = error instanceof Error ? error.message : String(error); status.dataset.tone = "error"; } finally { setDisabled(false); syncFinished(); } };
+  /** Once saved, only Close stays live while the dialog closes itself. */
+  function syncFinished(): void { if (finished) for (const h of handles) if (h !== close) h.update({ disabled: true }); }
   root.append(heading, el("p", "Latest reply", "ab-label ab-quote-label"), reply, noteLabel, status, buttons);
   if (immediate) status.textContent = describe(immediate);
   // A keyboard flag confirms briefly and closes itself unless the learner engages.

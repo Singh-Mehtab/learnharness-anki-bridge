@@ -41,15 +41,28 @@ test("connection sends v6 POST requests with body key for an open profile", asyn
     req.on("end", () => {
       const request = JSON.parse(body);
       requests.push(request);
-      const result = { version: 6, getActiveProfile: "Scratch", deckNames: ["Default", "Test"] }[request.action as string];
+      const result = { version: 6, getActiveProfile: "Scratch", deckNames: ["Default", "Test"], getTags: ["YEAR_3::NPP1"] }[request.action as string];
       res.end(JSON.stringify({ result, error: null }));
     });
   });
   try {
     const client = new AnkiClient({ url: http.url, apiKey: "secret" });
-    assert.deepEqual(await client.connection(), { profile: "Scratch", decks: ["Default", "Test"] });
-    assert.deepEqual(requests, ["version", "getActiveProfile", "deckNames"].map((action) => ({ action, version: 6, key: "secret", params: {} })));
+    assert.deepEqual(await client.connection(), { profile: "Scratch", decks: ["Default", "Test"], tags: ["YEAR_3::NPP1"] });
+    assert.deepEqual(requests, ["version", "getActiveProfile", "deckNames", "getTags"].map((action) => ({ action, version: 6, key: "secret", params: {} })));
   } finally { await http.close(); }
+});
+
+test("a failed tag lookup still returns the profile and decks", async () => {
+  const http = await server((req, res) => {
+    let body = ""; req.on("data", chunk => { body += chunk; });
+    req.on("end", () => {
+      const { action } = JSON.parse(body) as { action: string };
+      if (action === "getTags") { res.end(JSON.stringify({ result: null, error: "unsupported action" })); return; }
+      res.end(JSON.stringify({ result: { version: 6, getActiveProfile: "Scratch", deckNames: ["Default"] }[action], error: null }));
+    });
+  });
+  try { assert.deepEqual(await new AnkiClient({ url: http.url }).connection(), { profile: "Scratch", decks: ["Default"], tags: [] }); }
+  finally { await http.close(); }
 });
 
 test("a cleared optional API key is omitted, not sent as an empty authentication attempt", async () => {
@@ -81,7 +94,7 @@ test("connection returns null profile without requesting decks from a closed col
   });
   try {
     const client = new AnkiClient({ url: http.url });
-    assert.deepEqual(await client.connection(), { profile: null, decks: [] });
+    assert.deepEqual(await client.connection(), { profile: null, decks: [], tags: [] });
     assert.deepEqual(actions, ["version", "getActiveProfile"]);
     await assert.rejects(client.call("deckNames"), kind("api"));
   } finally { await http.close(); }
