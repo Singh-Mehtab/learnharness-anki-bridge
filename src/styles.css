@@ -1,49 +1,182 @@
-.anki-bridge { max-width: 1080px; margin: 0 auto; padding: 1.25rem; color: var(--text-primary, inherit); font: inherit; }
-.anki-bridge h2 { font-size: 1.5rem; margin: 0 0 .5rem; }
-.anki-bridge h3 { font-size: 1.15rem; margin: 1.75rem 0 .6rem; }
-.anki-bridge h4 { font-size: 1rem; margin: 0 0 .6rem; }
-.anki-bridge h5 { font-size: .9rem; margin: 0 0 .5rem; }
-.anki-bridge fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
-.anki-bridge label { display: flex; flex-direction: column; gap: .3rem; margin: .65rem 0; }
-.anki-bridge input, .anki-bridge textarea, .anki-bridge select { font: inherit; color: inherit; background: var(--bg-secondary, transparent); border: 1px solid var(--border-color, #888); border-radius: .25rem; padding: .5rem; max-width: 100%; }
-.anki-bridge textarea { width: 100%; box-sizing: border-box; resize: vertical; line-height: 1.5; }
-.anki-bridge input[type=checkbox] { align-self: flex-start; }
-.anki-bridge button { font: inherit; cursor: pointer; padding: .45rem .7rem; margin: .25rem .4rem .25rem 0; }
-.anki-bridge button:disabled, .anki-bridge fieldset:disabled button { cursor: default; opacity: .55; }
-.anki-bridge :is(button, input, textarea, select, summary):focus-visible { outline: 2px solid var(--text-primary, #3970b5); outline-offset: 3px; }
-.anki-bridge article { border: 1px solid var(--border-color, #888); border-radius: .4rem; padding: 1rem; margin: 1rem 0; }
-.anki-bridge p { overflow-wrap: anywhere; max-width: 80ch; line-height: 1.5; }
-.anki-bridge [role=status] { min-height: 1.5em; white-space: pre-wrap; }
-.anki-bridge details { margin: 1rem 0; padding: .75rem 0; border-block: 1px solid var(--border-color, #888); }
-.anki-bridge summary { cursor: pointer; }
-.anki-bridge-review-columns { display: grid; grid-template-columns: minmax(180px, 1fr) minmax(280px, 2fr); gap: 1.5rem; }
-.anki-bridge-review-columns > :only-child { grid-column: 1 / -1; }
-.anki-bridge-review-columns aside { border-right: 1px solid var(--border-color, #888); padding-right: 1rem; }
-.anki-bridge-preview { padding: .8rem; background: var(--bg-secondary, transparent); border-left: 3px solid var(--border-color, #888); margin: .8rem 0; }
-.anki-bridge-preview > div { margin-block: .5rem; overflow-wrap: anywhere; }
-.anki-bridge pre { overflow-x: auto; white-space: pre; }
-.anki-bridge-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: .25rem; }
-.anki-bridge-node-list { max-height: 18rem; overflow-y: auto; padding-left: 1.25rem; }
-.anki-bridge-node-list li { padding: .5rem 0; }
-.anki-bridge-kind-toggles { display: flex; flex-wrap: wrap; gap: 1rem; }
-.anki-bridge-kind-toggles label { flex-direction: row; align-items: center; }
-.anki-bridge-batch { border-left: 2px solid var(--border-color, #888); margin: .8rem 0; padding-left: .8rem; }
-@media (max-width: 680px) {
-  .anki-bridge { padding: .75rem; }
-  .anki-bridge-review-columns { grid-template-columns: minmax(0, 1fr); gap: .75rem; }
-  .anki-bridge-review-columns aside { border-right: 0; border-bottom: 1px solid var(--border-color, #888); padding: 0 0 .75rem; }
+/* Anki Bridge. Scoped to .anki-bridge and built on the host theme variables,
+   following the core Flashcards plugin: 14px text, 1px borders, 6px inputs, 10px panels. */
+.anki-bridge {
+  --ab-border: var(--border, #8885);
+  --ab-muted: var(--muted-foreground, #888);
+  --ab-good: #4ade80; --ab-warn: #fbbf24; --ab-bad: var(--destructive, #f87171); --ab-info: #60a5fa;
+  color: var(--foreground, inherit); font-size: 14px; line-height: 1.5;
 }
-.anki-bridge-session { border-bottom: 1px solid var(--border-color, #888); padding-bottom: 1rem; margin-bottom: 1rem; }
-.anki-bridge-session ul { list-style: none; padding: 0; margin: .5rem 0; }
-.anki-bridge-session li { border: 1px solid var(--border-color, #888); border-radius: .4rem; padding: .5rem .75rem; margin: .4rem 0; }
-.anki-bridge .anki-bridge-node { flex-direction: row; align-items: flex-start; gap: .6rem; margin: 0; cursor: pointer; }
-.anki-bridge-node > span { display: flex; flex-direction: column; gap: .2rem; min-width: 0; }
-.anki-bridge-muted { opacity: .75; font-size: .92em; }
-.anki-bridge-badges { font-size: .85em; font-weight: 600; }
-.anki-bridge-carded { opacity: .6; }
-.anki-bridge-flag-waiting, .anki-bridge-flag-no-nodes, .anki-bridge-flag-missing { border-style: dashed !important; }
-.anki-bridge-flag { max-width: 34rem; }
-.anki-bridge-coverage { margin-block: .75rem; }
-.anki-bridge-coverage > input[type=search] { max-width: 32rem; }
-.anki-bridge-coverage .anki-bridge-nodes { list-style: none; padding: 0; max-height: 28rem; overflow-y: auto; }
-.anki-bridge-coverage .anki-bridge-nodes > li { border: 1px solid var(--border-color, #888); border-radius: .4rem; padding: .5rem .75rem; margin: .4rem 0; overflow-wrap: anywhere; }
+:root.light .anki-bridge { --ab-good: #15803d; --ab-warn: #b45309; --ab-info: #1d4ed8; }
+.anki-bridge *, .anki-bridge *::before, .anki-bridge *::after { box-sizing: border-box; }
+.anki-bridge [hidden] { display: none !important; }
+.anki-bridge p { margin: 0; }
+.anki-bridge fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
+.anki-bridge .ab-button { display: inline-flex; }
+.anki-bridge .ab-muted { color: var(--ab-muted); font-size: 12px; }
+.anki-bridge .ab-label { display: block; font-size: 12px; font-weight: 600; margin-bottom: 5px; }
+.anki-bridge .ab-field { display: block; min-width: 0; }
+.anki-bridge .ab-field > .ab-muted { display: block; margin-top: 5px; }
+.anki-bridge .ab-input { display: block; width: 100%; border: 1px solid var(--ab-border); border-radius: 6px; padding: 7px 10px; background: var(--background, transparent); color: inherit; font: inherit; }
+.anki-bridge .ab-input:focus-visible { outline: 2px solid var(--ring, #888); outline-offset: 1px; }
+.anki-bridge textarea.ab-input { resize: vertical; min-height: 4.5em; font-family: var(--font-mono, ui-monospace, monospace); font-size: 13px; }
+.anki-bridge .ab-select { width: auto; padding-right: 28px; }
+.anki-bridge .ab-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.anki-bridge .ab-inline { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.anki-bridge .ab-check { display: flex; align-items: center; gap: 8px; }
+.anki-bridge input[type="checkbox"] { accent-color: var(--primary, #888); width: 15px; height: 15px; margin: 0; flex: none; }
+.anki-bridge .ab-status { font-size: 12px; min-height: 0; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--ab-muted); }
+.anki-bridge .ab-status:empty { display: none; }
+.anki-bridge [data-tone="error"] { color: var(--ab-bad); }
+.anki-bridge .ab-status[data-tone="success"] { color: var(--foreground, inherit); }
+.anki-bridge .ab-note { font-size: 12px; color: var(--ab-muted); }
+.anki-bridge .ab-note:empty { display: none; }
+.anki-bridge .ab-warning { color: var(--ab-warn); }
+
+/* Pills: neutral by default, tinted by tone. */
+.anki-bridge .ab-pill { display: inline-flex; align-items: center; height: 20px; padding: 0 7px; border-radius: 999px; font-size: 11px; font-weight: 500; white-space: nowrap;
+  color: var(--ab-muted); background: var(--muted, #8882); }
+.anki-bridge .ab-pill[data-tone="good"] { color: var(--ab-good); background: color-mix(in srgb, var(--ab-good) 15%, transparent); }
+.anki-bridge .ab-pill[data-tone="warn"] { color: var(--ab-warn); background: color-mix(in srgb, var(--ab-warn) 15%, transparent); }
+.anki-bridge .ab-pill[data-tone="bad"] { color: var(--ab-bad); background: color-mix(in srgb, var(--ab-bad) 15%, transparent); }
+.anki-bridge .ab-pill[data-tone="info"] { color: var(--ab-info); background: color-mix(in srgb, var(--ab-info) 15%, transparent); }
+
+/* Page and steps */
+.anki-bridge.ab-page { max-width: 1100px; margin: 0 auto; padding: 16px 16px 64px; }
+.anki-bridge .ab-intro { color: var(--ab-muted); font-size: 13px; margin: 4px 0 24px; max-width: 70ch; }
+.anki-bridge .ab-step { margin-bottom: 36px; }
+.anki-bridge .ab-step-head { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
+.anki-bridge .ab-step-number { display: inline-grid; place-items: center; width: 24px; height: 24px; border-radius: 999px; flex: none;
+  border: 1px solid var(--ab-border); font-size: 12px; font-weight: 600; color: var(--ab-muted); }
+.anki-bridge .ab-step-title { font-size: 16px; font-weight: 600; margin: 0; }
+.anki-bridge .ab-step-aside { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+
+/* Step 1: source and idea list */
+.anki-bridge .ab-source { margin-bottom: 12px; display: grid; gap: 10px; }
+.anki-bridge .ab-source-bar { display: flex; align-items: flex-end; gap: 8px; flex-wrap: wrap; }
+.anki-bridge .ab-source-field { flex: 1 1 520px; max-width: 760px; min-width: 240px; }
+.anki-bridge .ab-source-select { width: 100%; }
+.anki-bridge .ab-source-notes { display: grid; gap: 8px; }
+.anki-bridge .ab-source-notes:empty { display: none; }
+.anki-bridge .ab-flags { border: 1px solid color-mix(in srgb, var(--ab-warn) 40%, var(--ab-border)); border-radius: 8px; padding: 10px 12px; }
+.anki-bridge .ab-flags-title { font-size: 13px; margin-bottom: 4px; }
+.anki-bridge .ab-flags ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.anki-bridge .ab-flag-item { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.anki-bridge .ab-flag-text { display: flex; flex-wrap: wrap; gap: 4px 10px; font-size: 13px; min-width: 0; }
+.anki-bridge .ab-elsewhere { display: flex; align-items: center; flex-wrap: wrap; gap: 2px 8px; }
+
+.anki-bridge .ab-ideas { border: 1px solid var(--ab-border); border-radius: 10px; overflow: hidden; }
+.anki-bridge .ab-ideas-toolbar { display: flex; gap: 8px; padding: 12px 12px 8px; }
+.anki-bridge .ab-search { flex: 1; min-width: 0; }
+.anki-bridge .ab-ideas-quick { display: flex; flex-wrap: wrap; gap: 4px; padding: 0 8px 8px; }
+.anki-bridge .ab-ideas > .ab-note { padding: 0 12px 8px; }
+.anki-bridge .ab-idea-list { list-style: none; margin: 0; padding: 0; max-height: 420px; overflow-y: auto; border-top: 1px solid var(--ab-border); }
+.anki-bridge .ab-idea { display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px; border-bottom: 1px solid color-mix(in srgb, var(--ab-border) 60%, transparent); }
+.anki-bridge .ab-idea:last-child { border-bottom: 0; }
+.anki-bridge .ab-idea:hover { background: color-mix(in srgb, var(--muted, #8882) 50%, transparent); }
+.anki-bridge .ab-idea[data-selected="true"] { background: color-mix(in srgb, var(--primary, #888) 9%, transparent); }
+.anki-bridge .ab-idea[data-inactive="true"] .ab-idea-body { opacity: .65; }
+.anki-bridge .ab-idea-main { display: flex; align-items: flex-start; gap: 10px; flex: 1; min-width: 0; cursor: pointer; }
+.anki-bridge .ab-idea-main input { margin-top: 3px; }
+.anki-bridge .ab-idea-body { display: grid; gap: 2px; min-width: 0; }
+.anki-bridge .ab-idea-name { font-weight: 600; }
+.anki-bridge .ab-idea-statement { color: var(--ab-muted); font-size: 13px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.anki-bridge .ab-idea-note { font-size: 12px; color: var(--ab-muted); font-style: italic; }
+.anki-bridge .ab-idea-side { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px; max-width: 45%; padding-top: 1px; }
+.anki-bridge .ab-icon-button { display: inline-grid; place-items: center; width: 28px; height: 28px; flex: none; border: 0; border-radius: 6px; background: transparent; color: var(--ab-muted); cursor: pointer; }
+.anki-bridge .ab-icon-button:hover { background: var(--accent, #8883); color: var(--foreground, inherit); }
+.anki-bridge .ab-icon-button:focus-visible { outline: 2px solid var(--ring, #888); }
+.anki-bridge .ab-icon-button:disabled { opacity: .4; cursor: default; }
+.anki-bridge .ab-empty { padding: 16px 12px; color: var(--ab-muted); font-size: 13px; }
+.anki-bridge .ab-ideas-history { border-top: 1px solid var(--ab-border); }
+.anki-bridge .ab-ideas-history > summary { cursor: pointer; padding: 8px 12px; font-size: 12px; color: var(--ab-muted); }
+.anki-bridge .ab-history-note { padding: 0 12px 8px; }
+.anki-bridge .ab-ideas-footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 12px; border-top: 1px solid var(--ab-border); background: color-mix(in srgb, var(--muted, #8882) 40%, transparent); }
+.anki-bridge .ab-ideas-summary { font-size: 13px; font-weight: 500; }
+.anki-bridge .ab-ideas-footer[data-empty="true"] .ab-ideas-summary { color: var(--ab-muted); font-weight: 400; }
+
+/* Step 2: write */
+.anki-bridge .ab-write-settings { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 16px 24px; }
+.anki-bridge .ab-model { min-height: 32px; display: flex; align-items: center; }
+.anki-bridge .ab-field-inline { display: flex; flex-direction: column; }
+.anki-bridge .ab-kinds legend { padding: 0; }
+.anki-bridge .ab-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.anki-bridge .ab-chip { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 10px; border: 1px solid var(--ab-border); border-radius: 6px; cursor: pointer; font-size: 13px; }
+.anki-bridge .ab-chip:has(input:checked) { border-color: color-mix(in srgb, var(--primary, #888) 60%, var(--ab-border)); background: color-mix(in srgb, var(--primary, #888) 9%, transparent); }
+.anki-bridge .ab-chip:has(input:disabled) { cursor: default; }
+.anki-bridge .ab-kind-help { display: flex; flex-wrap: wrap; gap: 2px 16px; margin: 10px 0 16px; }
+.anki-bridge .ab-kind-help strong { font-weight: 600; color: var(--foreground, inherit); }
+.anki-bridge .ab-write-bar { margin-bottom: 8px; }
+.anki-bridge .ab-activity { display: grid; gap: 10px; margin-top: 12px; }
+.anki-bridge .ab-activity:empty { display: none; }
+.anki-bridge .ab-progress { border: 1px solid var(--ab-border); border-radius: 8px; padding: 12px 14px; display: grid; gap: 8px; }
+.anki-bridge .ab-progress[data-status="failed"], .anki-bridge .ab-progress[data-status="interrupted"] { border-color: color-mix(in srgb, var(--ab-bad) 45%, var(--ab-border)); }
+.anki-bridge .ab-progress-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.anki-bridge .ab-progress-text { font-size: 13px; }
+.anki-bridge .ab-progress-text strong { font-weight: 600; }
+.anki-bridge .ab-progress-error { font-size: 12px; color: var(--ab-bad); overflow-wrap: anywhere; }
+.anki-bridge .ab-progress-skips summary { cursor: pointer; font-size: 12px; color: var(--ab-muted); }
+.anki-bridge .ab-progress-skips ul { margin: 6px 0 0; padding-left: 18px; font-size: 12px; color: var(--ab-muted); }
+.anki-bridge .ab-bar { height: 6px; border-radius: 3px; background: var(--muted, #8882); overflow: hidden; }
+.anki-bridge .ab-bar > span { display: block; height: 100%; background: var(--primary, #888); transition: width .3s ease; }
+
+/* Step 3: review and send */
+.anki-bridge .ab-banners { display: grid; gap: 8px; margin-bottom: 12px; }
+.anki-bridge .ab-banners:empty { display: none; }
+.anki-bridge .ab-banner { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 12px; border-radius: 8px; font-size: 13px;
+  border: 1px solid color-mix(in srgb, var(--ab-warn) 45%, var(--ab-border)); background: color-mix(in srgb, var(--ab-warn) 7%, transparent); }
+.anki-bridge .ab-banner[data-tone="bad"] { border-color: color-mix(in srgb, var(--ab-bad) 45%, var(--ab-border)); background: color-mix(in srgb, var(--ab-bad) 7%, transparent); }
+.anki-bridge .ab-send-bar { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: start; gap: 12px 16px; padding: 12px; border: 1px solid var(--ab-border); border-radius: 10px; margin-bottom: 8px; }
+.anki-bridge .ab-send-actions { grid-column: 1 / -1; justify-content: flex-end; }
+@media (max-width: 760px) { .anki-bridge .ab-send-bar { grid-template-columns: 1fr; } .anki-bridge .ab-send-actions { justify-content: flex-start; } }
+.anki-bridge .ab-send-bar + .ab-status { margin: 0 0 8px; }
+.anki-bridge .ab-cards { display: grid; gap: 12px; margin-top: 12px; }
+.anki-bridge .ab-card { border: 1px solid var(--ab-border); border-radius: 10px; background: var(--card, transparent); overflow: hidden; }
+.anki-bridge .ab-card:focus { outline: 2px solid var(--ring, #888); outline-offset: 2px; }
+.anki-bridge .ab-card[data-status="approved"] { border-color: color-mix(in srgb, var(--ab-good) 40%, var(--ab-border)); }
+.anki-bridge .ab-card[data-status="failed"], .anki-bridge .ab-card[data-status="sending"] { border-color: color-mix(in srgb, var(--ab-bad) 45%, var(--ab-border)); }
+.anki-bridge .ab-card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 14px; border-bottom: 1px solid var(--ab-border); }
+.anki-bridge .ab-card-title { display: flex; align-items: center; gap: 8px; min-width: 0; flex-wrap: wrap; }
+.anki-bridge .ab-card-idea { font-weight: 600; font-size: 13px; }
+.anki-bridge .ab-card-session { font-size: 12px; }
+.anki-bridge .ab-card-error, .anki-bridge .ab-card-warning { font-size: 12px; padding: 8px 14px 0; overflow-wrap: anywhere; }
+.anki-bridge .ab-card-error { color: var(--ab-bad); }
+.anki-bridge .ab-card-warning { color: var(--ab-warn); }
+.anki-bridge .ab-card-fields { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); }
+.anki-bridge .ab-card-field { padding: 12px 14px; min-width: 0; display: grid; gap: 8px; align-content: start; }
+.anki-bridge .ab-card-field + .ab-card-field { border-left: 1px solid var(--ab-border); }
+@media (max-width: 760px) { .anki-bridge .ab-card-fields { grid-auto-flow: row; } .anki-bridge .ab-card-field + .ab-card-field { border-left: 0; border-top: 1px solid var(--ab-border); } }
+.anki-bridge .ab-field-name { margin: 0; font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--ab-muted); }
+.anki-bridge .ab-markdown { overflow-wrap: anywhere; min-width: 0; }
+.anki-bridge .ab-markdown > :first-child, .anki-bridge .ab-markdown > * > :first-child { margin-top: 0; }
+.anki-bridge .ab-markdown > :last-child, .anki-bridge .ab-markdown > * > :last-child { margin-bottom: 0; }
+.anki-bridge .ab-markdown-preview { padding: 8px 10px; border-radius: 6px; background: color-mix(in srgb, var(--muted, #8882) 45%, transparent); }
+.anki-bridge .ab-card-length { padding: 0 14px 8px; }
+.anki-bridge .ab-card-length:empty { display: none; }
+.anki-bridge .ab-card-source { padding: 0 14px 10px; font-size: 12px; color: var(--ab-muted); }
+.anki-bridge .ab-card-source summary { cursor: pointer; }
+.anki-bridge .ab-card-source p { margin-top: 4px; }
+.anki-bridge .ab-card-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 10px; border-top: 1px solid var(--ab-border); }
+.anki-bridge .ab-empty-card { border: 1px dashed var(--ab-border); border-radius: 10px; padding: 20px; text-align: center; display: grid; gap: 4px; }
+.anki-bridge .ab-empty-title { font-weight: 600; }
+.anki-bridge .ab-history { margin-top: 16px; }
+.anki-bridge .ab-history > summary { cursor: pointer; font-size: 13px; color: var(--ab-muted); padding: 4px 0; }
+
+/* Dialogs */
+.anki-bridge.ab-dialog { display: grid; gap: 12px; min-width: 0; }
+.anki-bridge .ab-dialog-heading { font-size: 16px; font-weight: 600; margin: 0 0 4px; }
+.anki-bridge .ab-dialog-actions { justify-content: flex-end; margin-top: 4px; }
+.anki-bridge .ab-facts { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; margin: 0; font-size: 13px; }
+.anki-bridge .ab-facts dt { color: var(--ab-muted); }
+.anki-bridge .ab-facts dd { margin: 0; }
+.anki-bridge .ab-estimate { display: grid; gap: 10px; }
+.anki-bridge .ab-skipped { margin: 0; padding-left: 18px; font-size: 12px; color: var(--ab-muted); }
+.anki-bridge .ab-quote { margin: 0; padding: 8px 12px; border-left: 3px solid var(--ab-border); color: var(--ab-muted); font-size: 13px; max-height: 8.5em; overflow: hidden; }
+.anki-bridge .ab-quote-label { margin-bottom: -6px; }
+
+/* Settings */
+.anki-bridge.ab-settings { display: grid; gap: 16px; padding: 4px 0 12px; }
+.anki-bridge .ab-panel { border: 1px solid var(--ab-border); border-radius: 10px; padding: 16px; display: grid; gap: 14px; }
+.anki-bridge .ab-panel-quiet { background: color-mix(in srgb, var(--muted, #8882) 30%, transparent); }
+.anki-bridge .ab-panel-title { font-size: 14px; font-weight: 600; margin: 0; }
+.anki-bridge .ab-panel-intro { margin-top: -8px; }
+.anki-bridge .ab-destination { font-size: 13px; }

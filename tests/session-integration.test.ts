@@ -9,6 +9,7 @@ import { activate as frontend } from '../src/main.ts';
 import { StateStore } from '../src/anki/state.ts';
 import type { PluginFrontendContext, PluginView } from '../sdk/index.d.ts';
 import { FakeHost, settle, until } from './fake-host.ts';
+import { fakeUi } from './fake-ui.ts';
 
 async function setup() {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'anki-session-integration-'));
@@ -26,7 +27,7 @@ async function setup() {
   return { host, c, directory, closeBackend: close, close: async () => { await close(); await rm(directory, { recursive: true, force: true }); } };
 }
 
-test('session selection reaches drafting, clears estimates, and stays current with saved caps and completed drafts', async () => {
+test('a session scope reaches writing with flagged and bulk intent, saved caps, and completed drafts', async () => {
   const f = await setup(), window = new Window();
   Object.assign(globalThis, { document: window.document });
   let dispose: void | (() => void | Promise<void>) = undefined;
@@ -35,74 +36,64 @@ test('session selection reaches drafting, clears estimates, and stays current wi
     await f.c.call('flag', { sessionId: 'c1', messageIds: ['m2'], note: 'Check the closed-system condition' });
     let view!: PluginView;
     const calls: Array<{ name: string; input: any }> = [];
-    const widget = () => ({ update() {}, dispose() {} });
     const ctx = {
       signal: f.c.controller.signal, cleanup: (fn: () => void) => cleanup.push(fn),
       registerView: (v: PluginView) => { view = v; return () => {}; },
       registerSettings: () => () => {}, registerAction: () => () => {}, placeAction: () => () => {},
-      onResync: () => () => {}, onAppEvent: () => () => {},
+      onResync: () => () => {}, onAppEvent: () => () => {}, app: { openSettings: () => {} },
       call: async (name: string, input: any) => { calls.push({ name, input }); return f.c.call(name, input); },
-      ui: { mountKnowledgePicker: widget, mountModelPicker: widget, mountMarkdown: widget },
+      ui: fakeUi(),
     } as unknown as PluginFrontendContext;
     frontend(ctx);
     const container = window.document.createElement('div'); window.document.body.append(container);
     dispose = await view.mount(container as unknown as HTMLElement, f.c.controller.signal);
     await settle();
-    const button = (text: string) => {
-      const b = [...container.querySelectorAll('button')].find(b => b.textContent === text);
+    const buttons = () => [...window.document.querySelectorAll('button')];
+    const button = (text: string | RegExp) => {
+      const b = buttons().find(b => typeof text === 'string' ? b.textContent === text : text.test(b.textContent ?? ''));
       assert.ok(b, `button ${text}: ${container.textContent}`); return b;
     };
-    const picker = container.querySelector('select')!;
-    picker.value = 'c1'; picker.dispatchEvent(new window.Event('change')); await settle();
-    button('Draft cards for selected').click(); await settle();
-    assert.match(container.textContent!, /1 node selected/);
-    button('Estimate generation').click();
-    await until(() => [...container.querySelectorAll('button')].some(b => b.textContent === 'Confirm and generate'), 'first estimate');
+    const ideas = () => container.querySelector('.ab-ideas')!;
+    const dialog = () => window.document.querySelector('.ab-dialog');
+    await until(() => ideas().textContent!.includes('1 idea selected'), 'session scope preselects the flagged idea');
+    assert.equal((container.querySelector('.ab-source-select') as unknown as HTMLSelectElement).value, 'c1');
+    button(/^Write cards for 1 idea/).click();
+    await until(() => !!dialog(), 'first estimate dialog');
     assert.deepEqual(calls.filter(c => c.name === 'preflight').at(-1)?.input, { nodeIds: ['n_b'], backfillNodeIds: [] });
-    assert.ok(button('Confirm and generate'));
-    button('Select all uncarded: 2 ideas, up to 4 cards').click(); await settle();
-    button('Draft cards for selected').click(); await settle();
-    assert.match(container.textContent!, /2 nodes selected/);
-    assert.equal([...container.querySelectorAll('button')].some(b => b.textContent === 'Confirm and generate'), false);
-    button('Estimate generation').click();
-    await until(() => calls.filter(c => c.name === 'preflight').length === 2, 'second estimate');
+    button('Cancel').click(); await settle();
+    button('Select ideas without cards (2)').click(); await settle();
+    assert.match(ideas().textContent!, /2 ideas selected, up to 4 cards/);
+    button(/^Write cards for 2 ideas/).click();
+    await until(() => !!dialog(), 'second estimate dialog');
     assert.deepEqual(calls.filter(c => c.name === 'preflight').at(-1)?.input, { nodeIds: ['n_a', 'n_b'], backfillNodeIds: ['n_a', 'n_b'] });
+    button('Cancel').click(); await settle();
     assert.equal(calls.some(c => c.name === 'generate'), false);
     assert.equal(f.host.workers.starts.length, 0);
-    assert.doesNotMatch(container.textContent!, /connects to the 0\.3\.0/);
 
-    const cap = [...container.querySelectorAll('label')].find(l => l.textContent?.includes('Maximum cards per node'))!.querySelector('input')!;
-    cap.value = '4'; cap.dispatchEvent(new window.Event('input'));
-    button('Estimate generation').click();
-    await until(() => [...container.querySelectorAll('button')].some(b => b.textContent === 'Confirm and generate'), 'unsaved cap estimate with an active session');
-    assert.match(container.textContent!, /up to 8 cards in 1 batch, up to 3 model turns if validation retries/);
-    button('Save drafting defaults').click();
-    await until(() => ![...container.querySelectorAll('button')].some(b => b.textContent === 'Confirm and generate'), 'saved defaults invalidate the prior estimate');
-    await until(() => container.textContent!.includes('Select all uncarded: 2 ideas, up to 8 cards'), 'session cap refresh');
-    button('Estimate generation').click();
-    await until(() => [...container.querySelectorAll('button')].some(b => b.textContent === 'Confirm and generate'), 'new cap estimate');
-    button('Confirm and generate').click();
+    const cap = container.querySelector('.ab-write-settings select') as unknown as HTMLSelectElement;
+    cap.value = '4'; cap.dispatchEvent(new window.Event('change') as unknown as Event);
+    await until(() => ideas().textContent!.includes('up to 8 cards'), 'saved cap updates the selection summary');
+    assert.deepEqual(calls.filter(c => c.name === 'generationSettings').at(-1)?.input, { cardsPerNode: 4 });
+    button(/^Write cards for 2 ideas/).click();
+    await until(() => !!dialog(), 'new cap estimate');
+    assert.match(dialog()!.textContent!, /Up to 8/);
+    button('Start writing').click();
     await until(() => f.host.workers.starts.length === 1, 'generation start');
     f.host.workers.succeed('task-1', { targets: ['n_a', 'n_b'].map(nodeId => ({ nodeId, cards: [{ kind: 'recall',
       front: 'Which condition is required for the first result in this lecture to hold?', back: 'Assumption A.' }] })) });
     await until(async () => {
       await settle(); // Include the panel's normal polling interval, not a manual refresh.
-      return container.querySelectorAll('.anki-bridge-session .anki-bridge-carded').length === 2;
-    }, 'completed drafts update session counts');
-    assert.match(container.querySelector('.anki-bridge-session')!.textContent!, /Select all uncarded: 0 ideas, up to 0 cards/);
-    assert.equal(container.querySelectorAll('.anki-bridge-session .anki-bridge-badges').length, 2);
+      return container.querySelectorAll('.ab-card').length === 2;
+    }, 'completed drafts reach review');
+    await until(() => (ideas().textContent!.match(/1 to review/g) ?? []).length === 2, 'idea rows show waiting cards');
+    assert.match(container.textContent!, /Wrote 2 cards for 2 ideas/);
+    assert.equal(button('Select ideas without cards (0)').disabled, true);
 
-    // Extraction can add an idea after both panels have mounted.
+    // Extraction can add an idea after the page has mounted.
     f.host.nodes.push({ id: 'n_new', name: 'Newly extracted idea', statement: 'Fresh metadata after extraction.', provenance: [{ chatId: 'c1', messageId: 'm2' }] });
     button('Refresh').click();
-    await until(() => container.querySelector('.anki-bridge-session')!.textContent!.includes('Newly extracted idea'), 'extracted session node');
-    const preflights = calls.filter(c => c.name === 'preflight').length;
-    button('Draft cards for selected').click();
-    const drafting = () => [...container.querySelectorAll('h3')].find(h => h.textContent === 'Draft from graph nodes')!.parentElement!;
-    await until(() => drafting().textContent!.includes('Newly extracted idea'), 'fresh drafting metadata');
-    assert.match(drafting().textContent!, /Fresh metadata after extraction/);
-    assert.doesNotMatch(container.textContent!, /Node no longer exists/);
-    assert.equal(calls.filter(c => c.name === 'preflight').length, preflights);
+    await until(() => ideas().textContent!.includes('Newly extracted idea'), 'extracted session node');
+    assert.match(ideas().textContent!, /Fresh metadata after extraction/);
     assert.equal(f.host.workers.starts.length, 1); // Selection alone does not estimate or generate.
   } finally {
     f.c.controller.abort();

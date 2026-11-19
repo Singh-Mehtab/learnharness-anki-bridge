@@ -2,8 +2,9 @@ import type { PluginActionContext, PluginFrontendContext } from "../sdk/index.d.
 import { latestTeacherTurn, MAX_FLAG_NOTE } from "./session/flow.ts";
 import type { TeacherTurn } from "./session/flow.ts";
 
-import { CoveragePicker } from "./coverage-ui.ts";
 import type { CoverageRow } from "./coverage-ui.ts";
+import type { DraftingHandle } from "./drafting-ui.ts";
+import { button as hostButton, el, field, input, plural } from "./ui.ts";
 
 // Mirrors of the backend's public shapes (src/session/service.ts). The frontend
 // bundle must not import backend modules.
@@ -20,14 +21,7 @@ export interface DraftRequest { sessionId: string; nodeIds: string[]; backfillNo
 
 export const FLAG_SHORTCUT = "mod+shift+a";
 
-function el<K extends keyof HTMLElementTagNameMap>(tag: K, text?: string, className?: string): HTMLElementTagNameMap[K] {
-  const node = document.createElement(tag);
-  if (text !== undefined) node.textContent = text;
-  if (className) node.className = className;
-  return node;
-}
 function option(text: string, value: string): HTMLOptionElement { const o = el("option", text); o.value = value; return o; }
-const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
 export function flagStatusText(view: Pick<FlagView, "status" | "nodeIds">): string {
   switch (view.status) {
@@ -65,44 +59,46 @@ function openFlagDialog(ctx: PluginFrontendContext, target: { sessionId: string;
   let timer: ReturnType<typeof setTimeout> | undefined;
   const done = () => { clearTimeout(timer); ctx.signal.removeEventListener("abort", done); scope.abort(); };
   ctx.signal.addEventListener("abort", done, { once: true });
-  const root = el("div", undefined, "anki-bridge anki-bridge-flag");
-  const heading = el("h3", !immediate ? "Flag for Anki" : immediate.created ? "Flagged for Anki" : "Already flagged for Anki");
-  const reply = el("p", `Reply: ${target.turn.excerpt}`, "anki-bridge-muted");
-  const status = el("p"); status.setAttribute("role", "status"); status.setAttribute("aria-live", "polite");
-  const note = el("input"); note.type = "text"; note.maxLength = MAX_FLAG_NOTE; note.placeholder = "Optional: what to remember, e.g. I got the sign wrong";
+  const root = el("div", undefined, "anki-bridge ab-dialog ab-flag");
+  const heading = el("h3", !immediate ? "Flag for Anki" : immediate.created ? "Flagged for Anki" : "Already flagged for Anki", "ab-dialog-heading");
+  const reply = el("blockquote", target.turn.excerpt, "ab-quote");
+  const status = el("p", undefined, "ab-status"); status.setAttribute("role", "status"); status.setAttribute("aria-live", "polite");
+  const note = input(""); note.maxLength = MAX_FLAG_NOTE; note.placeholder = "For example: I got the sign wrong";
   note.value = immediate?.note ?? "";
-  const noteLabel = el("label"); noteLabel.append(el("span", "Note for the card writer"), note);
-  const buttons = el("div");
-  const button = (text: string, action: () => Promise<void> | void) => {
-    const b = el("button", text); b.type = "button";
-    b.onclick = async () => {
+  const noteLabel = field("Note for the card writer, optional", note);
+  const buttons = el("div", undefined, "ab-actions ab-dialog-actions");
+  const handles: Array<ReturnType<typeof hostButton>> = [];
+  const setDisabled = (disabled: boolean) => { for (const h of handles) h.update({ disabled }); };
+  const button = (label: string, action: () => Promise<void> | void, variant: "default" | "ghost" | "outline" = "outline") => {
+    const handle = hostButton(ctx, buttons, scope.signal, { label, variant, onClick: async () => {
       clearTimeout(timer);
-      for (const x of buttons.querySelectorAll("button")) x.disabled = true;
+      setDisabled(true);
       try { await action(); }
-      catch (error) { status.textContent = error instanceof Error ? error.message : String(error); }
-      finally { for (const x of buttons.querySelectorAll("button")) x.disabled = false; }
-    };
-    return b;
+      catch (error) { status.textContent = error instanceof Error ? error.message : String(error); status.dataset.tone = "error"; }
+      finally { setDisabled(false); }
+    } });
+    handles.push(handle);
+    return handle;
   };
   let current = immediate;
-  const describe = (view: FlagView) => `${flagStatusText(view)}${view.note ? `\nNote: ${view.note}` : ""}`;
+  const describe = (view: FlagView) => flagStatusText(view);
   const show = (view: FlagView) => {
-    current = view; note.value = view.note; heading.textContent = "Flagged for Anki"; status.textContent = describe(view);
-    primary.textContent = "Save note"; close.textContent = "Close";
+    current = view; note.value = view.note; heading.textContent = "Flagged for Anki"; status.textContent = describe(view); status.dataset.tone = "muted";
+    primary.update({ label: "Save note" }); close.update({ label: "Close" });
   };
   const submit = async () => {
     const value = note.value.trim();
     // Omitting an empty note keeps any note already on this reply's flag.
     show(await ctx.call<FlagView>("flag", { sessionId: target.sessionId, messageIds: target.turn.messageIds, ...(value || current ? { note: value } : {}) }));
   };
-  note.onkeydown = (event) => { if (event.key === "Enter") { event.preventDefault(); buttons.querySelector<HTMLButtonElement>("[data-primary]")?.click(); } };
-  const primary = button(immediate ? "Save note" : "Flag", submit); primary.dataset.primary = "";
-  buttons.append(primary);
+  let primaryAction: () => Promise<void> = submit;
+  note.onkeydown = (event) => { if (event.key === "Enter") { event.preventDefault(); void primaryAction(); } };
+  const close = button(immediate ? "Close" : "Cancel", done, "ghost");
   // Undo only a flag this shortcut press created; never an earlier flag and its note.
-  if (immediate?.created) buttons.append(button("Undo flag", async () => { await ctx.call("unflag", { id: immediate.id }); done(); }));
-  const close = button(immediate ? "Close" : "Cancel", done);
-  buttons.append(close);
-  root.append(heading, reply, noteLabel, buttons, status);
+  if (immediate?.created) button("Undo flag", async () => { await ctx.call("unflag", { id: immediate.id }); done(); });
+  const primary = button(immediate ? "Save note" : "Flag", submit, "default");
+  primaryAction = async () => { clearTimeout(timer); setDisabled(true); try { await submit(); } catch (error) { status.textContent = error instanceof Error ? error.message : String(error); status.dataset.tone = "error"; } finally { setDisabled(false); } };
+  root.append(heading, el("p", "Latest reply", "ab-label ab-quote-label"), reply, noteLabel, status, buttons);
   if (immediate) status.textContent = describe(immediate);
   // A keyboard flag confirms briefly and closes itself unless the learner engages.
   // Focus is host-owned on open, so only pointer and key input count as engagement.
@@ -140,148 +136,123 @@ export function registerSessionActions(ctx: PluginFrontendContext, requests: Ses
   ctx.cleanup(ctx.placeAction({ id: "make-cards-top-bar", actionId: "make-cards", location: "top-bar", sessions: ["teaching"] }));
 }
 
-export interface SessionPanelOptions {
+export interface SourceOptions {
   requests: SessionRequests;
-  onInvalidateEstimate?: () => void;
-  onCoverageChanged?: () => Promise<void>;
-  reviewWaiting?: (nodeId: string) => void;
-  /** Puts these nodes into the draft panel's selection. Without it the Draft button stays disabled. */
-  onDraft?: (request: DraftRequest) => void | Promise<void>;
+  drafting: Pick<DraftingHandle, "setScope" | "refresh">;
 }
-
-export interface SessionPanelHandle {
+export interface SourceHandle {
   (): void;
   refresh(): Promise<void>;
 }
 
-/** Session picker, flags with extraction status, and node selection for drafting. */
-export function mountSessionFlow(ctx: PluginFrontendContext, container: HTMLElement, signal: AbortSignal, options: SessionPanelOptions): SessionPanelHandle {
-  const root = el("section", undefined, "anki-bridge-session");
-  const feedback = el("p"); feedback.setAttribute("role", "status"); feedback.setAttribute("aria-live", "polite");
-  const controls = el("fieldset");
-  root.append(el("h3", "Cards from a session"), feedback, controls);
+const GRAPH = "";
+const shortDate = (iso: string) => { const d = new Date(iso); return Number.isNaN(d.getTime()) ? iso : d.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" }); };
+
+/** Step 1 header: where ideas come from, plus flags for that session. */
+export function mountSources(ctx: PluginFrontendContext, container: HTMLElement, signal: AbortSignal, options: SourceOptions): SourceHandle {
+  const root = el("div", undefined, "ab-source");
+  const picker = el("select", undefined, "ab-input ab-select ab-source-select");
+  picker.setAttribute("aria-label", "Ideas from");
+  const pickerField = el("label", undefined, "ab-field ab-field-inline ab-source-field");
+  pickerField.append(el("span", "Ideas from", "ab-label"), picker);
+  const bar = el("div", undefined, "ab-source-bar");
+  const refreshSlot = el("span");
+  bar.append(pickerField, refreshSlot);
+  const notes = el("div", undefined, "ab-source-notes");
+  const feedback = el("p", undefined, "ab-status"); feedback.setAttribute("role", "status"); feedback.setAttribute("aria-live", "polite");
+  root.append(bar, notes, feedback);
   container.append(root);
   let disposed = false, busy = false, refreshPending = false, refreshTimer: ReturnType<typeof setTimeout> | undefined;
   let list: SessionList | undefined, flow: SessionFlow | undefined;
-  let sessionId = options.requests.take();
-  const coverage = new CoveragePicker({
-    defaults: true,
-    reviewWaiting: options.reviewWaiting,
-    changed: source => {
-      if (source === "user" || coverage.isStale) options.onInvalidateEstimate?.();
-      // A session read can discover extraction or coverage changes before drafting does.
-      if (source === "read") void options.onCoverageChanged?.();
-      if (draft) draft.disabled = !options.onDraft || !coverage.ids.length || coverage.isStale;
-    },
-    mutate: (name, node) => { void run(async () => {
-      try { await ctx.call(name, { nodeId: node.id, statementHash: node.statementHash }); }
-      catch (error) { if (alive()) coverage.markStale(); throw error; }
-      try { await load(); }
-      catch (error) {
-        throw new Error(`${name === "dismissNode" ? "Dismissal" : "Restoration"} saved, but the session refresh failed: ${error instanceof Error ? error.message : String(error)}`);
-      }
-    }); },
-  });
-  let draft: HTMLButtonElement | undefined;
+  let sessionId: string | undefined = options.requests.take();
+  let chosen = sessionId !== undefined;
   const alive = () => !disposed && !signal.aborted && !ctx.signal.aborted;
+  let noteScope = new AbortController();
+  signal.addEventListener("abort", () => noteScope.abort(), { once: true });
 
   async function run(action: () => Promise<void>, quiet = false): Promise<void> {
-    if (!alive() || busy) return;
-    busy = true; controls.disabled = true;
-    if (!quiet) feedback.textContent = "Working...";
+    if (!alive()) return;
+    // A choice made while a load runs is loaded straight after it.
+    if (busy) { refreshPending = true; return; }
+    busy = true; picker.disabled = true;
     try { await action(); if (alive()) { render(); if (!quiet) feedback.textContent = ""; } }
-    catch (error) { if (alive()) { render(); feedback.textContent = error instanceof Error ? error.message : String(error); } }
+    catch (error) { if (alive()) { render(); feedback.textContent = error instanceof Error ? error.message : String(error); feedback.dataset.tone = "error"; } }
     finally {
       busy = false;
-      if (alive()) controls.disabled = false;
+      if (alive()) picker.disabled = false;
       if (refreshPending && alive()) { refreshPending = false; void run(load, true); }
     }
   }
-  function button(text: string, action: () => Promise<void> | void, disabled = false): HTMLButtonElement {
-    const b = el("button", text); b.type = "button"; b.disabled = disabled;
-    b.onclick = () => { void run(async () => { await action(); }); };
-    return b;
-  }
   async function load(): Promise<void> {
+    const nextList = await ctx.call<SessionList>("sessions");
+    if (!alive()) return;
+    list = nextList;
+    // First visit: the most recent session, or the whole graph when there are none.
+    if (!chosen) { chosen = true; sessionId = list.sessions[0]?.id; void options.drafting.setScope(sessionId ? { sessionId } : undefined); }
     const requested = sessionId;
-    let nextList: SessionList, nextFlow: SessionFlow | undefined;
-    try {
-      nextList = await ctx.call<SessionList>("sessions");
-      if (requested) nextFlow = await ctx.call<SessionFlow>("sessionFlow", { sessionId: requested });
-    } catch (error) { if (requested !== sessionId) return; coverage.markStale(); throw error; }
+    const nextFlow = requested ? await ctx.call<SessionFlow>("sessionFlow", { sessionId: requested }) : undefined;
     if (!alive() || requested !== sessionId) return;
-    feedback.textContent = "";
-    const switched = nextFlow?.session.id !== flow?.session.id;
-    list = nextList; flow = nextFlow;
-    if (!flow) return;
-    coverage.update({ ...flow, pairingWarning: flow.pairingWarning ?? false }, switched);
+    flow = nextFlow;
+  }
+  function choose(id: string | undefined, select?: { nodeIds: string[]; backfillNodeIds?: string[] }): void {
+    sessionId = id; chosen = true; flow = undefined;
+    void options.drafting.setScope(id ? { sessionId: id } : undefined, select);
+    void run(load);
   }
   function scheduleRefresh(): void {
     if (!alive() || refreshTimer) return;
-    refreshTimer = setTimeout(() => { refreshTimer = undefined; void run(load, true); }, 1000);
+    refreshTimer = setTimeout(() => { refreshTimer = undefined; void run(load, true).then(() => options.drafting.refresh()); }, 1000);
   }
-
-  function renderFlags(target: HTMLElement, flags: FlagView[], heading: string): void {
-    if (!flags.length) return;
-    target.append(el("h4", heading));
-    const items = el("ul", undefined, "anki-bridge-flags");
-    for (const flag of flags) {
-      const item = el("li", undefined, `anki-bridge-flag-${flag.status}`);
-      const when = new Date(flag.flaggedAt);
-      item.append(el("strong", `${flag.sessionTitle || "Untitled session"} · ${Number.isNaN(when.getTime()) ? flag.flaggedAt : when.toLocaleString()}`));
-      if (flag.note) item.append(el("p", `Note: ${flag.note}`));
-      item.append(el("p", flagStatusText(flag)));
-      item.append(button("Remove flag", async () => { await ctx.call("unflag", { id: flag.id }); await load(); }));
-      if (flag.sessionId !== sessionId) item.append(button("Open session", () => { options.onInvalidateEstimate?.(); sessionId = flag.sessionId; return load(); }));
-      items.append(item);
-    }
-    target.append(items);
-  }
+  hostButton(ctx, refreshSlot, signal, { label: "Refresh", onClick: () => run(async () => { await load(); await options.drafting.refresh(); }) });
+  picker.onchange = () => choose(picker.value || undefined);
 
   function render(): void {
-    if (flow?.session.id !== sessionId) { flow = undefined; }
-    controls.replaceChildren();
-    const picker = el("select");
-    picker.append(option("Choose a teaching session", ""));
+    noteScope.abort(); noteScope = new AbortController();
+    picker.replaceChildren();
     for (const s of list?.sessions ?? []) {
-      const flags = s.flagCount ? `, ${plural(s.flagCount, "flag")}${s.waitingCount ? ` (${s.waitingCount} unresolved)` : ""}` : "";
-      picker.append(option(`${s.title || "Untitled session"}: ${plural(s.nodeCount, "idea")}${flags}`, s.id));
+      const extra = s.waitingCount ? ` · ${s.waitingCount} flag${s.waitingCount === 1 ? "" : "s"} waiting` : s.flagCount ? ` · ${plural(s.flagCount, "flag")}` : "";
+      picker.append(option(`${s.title || "Untitled session"} · ${plural(s.nodeCount, "idea")}${extra}`, s.id));
     }
-    if (sessionId && !list?.sessions.some(s => s.id === sessionId)) picker.append(option(flow?.session.title || sessionId, sessionId));
-    picker.value = sessionId ?? "";
-    picker.onchange = () => { options.onInvalidateEstimate?.(); sessionId = picker.value || undefined; void run(load); };
-    const pickLabel = el("label"); pickLabel.append(el("span", "Session"), picker);
-    controls.append(pickLabel, button("Refresh", load));
+    if (sessionId && !list?.sessions.some(s => s.id === sessionId)) picker.append(option(flow?.session.title || "Session no longer saved", sessionId));
+    picker.append(option("All sessions (whole graph)", GRAPH));
+    picker.value = sessionId ?? GRAPH;
 
+    notes.replaceChildren();
+    if (flow && !flow.session.exists) notes.append(el("p", "This session is no longer saved. Its flags stay until you remove them.", "ab-note"));
+    if (flow?.flags.length) {
+      const box = el("div", undefined, "ab-flags");
+      box.append(el("p", flow.flags.length === 1 ? "You flagged a reply in this session. Its ideas are selected below." : `You flagged ${flow.flags.length} replies in this session. Their ideas are selected below.`, "ab-flags-title"));
+      const items = el("ul");
+      for (const flag of flow.flags) {
+        const item = el("li", undefined, "ab-flag-item");
+        const text = el("div", undefined, "ab-flag-text");
+        text.append(el("span", shortDate(flag.flaggedAt), "ab-muted"));
+        if (flag.note) text.append(el("span", `Note: ${flag.note}`));
+        if (flag.status !== "matched") text.append(el("span", flagStatusText(flag), "ab-muted"));
+        item.append(text);
+        const slot = el("span"); item.append(slot);
+        hostButton(ctx, slot, noteScope.signal, { label: "Remove flag", size: "xs", onClick: () => run(async () => {
+          await ctx.call("unflag", { id: flag.id }); await load(); await options.drafting.refresh();
+        }) });
+        items.append(item);
+      }
+      box.append(items);
+      notes.append(box);
+    }
+    if (flow && !flow.nodes.length && flow.flags.some(f => f.status === "waiting")) notes.append(el("p", "LearnHarness is still extracting ideas from this session. They appear here when the reply settles.", "ab-note"));
     const elsewhere = (list?.unresolved ?? []).filter(f => f.sessionId !== sessionId);
-    renderFlags(controls, elsewhere, `Unresolved flags in other sessions (${elsewhere.length})`);
-    if (!flow) {
-      controls.append(el("p", "Pick a session, or press Make cards in a teaching session's top bar."));
-      return;
+    if (elsewhere.length) {
+      const line = el("div", undefined, "ab-elsewhere");
+      line.append(el("span", "Flags waiting in other sessions:", "ab-muted"));
+      const bySession = new Map<string, { title: string; count: number }>();
+      for (const f of elsewhere) { const e = bySession.get(f.sessionId) ?? { title: f.sessionTitle || "Untitled session", count: 0 }; e.count++; bySession.set(f.sessionId, e); }
+      for (const [id, e] of bySession) hostButton(ctx, line, noteScope.signal, { label: `${e.title} (${e.count})`, variant: "link", size: "xs", onClick: () => choose(id) });
+      notes.append(line);
     }
-    if (!flow.session.exists) controls.append(el("p", "This session is no longer saved. Its flags are kept until you remove them."));
-    renderFlags(controls, flow.flags, `Flags in this session (${flow.flags.length})`);
-
-    const nodes = flow.nodes;
-    if (!nodes.length) {
-      controls.append(el("p", flow.flags.some(f => f.status === "waiting")
-        ? "No ideas extracted from this session yet. Extraction runs after each reply settles; press Refresh to check again."
-        : "No graph ideas come from this session."));
-      if (!flow.missing?.length) return;
-    }
-    controls.append(el("h4", `Ideas from this session (${nodes.length})`), coverage.root);
-    draft = button("Draft cards for selected", async () => {
-      if (!options.onDraft || !flow || coverage.isStale) return;
-      await options.onDraft({ sessionId: flow.session.id, nodeIds: coverage.ids, backfillNodeIds: coverage.backfillNodeIds });
-    }, !options.onDraft || !coverage.ids.length || coverage.isStale);
-    controls.append(draft);
   }
 
   const unsubscribers = [
-    options.requests.subscribe(id => {
-      options.requests.take(); options.onInvalidateEstimate?.(); sessionId = id;
-      if (busy) refreshPending = true; else void run(load);
-    }),
+    options.requests.subscribe(id => { options.requests.take(); if (busy) refreshPending = true; choose(id); }),
     ctx.onResync(() => { if (busy) refreshPending = true; else void run(load, true); }),
     // Extraction has no completion event. Phase changes are a hint to re-check
     // waiting flags; Refresh remains the reliable path.
@@ -290,8 +261,9 @@ export function mountSessionFlow(ctx: PluginFrontendContext, container: HTMLElem
       if (list?.unresolved.some(f => f.status === "waiting") || flow?.flags.some(f => f.status === "waiting")) scheduleRefresh();
     }),
   ];
+  if (sessionId) void options.drafting.setScope({ sessionId });
   void run(load);
-  return Object.assign(() => { disposed = true; clearTimeout(refreshTimer); for (const u of unsubscribers) u(); root.remove(); }, {
+  return Object.assign(() => { disposed = true; clearTimeout(refreshTimer); noteScope.abort(); for (const u of unsubscribers) u(); root.remove(); }, {
     refresh: async () => {
       if (busy) { refreshPending = true; return; }
       await run(load, true);

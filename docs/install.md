@@ -1,6 +1,6 @@
 # Install Anki Bridge
 
-Anki Bridge 0.6.1 is a personal-use candidate, not a public release. You need the `anki-bridge-v0.6.1.zip` install archive, not GitHub's automatically generated source zip. The archive contains built plugin code. You don't need Node.js or npm to install it.
+Anki Bridge 0.7.0 is a personal-use candidate, not a public release. You need the `anki-bridge-v0.7.0.zip` install archive, not GitHub's automatically generated source zip. The archive contains built plugin code. You don't need Node.js or npm to install it.
 
 ## Requirements
 
@@ -24,14 +24,14 @@ LearnHarness community plugins run local code with your app's permissions. Only 
 
 If there is no `dist/` or you find `dist/data/`, stop before moving anything.
 
-To roll back to 0.6.0 or 0.5.0, quit LearnHarness and put back only the old `dist/`. Keep the current `data/`. These versions use the same state format. Use the pre-upgrade data backup only if the current data is missing or damaged. If possible, keep a private copy of the current data first. Restoring the backup loses any newer drafts, settings and delivery records. It does not undo cards already sent to Anki.
+To roll back to 0.6.1, 0.6.0 or 0.5.0, quit LearnHarness and put back only the old `dist/`. Keep the current `data/`. These versions use the same state format. Older versions ignore the 0.7.0 tag settings and the dismissed state of finished runs. Use the pre-upgrade data backup only if the current data is missing or damaged. If possible, keep a private copy of the current data first. Restoring the backup loses any newer drafts, settings and delivery records. It does not undo cards already sent to Anki.
 
 ## Connect and send a card
 
 1. Open Anki Desktop in the intended profile. For a trial, use a throwaway profile and an isolated AnkiConnect endpoint. If switching from your normal profile, wait for any sends to finish first.
-2. In Anki Bridge, save the actual AnkiConnect URL and optional API key. The default is `http://127.0.0.1:8765`, but your AnkiConnect may use another port. Use loopback and a trusted local service. The key is stored in plain text in `anki-bridge/data/`. Never share that directory. A blank key input keeps the saved key only while the URL stays the same. Saving a different URL clears it, so enter the key again if the new endpoint needs one. The clear checkbox removes it.
-3. Test the connection and pair the reported profile. Pairing is specific to the URL and profile, not the deck. Do not switch profiles during a send. AnkiConnect cannot make a profile check and a write atomic.
-4. Select graph ideas, or use **Flag for Anki** in a teaching session and then **Make cards**. A flag covers all ideas LearnHarness extracts from the latest teaching reply, not a single sentence. Select a model, check the estimate and confirm only if you want it to generate. Review and approve the cards you want, then pick a deck and send. The bridge doesn't update or delete existing Anki notes or change their scheduling.
+2. In the Anki Bridge settings, save the actual AnkiConnect address and optional API key. The default is `http://127.0.0.1:8765`, but your AnkiConnect may use another port. Use loopback and a trusted local service. The key is stored in plain text in `anki-bridge/data/`. Never share that directory. A blank key input keeps the saved key only while the URL stays the same. Saving a different URL clears it, so enter the key again if the new endpoint needs one. Remove saved key removes it.
+3. Test the connection, then choose Use the open profile. Pairing is specific to the URL and profile, not the deck. Do not switch profiles during a send. AnkiConnect cannot make a profile check and a write atomic.
+4. Choose ideas from a session or the whole graph, or use **Flag for Anki** in a teaching session and then **Make cards**. A flag covers all ideas LearnHarness extracts from the latest teaching reply, not a single sentence. Select a model and press Write cards, check the estimate and press Start writing only if you want it to generate. Review and approve the cards you want, then pick a deck, check the tags and send. The bridge doesn't update or delete existing Anki notes or change their scheduling.
 
 ## Troubleshooting
 
@@ -40,7 +40,7 @@ To roll back to 0.6.0 or 0.5.0, quit LearnHarness and put back only the old `dis
 | Plugin doesn't show up | Confirm there is only one `anki-bridge` folder level above `dist/`, that `manifest.json` is inside `dist/`, and that you're on LearnHarness 0.6.1 or later. Restart the app and check Community plugins. |
 | Connection fails or the profile is wrong | Check that Anki Desktop and AnkiConnect are running on the configured port, check the key, then test again. Pair only when the reported profile is the one you intend. The bridge blocks sending and reconciliation on a mismatch. |
 | A reply is still waiting for extraction | Wait for LearnHarness to finish extraction, then use Refresh. Some replies produce no new ideas. |
-| Generation or sending was interrupted | Use Refresh generation to recover completed work or estimate a retry. If a send's result is uncertain, reconnect to the same paired destination and use reconciliation rather than manually resending it. |
+| Generation or sending was interrupted | Reopen the page; finished batches are applied and Retry the rest estimates the remaining ideas. If a send's result is uncertain, reconnect to the same paired destination and use Check unconfirmed sends in the More menu rather than resending it. |
 | A card looks wrong | Review it before approval. The preview supports maths and fenced code, but not images or Mermaid. The full card-quality benchmark is still open. |
 
 ## Build the zip from source
@@ -52,4 +52,4 @@ npm ci
 npm run package:plugin
 ```
 
-This rebuilds `dist/` and writes `anki-bridge-v0.6.1.zip` at the repo root. The archive contains only the manifest, bundled code, stylesheet and license notices. It excludes plugin data, credentials, bench results and agent files.
+This rebuilds `dist/` and writes `anki-bridge-v0.7.0.zip` at the repo root. The archive contains only the manifest, bundled code, stylesheet and license notices. It excludes plugin data, credentials, bench results and agent files.

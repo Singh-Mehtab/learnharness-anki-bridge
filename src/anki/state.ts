@@ -38,7 +38,8 @@ export interface State {
   generations: Generation[];
   flags: Flag[];
   dismissals: Dismissal[];
-  settings: { url: string; apiKey: string; lastDeck: string };
+  /** tagTemplate and systemTags arrived in 0.7.0; older files omit them. */
+  settings: { url: string; apiKey: string; lastDeck: string; tagTemplate?: string; systemTags?: boolean };
   destination: Destination | null;
   cards: Card[];
 }
@@ -64,7 +65,7 @@ export function validateState(value: unknown): asserts value is State {
   validateFlags(value.flags);
   validateDismissals(value.dismissals);
   const settings = value.settings;
-  if (!object(settings) || !['url', 'apiKey', 'lastDeck'].every(k => text(settings[k])) || !(value.destination === null || destination(value.destination)) || !Array.isArray(value.cards)) throw new Error('Invalid Anki Bridge state. The file has not been reset.');
+  if (!object(settings) || !['url', 'apiKey', 'lastDeck'].every(k => text(settings[k])) || settings.tagTemplate !== undefined && !text(settings.tagTemplate) || settings.systemTags !== undefined && typeof settings.systemTags !== 'boolean' || !(value.destination === null || destination(value.destination)) || !Array.isArray(value.cards)) throw new Error('Invalid Anki Bridge state. The file has not been reset.');
   const ids = new Set<string>();
   for (const card of value.cards) {
     if (!object(card) || !['id', 'nodeId', 'statementHash', 'sessionId', 'nodeName', 'sessionName', 'front', 'back', 'extra'].every(k => text(card[k])) || !/^[\da-f]{8}-(?:[\da-f]{4}-){3}[\da-f]{12}$/i.test(card.id as string) || ids.has(card.id as string) || !['recall', 'why', 'compose', 'discriminate'].includes(card.kind as string) || !['draft', 'approved', 'sending', 'sent', 'failed', 'dropped'].includes(card.status as string)) throw new Error('Invalid card state. The file has not been reset.');

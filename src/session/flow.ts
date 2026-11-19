@@ -89,10 +89,36 @@ export function latestTeacherTurn(messages: readonly MessageLike[]): TeacherTurn
       const m = messages[i], lines = teacherProse(m, failed);
       if (lines.length && text(m.id) && m.id) { ids.push(m.id); prose.push(...lines); }
     }
-    if (ids.length) return { messageIds: ids, excerpt: excerpt(prose.join('\n\n')) };
+    if (ids.length) return { messageIds: ids, excerpt: excerpt(plainText(prose.join('\n\n'))) };
     end = start - 1; // Skip this learner message and look at the previous turn.
   }
   return null;
+}
+
+/** Markdown reduced to readable text for a short preview: no heading marks,
+ * table rules, emphasis or code fences. Not a renderer; only for excerpts. */
+export function plainText(markdown: string): string {
+  return markdown
+    .replace(/```[^\n]*\n[\s\S]*?(```|$)/g, ' (code) ')
+    .split('\n')
+    .filter(line => !/^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/.test(line))
+    .map(line => {
+      // Headings and table rows end without punctuation; add a stop so they don't run into the next line.
+      const block = /^\s{0,3}#{1,6}\s+/.test(line) || /^\s*\|.*\|\s*$/.test(line);
+      const text = line
+        .replace(/^\s{0,3}#{1,6}\s+/, '')
+        .replace(/^\s*>\s?/, '')
+        .replace(/^\s*(?:[-*+]|\d+[.)])\s+/, '')
+        .replace(/^\s*\|(.*)\|\s*$/, '$1')
+        .replace(/\s*\|\s*/g, ', ')
+        .trim();
+      return block && text && !/[.!?:]$/.test(text) ? `${text}.` : text;
+    })
+    .join('\n')
+    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/(\*\*|__)(.+?)\1/g, '$2')
+    .replace(/(^|[^\w*])[*_]([^*_\n]+)[*_](?!\w)/g, '$1$2')
+    .replace(/`([^`]+)`/g, '$1');
 }
 
 export function excerpt(value: string, limit = 240): string {

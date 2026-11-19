@@ -20,7 +20,7 @@ async function fixture() {
   let failFront = '';
   let dropAfterAdd = false;
   let switchAfterAdd = false;
-  let addGate: Promise<void> | undefined;
+  let addGate: Promise<void> | undefined, deckGate: Promise<void> | undefined, versionGate: Promise<void> | undefined;
   let enterAdd!: () => void, finishAdd!: () => void;
   const addEntered = new Promise<void>(r => { enterAdd = r; });
   const addCompleted = new Promise<void>(r => { finishAdd = r; });
@@ -34,9 +34,9 @@ async function fixture() {
       calls.push({ action, params });
       let result: unknown = null;
       let error: string | null = null;
-      if (action === 'version') result = 6;
+      if (action === 'version') { if (versionGate) await versionGate; result = 6; }
       else if (action === 'getActiveProfile') result = profile;
-      else if (action === 'deckNames') result = ['Default'];
+      else if (action === 'deckNames') { if (deckGate) await deckGate; result = ['Default']; }
       else if (action === 'modelNames') result = fields.length ? ['LearnHarness Basic'] : [];
       else if (action === 'modelFieldNames') result = fields;
       else if (action === 'modelStyling') result = { css };
@@ -83,7 +83,7 @@ async function fixture() {
   const close = async () => { await service.close(); server.closeAllConnections(); await new Promise<void>((resolve, reject) => server.close(e => e ? reject(e) : resolve())); await rm(directory, { recursive: true, force: true }); };
   return { directory, url, calls, notes, errors, snap, draft, pair, approve, send, reopen, close, addEntered, addCompleted, get service() { return service; }, get store() { return store; },
     setProfile: (v: string | null) => { profile = v; }, setFields: (v: string[]) => { fields = v; }, setCss: (v: string) => { css = v; },
-    failFront: (v: string) => { failFront = v; }, dropAfterAdd: () => { dropAfterAdd = true; }, switchAfterAdd: () => { switchAfterAdd = true; }, gate: (v: Promise<void>) => { addGate = v; } };
+    failFront: (v: string) => { failFront = v; }, dropAfterAdd: () => { dropAfterAdd = true; }, switchAfterAdd: () => { switchAfterAdd = true; }, gate: (v: Promise<void>) => { addGate = v; }, gateDecks: (v: Promise<void>) => { deckGate = v; }, gateVersion: (v: Promise<void>) => { versionGate = v; } };
 }
 
 test('hand-written cards require explicit pairing and durable approval, then add one note at a time', async () => {
@@ -320,6 +320,20 @@ test('backend errors do not echo the saved API key into the frontend', async () 
   } finally { await f.close(); }
 });
 
+test('a connection check hides the key it used even if the saved key changes meanwhile', async () => {
+  const f = await fixture(); let release!: () => void;
+  try {
+    await f.service.command('settings', { apiKey: 'first-key-for-redaction' });
+    f.errors.set('version', 'Rejected first-key-for-redaction');
+    f.gateVersion(new Promise<void>(r => { release = r; }));
+    const checking = f.service.command('connection');
+    while (!f.calls.some(c => c.action === 'version')) await new Promise(r => setTimeout(r, 5));
+    await f.service.command('settings', { apiKey: 'second-key' });
+    release();
+    await assert.rejects(checking, error => error instanceof Error && error.message === 'Rejected [API key hidden]');
+  } finally { release?.(); await f.close(); }
+});
+
 test('disable during a send preserves uncertainty and restart reconciles a late accepted note', async () => {
   const f = await fixture(); let release!: () => void;
   try {
@@ -409,4 +423,42 @@ test('actual process death after addNote and before state write reconciles on re
     await f.reopen(); assert.equal(f.snap().cards[0].status, 'sent');
     await f.send([id]); assert.equal(f.notes.length, 1);
   } finally { await f.close(); }
+});
+
+test('tags come from the send, or the saved template, and learnharness tags can be turned off', async () => {
+  const f = await fixture();
+  try {
+    await f.pair();
+    await f.service.command('settings', { tagTemplate: '{deck}::Lecture_01 extra', systemTags: true });
+    assert.equal(f.snap().settings.tagTemplate, '{deck}::Lecture_01 extra');
+    assert.equal(f.snap().settings.url, f.url, 'tag settings leave the address alone');
+    const first = await f.draft('First?');
+    await f.approve([first]);
+    await f.send([first], 'Year 3::Nuclear Physics');
+    assert.deepEqual(f.notes[0].tags, ['Year_3::Nuclear_Physics::Lecture_01', 'extra', 'learnharness', 'learnharness::kind::recall']);
+    await f.service.command('settings', { systemTags: false });
+    const second = await f.draft('Second?');
+    await f.approve([second]);
+    await f.service.command('send', { ids: [second], deck: 'Scratch', tags: ['YEAR_3::NPP', 'YEAR_3::NPP'], expectedDestination: f.snap().destination });
+    assert.deepEqual(f.notes[1].tags, ['YEAR_3::NPP']);
+    const third = await f.draft('Third?');
+    await f.approve([third]);
+    await assert.rejects(f.service.command('send', { ids: [third], deck: 'Scratch', tags: ['has space'], expectedDestination: f.snap().destination }), /contains a space/);
+    assert.equal(f.notes.length, 2);
+    await assert.rejects(f.service.command('settings', { systemTags: 'yes' }), /Invalid system tags/);
+  } finally { await f.close(); }
+});
+
+test('a slow connection check does not hold the writer fence, so approval still works', async () => {
+  const f = await fixture(); let release!: () => void;
+  try {
+    await f.pair(); const id = await f.draft();
+    f.gateDecks(new Promise<void>(r => { release = r; }));
+    const checking = f.service.command('connection');
+    while (!f.calls.some(c => c.action === 'deckNames')) await new Promise(r => setTimeout(r, 5));
+    await f.approve([id]);
+    assert.equal(f.snap().cards[0].status, 'approved');
+    release();
+    assert.deepEqual((await checking as { decks: string[] }).decks, ['Default']);
+  } finally { release?.(); await f.close(); }
 });
