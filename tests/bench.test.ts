@@ -19,7 +19,7 @@ const scratch = (t: { after: (fn: () => void) => void }) => {
 // Source-based scoring of a fresh run is still needed for that.
 test("writer guidance covers the observed factual, assumption and semantic-leak failures", () => {
   const text = writerInstructions();
-  for (const rule of ["even by paraphrase", "necessary assumptions explicit", "not an exhaustive claim", "not required", "built-in types", "Never invent a diagnosis", "front, back AND extra", "cap is a maximum, not a quota", "Prefer one strong card"]) {
+  for (const rule of ["even by paraphrase", "necessary assumptions explicit", "not an exhaustive claim", "not required", "built-in types", "Never invent a diagnosis", "front, back AND extra", "cap is a maximum, not a quota", "One card per fact", "tests multiplication, not the prefix", "explicit request"]) {
     assert.ok(text.includes(rule), `missing guidance: ${rule}`);
   }
   assert.match(text, /Front: about 30 words/);
@@ -38,7 +38,7 @@ test("runner caps concurrent CLI launches, including failed/budget-limited jobs,
 const fs = require('node:fs');
 fs.appendFileSync(process.env.FAKE_CALL_LOG, 'call\\n');
 const input = process.env.FAKE_BAD ? {targets:[]} : JSON.parse(process.argv.at(-1).split('\\n\\n').at(-1));
-process.stdout.write(JSON.stringify({session_id:'fake',structured_output:{targets:process.env.FAKE_BAD ? [] : input.targets.map(t=>({nodeId:t.nodeId,cards:[{kind:'recall',front:'Which consequence follows here?',back:'Distinct result'}]}))}}));
+process.stdout.write(JSON.stringify({session_id:'fake',structured_output:{targets:process.env.FAKE_BAD ? [] : input.targets.map(t=>({nodeId:t.nodeId,cards:[{kind:'fact',front:'Which consequence follows here?',back:'Distinct result'}]}))}}));
 `, { mode: 0o755 });
   mkdirSync(join(dir, "bench/private"), { recursive: true });
   mkdirSync(join(dir, "bench/fixtures"));

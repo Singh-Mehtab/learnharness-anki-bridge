@@ -9,7 +9,7 @@
 
 import { renderMarkdown } from "../anki/render.ts";
 import type { DraftCard, WriterInput, WriterTarget } from "./types.ts";
-import { kindMisfit } from "./kinds.ts";
+import { capFor, kindMisfit } from "./kinds.ts";
 
 // Code blocks come first: dollars, backticks and LaTeX inside them are code.
 const FENCE = /^ {0,3}(`{3,}|~{3,})[^\n]*\n([\s\S]*?)^ {0,3}\1[ \t]*$/gm;
@@ -92,7 +92,7 @@ export function cardProblems(card: DraftCard, target: WriterTarget, input: Write
   if (givesAwayAnswer(card.front, card.back)) {
     problems.push(`${quote}: the front gives the answer away (every key term of the back is already on the front)`);
   }
-  if ((card.kind === "recall" || card.kind === "discriminate") && containsName(card.front, target.name)) {
+  if ((card.kind === "apply" || card.kind === "recall" || card.kind === "discriminate") && containsName(card.front, target.name)) {
     problems.push(`${quote}: a ${card.kind} front must not contain the idea's name "${target.name}"`);
   }
   for (const field of [card.front, card.back, card.extra ?? ""]) {
@@ -129,8 +129,9 @@ export function findProblems(result: unknown, input: WriterInput): string[] {
       continue;
     }
     const cards = row.cards as DraftCard[];
-    if (cards.length > input.maxCardsPerNode) {
-      problems.push(`Target ${nodeId}: ${cards.length} cards, but the cap is ${input.maxCardsPerNode}.`);
+    const cap = capFor(target, input.maxCardsPerNode);
+    if (cards.length > cap) {
+      problems.push(`Target ${nodeId}: ${cards.length} cards, but the cap is ${cap}.`);
     }
     if (!cards.length && (typeof row.skipReason !== "string" || !row.skipReason.trim())) {
       problems.push(`Target ${nodeId}: no cards, so give a skipReason.`);

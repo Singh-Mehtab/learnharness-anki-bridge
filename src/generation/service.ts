@@ -5,7 +5,7 @@ import type { ModelCatalogEntry } from '../../sdk/src/core/contracts/models.d.ts
 import { StateStore } from '../anki/state.ts';
 import { DeliveryService } from '../anki/delivery.ts';
 import { renderMarkdown } from '../anki/render.ts';
-import { pack, sourcePassage, estimateTokens, outputAllowance } from '../writer/input.ts';
+import { pack, sourcePassage, estimateTokens, targetsAllowance } from '../writer/input.ts';
 import { writerInstructions, writerPrompt } from '../writer/prompt.ts';
 import { resultSchemaFor } from '../writer/schema.ts';
 import { validateResult } from '../writer/validate.ts';
@@ -173,7 +173,7 @@ export class GenerationService {
     const overhead = estimateTokens(writerInstructions() + JSON.stringify(resultSchemaFor()));
     for (const original of packed.batches) {
       let current: WriterInput = { ...original.input, targets: [] };
-      const batch = (input: WriterInput): Batch => ({ input, inputTokens: estimateTokens(writerPrompt(input)) + overhead, outputAllowance: outputAllowance(input.targets.length, settings.cardsPerNode) });
+      const batch = (input: WriterInput): Batch => ({ input, inputTokens: estimateTokens(writerPrompt(input)) + overhead, outputAllowance: targetsAllowance(input.targets, settings.cardsPerNode) });
       const fits = (b: Batch) => (model.contextWindow === null || b.inputTokens + b.outputAllowance <= model.contextWindow) && (model.maxTokens === null || b.outputAllowance <= model.maxTokens);
       for (const target of original.input.targets) {
         const next = batch({ ...current, targets: [...current.targets, target] });

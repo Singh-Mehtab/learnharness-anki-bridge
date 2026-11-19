@@ -15,5 +15,9 @@ export function kindMisfit(kind: CardKind, target: KindContext): string | null {
   return null;
 }
 
+/** The per-target card cap: flagged targets get FLAGGED_CARD_CAP. */
+export const capFor = (target: Pick<WriterTarget, "maxCards">, maxCardsPerNode: number): number =>
+  target.maxCards ?? maxCardsPerNode;
+
 export const allowedKindsFor = (target: KindContext, enabled: readonly CardKind[]): CardKind[] =>
   enabled.filter((k) => !kindMisfit(k, target));

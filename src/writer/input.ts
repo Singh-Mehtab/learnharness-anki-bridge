@@ -22,7 +22,8 @@ import type {
   WriterInput,
   WriterTarget,
 } from "./types.ts";
-import { allowedKindsFor } from "./kinds.ts";
+import { FLAGGED_CARD_CAP } from "./types.ts";
+import { allowedKindsFor, capFor } from "./kinds.ts";
 
 export const SOURCE_CHAR_CAP = 1500;
 export const MAX_FEEDS = 3;
@@ -38,6 +39,10 @@ export const estimateTokens = (text: string): number => Math.ceil(text.length / 
 
 export const outputAllowance = (nodeCount: number, maxCardsPerNode: number): number =>
   nodeCount * (OUTPUT_TOKENS_PER_CARD * maxCardsPerNode + OUTPUT_TOKENS_PER_NODE);
+
+/** Output allowance for actual targets, counting flagged targets' larger cap. */
+export const targetsAllowance = (targets: readonly Pick<WriterTarget, "maxCards">[], maxCardsPerNode: number): number =>
+  targets.reduce((n, t) => n + outputAllowance(1, capFor(t, maxCardsPerNode)), 0);
 
 // ---------------------------------------------------------------------------
 // Source passage
@@ -117,6 +122,8 @@ const ref = (n: GraphNodeLike): NodeRef => ({ id: n.id, name: n.name, statement:
 
 export interface TargetExtras {
   source?: string;
+  /** The learner flagged this idea; it may exceed the per-node cap. */
+  flagged?: boolean;
   flagNote?: string;
   /** Newest first. */
   existingCards?: ExistingCard[];
@@ -155,6 +162,7 @@ export function buildTarget(graph: GraphLike, nodeId: string, extras: TargetExtr
     feeds: feedsAll.slice(0, MAX_FEEDS),
     neighbours: neighbours(graph, nodeId).map((id) => ref(get(id))),
     ...(extras.source ? { source: extras.source } : {}),
+    ...(extras.flagged || extras.flagNote ? { flagged: true, maxCards: FLAGGED_CARD_CAP } : {}),
     ...(extras.flagNote ? { flagNote: extras.flagNote } : {}),
     existingCards: (extras.existingCards ?? []).slice(0, MAX_EXISTING_CARDS),
   };
@@ -239,7 +247,6 @@ export function pack(
   const ceiling = options.contextWindow
     ? Math.min(HARD_INPUT_CEILING, options.contextWindow - perNodeOut)
     : HARD_INPUT_CEILING;
-  const maxNodesPerTask = options.maxTokens ? Math.max(1, Math.floor(options.maxTokens / perNodeOut)) : Infinity;
 
   const batches: Batch[] = [];
   const skipped: SkippedTarget[] = [];
@@ -250,7 +257,7 @@ export function pack(
     batches.push({
       input: { version: 1, maxCardsPerNode, enabledKinds: [...enabledKinds], targets: current },
       inputTokens: currentTokens,
-      outputAllowance: outputAllowance(current.length, maxCardsPerNode),
+      outputAllowance: targetsAllowance(current, maxCardsPerNode),
     });
     current = [];
     currentTokens = 0;
@@ -282,7 +289,8 @@ export function pack(
       skipped.push({ nodeId, reason: `None of the enabled card kinds (${enabledKinds.join(", ")}) fit this node's reasoning chains.` });
       continue;
     }
-    if (current.length && (currentTokens + tokens > budget || current.length >= maxNodesPerTask)) flush();
+    const out = targetsAllowance([...current, target], maxCardsPerNode);
+    if (current.length && (currentTokens + tokens > budget || (options.maxTokens && out > options.maxTokens))) flush();
     current.push(target);
     currentTokens += tokens;
   }

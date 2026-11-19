@@ -26,11 +26,21 @@ export interface GraphLike {
   chains: GraphChainLike[];
 }
 
-/** Card kinds that ship in v1. */
-export const CORE_KINDS = ["recall", "why", "compose", "discriminate"] as const;
-/** Kinds on trial in the 0.1.0 bench only. */
+/** Kinds on by default (0.7.2, #34): plain facts and equations to memorise. */
+export const DEFAULT_KINDS = ["fact", "equation"] as const;
+/** Kinds the learner can switch on. */
+export const OPTIONAL_KINDS = ["steps", "apply", "why", "compose", "discriminate"] as const;
+/** Card kinds that ship. */
+export const CORE_KINDS = [...DEFAULT_KINDS, ...OPTIONAL_KINDS] as const;
+/** Kinds on trial in the bench only. */
 export const TRIAL_KINDS = ["mini-problem", "spot-the-mistake"] as const;
-export const ALL_KINDS = [...CORE_KINDS, ...TRIAL_KINDS] as const;
+/** Pre-0.7.2 name for a fresh-situation card; written as apply. Kept so saved
+ *  settings and cards stay valid until the plugin migrates them. */
+export const LEGACY_KINDS = ["recall"] as const;
+export const ALL_KINDS = [...CORE_KINDS, ...TRIAL_KINDS, ...LEGACY_KINDS] as const;
+/** Cards a flagged target may get: a flag is an explicit request, so it is
+ *  not held to the normal per-node cap. */
+export const FLAGGED_CARD_CAP = 12;
 export type CardKind = (typeof ALL_KINDS)[number];
 
 export interface NodeRef {
@@ -68,8 +78,12 @@ export interface WriterTarget {
   neighbours: NodeRef[];
   /** Teacher message the node came from, capped. Untrusted. */
   source?: string;
+  /** The learner flagged this idea for Anki. */
+  flagged?: boolean;
   /** The learner's flag note ("I got the sign wrong"). Untrusted. */
   flagNote?: string;
+  /** Per-target cap when it differs from maxCardsPerNode (flagged targets). */
+  maxCards?: number;
   /** Newest first, at most 6. */
   existingCards: ExistingCard[];
   /** Enabled kinds this target's chains and neighbours support. Set by pack. */
