@@ -102,7 +102,7 @@ test('flag notes reach each matched node once; selection defaults to flagged nod
     flag({ id: '00000000-0000-4000-8000-000000000003', sessionId: 's2', messageIds: ['b1'], note: 'units' }),
     flag({ id: '00000000-0000-4000-8000-000000000004', sessionId: 's2', messageIds: ['a1'] }),
   ], graph);
-  assert.deepEqual(Object.fromEntries(notes), { 'n-spin': 'sign error / units', 'n-pauli': 'sign error', 'n-late': 'sign error' });
+  assert.deepEqual(Object.fromEntries(notes), { 'n-spin': 'sign error / units', 'n-pauli': 'sign error', 'n-late': 'sign error', 'n-other': '' });
   const none = { waiting: 0, sent: 0, sentElsewhere: 0 };
   const nodes = [
     { id: 'a', flagged: true, cards: { ...none, sent: 2 } },

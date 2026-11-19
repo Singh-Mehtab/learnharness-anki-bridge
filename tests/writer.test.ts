@@ -128,6 +128,7 @@ test("validator catches target, kind, leak, name, format and duplicate problems"
         cards: [
           { kind: "compose", front: "Given A and B, what follows?", back: "Conclusion C" },
           { kind: "recall", front: "Old front?", back: "something else" },
+          { kind: "recall", front: "Old front?", back: "something else" },
           { kind: "recall", front: "When does Conclusion C apply? It is the rule", back: "rule" },
         ],
       },
@@ -138,7 +139,7 @@ test("validator catches target, kind, leak, name, format and duplicate problems"
   const problems = findProblems(result, i).join("\n");
   assert.match(problems, /not enabled/);
   assert.match(problems, /cap is 2/);
-  assert.match(problems, /repeats an existing card/);
+  assert.match(problems, /repeats a card in this result/);
   assert.match(problems, /must not contain the idea's name/);
   assert.match(problems, /gives the answer away/);
   assert.match(problems, /Unknown target "zzz"/);

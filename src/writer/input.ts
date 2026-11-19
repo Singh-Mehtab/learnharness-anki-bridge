@@ -257,7 +257,7 @@ export function pack(
   const flush = () => {
     if (!current.length) return;
     batches.push({
-      input: { version: 1, maxCardsPerNode, enabledKinds: [...enabledKinds], ...(options.constantValues ? { constantValues: true } : {}), targets: current },
+      input: { version: 1, maxCardsPerNode, enabledKinds: [...enabledKinds], ...(options.constantValues !== undefined ? { constantValues: options.constantValues } : {}), targets: current },
       inputTokens: currentTokens,
       outputAllowance: targetsAllowance(current, maxCardsPerNode),
     });

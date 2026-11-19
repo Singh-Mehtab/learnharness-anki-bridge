@@ -136,13 +136,15 @@ export function findProblems(result: unknown, input: WriterInput): string[] {
     if (!cards.length && (typeof row.skipReason !== "string" || !row.skipReason.trim())) {
       problems.push(`Target ${nodeId}: no cards, so give a skipReason.`);
     }
-    const fronts = new Set(target.existingCards.map((c) => normalise(c.front)));
+    const seenCards = new Set<string>();
     for (const card of cards) {
       for (const p of cardProblems(card, target, input)) problems.push(`Target ${nodeId}: ${p}.`);
       if (typeof card.front === "string" && card.front.trim()) {
-        const key = normalise(card.front);
-        if (fronts.has(key)) problems.push(`Target ${nodeId}: front repeats an existing card: "${card.front.slice(0, 60)}".`);
-        fronts.add(key);
+        // Same front or answer alone is not proof of a duplicate. Earlier
+        // requests are handled independently at apply time against live cards.
+        const key = JSON.stringify([card.kind, card.front, card.back, card.extra ?? ""]);
+        if (seenCards.has(key)) problems.push(`Target ${nodeId}: repeats a card in this result: "${card.front.slice(0, 60)}".`);
+        seenCards.add(key);
       }
     }
   }

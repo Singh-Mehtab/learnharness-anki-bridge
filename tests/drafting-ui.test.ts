@@ -20,7 +20,7 @@ function setup(options: { catalogUnavailable?: boolean; initialGraphFailure?: bo
     cards: { waiting: 0, sent: 0, sentElsewhere: 0 }, coverage: coverage() }], missing: [], cardsPerNode: 2, paired: false, pairingWarning: false };
   const session: any = { session: { id: "s1", title: "Session one", exists: true }, flags: [], cardsPerNode: 2, paired: false,
     nodes: [{ id: "n_s", name: "Session idea", statement: "Only in the session.", statementHash: "s".repeat(64), cards: { waiting: 0, sent: 0, sentElsewhere: 0 }, coverage: coverage(), flagged: true, flagNotes: [] }] };
-  const state: any = { generationSettings: { cardsPerNode: 2, enabledKinds: ["recall", "why", "compose", "discriminate"], model: options.model ? { provider: "scratch", id: "writer" } : null }, generations: [] };
+  const state: any = { generationSettings: { cardsPerNode: 2, enabledKinds: ["fact", "equation"], constantValues: false, model: options.model ? { provider: "scratch", id: "writer" } : null }, generations: [] };
   let model: ((v: { provider: string; id: string }) => void | Promise<void>) | undefined;
   let failNextCoverage = options.initialGraphFailure;
   let mutationGate: Promise<void> | undefined, hold: Promise<void> | undefined, graphHold: Promise<void> | undefined;
@@ -99,10 +99,13 @@ test("writing needs a selection, defaults to the cheap model, confirms the estim
     assert.equal((f.doc.querySelector(".ab-model") as unknown as HTMLElement).hidden, true, "override picker hidden");
     assert.equal(f.button("Write cards").disabled, true);
     f.select(true); await tick();
-    assert.match(f.text(), /1 idea selected, up to 2 cards/);
+    assert.match(f.text(), /1 idea selected/);
     assert.equal(f.button("Write cards for 1 idea").disabled, false, "no explicit model needed");
     follow.checked = false; follow.dispatchEvent(f.event("change")); await tick();
     assert.equal((f.doc.querySelector(".ab-model") as unknown as HTMLElement).hidden, false, "override picker shown");
+    f.button("Write cards for 1 idea").click(); await tick();
+    assert.match(f.text(), /Choose a model override/);
+    assert.equal(f.calls.some(c => c.name === "preflight"), false, "no silent cheap fallback while choosing an override");
     await f.pickModel({ provider: "scratch", id: "writer" }); await tick();
     assert.deepEqual(f.calls.find(c => c.name === "generationSettings")!.input, { model: { provider: "scratch", id: "writer" } });
     f.button("Write cards for 1 idea").click(); await tick();
@@ -160,11 +163,17 @@ test("card types and cap save as soon as they change, and the last type stays on
     const cap = f.write.querySelector(".ab-write-settings select") as unknown as HTMLSelectElement;
     cap.value = "4"; cap.dispatchEvent(f.event("change")); await tick();
     const toggles = () => [...f.write.querySelectorAll(".ab-chips input[type=checkbox]")] as unknown as HTMLInputElement[];
-    toggles()[3]!.checked = false; toggles()[3]!.dispatchEvent(f.event("change")); await tick();
-    assert.deepEqual(f.calls.filter(c => c.name === "generationSettings").map(c => c.input), [{ cardsPerNode: 4 }, { enabledKinds: ["recall", "why", "compose"] }]);
+    assert.deepEqual(toggles().map(box => box.checked), [true, true, false, false, false, false, false]);
+    toggles()[3]!.checked = true; toggles()[3]!.dispatchEvent(f.event("change")); await tick();
+    assert.deepEqual(f.calls.filter(c => c.name === "generationSettings").map(c => c.input), [{ cardsPerNode: 4 }, { enabledKinds: ["fact", "equation", "apply"] }]);
     assert.match(f.text(), /Contrast Tell the idea apart from a similar one/);
-    for (const i of [1, 2]) { toggles()[i]!.checked = false; toggles()[i]!.dispatchEvent(f.event("change")); await tick(); }
+    for (const i of [1, 3]) { toggles()[i]!.checked = false; toggles()[i]!.dispatchEvent(f.event("change")); await tick(); }
     assert.equal(toggles()[0]!.disabled, true, "the only remaining type cannot be turned off");
+    const constants = () => [...f.write.querySelectorAll("label")].find(l => l.textContent!.includes("values of physical constants"))!.querySelector("input") as unknown as HTMLInputElement;
+    assert.equal(constants().checked, false);
+    constants().checked = true; constants().dispatchEvent(f.event("change")); await tick();
+    assert.deepEqual(f.calls.filter(c => c.name === "generationSettings").at(-1)!.input, { constantValues: true });
+    assert.equal(constants().checked, true, "saved toggle survives rendering");
   } finally { await f.close(); }
 });
 

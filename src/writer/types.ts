@@ -35,8 +35,13 @@ export const CORE_KINDS = [...DEFAULT_KINDS, ...OPTIONAL_KINDS] as const;
 /** Kinds on trial in the bench only. */
 export const TRIAL_KINDS = ["mini-problem", "spot-the-mistake"] as const;
 /** Pre-0.7.2 name for a fresh-situation card; written as apply. Kept so saved
- *  settings and cards stay valid until the plugin migrates them. */
+ *  cards and frozen generation inputs stay readable. */
 export const LEGACY_KINDS = ["recall"] as const;
+export const STORED_KINDS = [...CORE_KINDS, ...LEGACY_KINDS] as const;
+export type StoredCardKind = (typeof STORED_KINDS)[number];
+export type CoreCardKind = (typeof CORE_KINDS)[number];
+export const isStoredKind = (kind: unknown): kind is StoredCardKind => STORED_KINDS.some(k => k === kind);
+export const isCoreKind = (kind: unknown): kind is CoreCardKind => CORE_KINDS.some(k => k === kind);
 export const ALL_KINDS = [...CORE_KINDS, ...TRIAL_KINDS, ...LEGACY_KINDS] as const;
 /** Cards a flagged target may get: a flag is an explicit request, so it is
  *  not held to the normal per-node cap. */

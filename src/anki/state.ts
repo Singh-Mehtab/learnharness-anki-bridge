@@ -1,8 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import { link, mkdir, open, readFile, rename, unlink } from 'node:fs/promises';
 import path from 'node:path';
-import { defaultGenerationSettings, validateGenerations, validSource } from '../generation/types.ts';
+import { defaultGenerationSettings, validateGenerations, validLegacyGenerationSettings, validSource } from '../generation/types.ts';
 import type { Generation, GenerationSettings, SourceSnapshot } from '../generation/types.ts';
+import { isStoredKind } from '../writer/types.ts';
+import type { StoredCardKind } from '../writer/types.ts';
 import { validateFlags } from '../session/flow.ts';
 import type { Flag } from '../session/flow.ts';
 import { validateDismissals } from '../coverage/flow.ts';
@@ -10,7 +12,7 @@ import type { Dismissal } from '../coverage/flow.ts';
 
 export interface Destination { url: string; profile: string }
 export type CardStatus = 'draft' | 'approved' | 'sending' | 'sent' | 'failed' | 'dropped';
-export type CardKind = 'recall' | 'why' | 'compose' | 'discriminate';
+export type CardKind = StoredCardKind;
 export interface Card {
   id: string;
   nodeId: string;
@@ -33,7 +35,7 @@ export interface Card {
   requestId?: string;
 }
 export interface State {
-  schemaVersion: 4;
+  schemaVersion: 5;
   generationSettings: GenerationSettings;
   generations: Generation[];
   flags: Flag[];
@@ -44,7 +46,7 @@ export interface State {
   cards: Card[];
 }
 export const initialState = (): State => ({
-  schemaVersion: 4,
+  schemaVersion: 5,
   generationSettings: defaultGenerationSettings(),
   generations: [],
   flags: [],
@@ -60,7 +62,7 @@ function destination(v: unknown): v is Destination {
   return object(v) && text(v.url) && !!v.url && text(v.profile) && !!v.profile;
 }
 export function validateState(value: unknown): asserts value is State {
-  if (!object(value) || value.schemaVersion !== 4) throw new Error('Unsupported state format. Keep state.json intact and use a compatible Anki Bridge version.');
+  if (!object(value) || value.schemaVersion !== 5) throw new Error('Unsupported state format. Keep state.json intact and use a compatible Anki Bridge version.');
   validateGenerations(value.generationSettings, value.generations);
   validateFlags(value.flags);
   validateDismissals(value.dismissals);
@@ -68,7 +70,7 @@ export function validateState(value: unknown): asserts value is State {
   if (!object(settings) || !['url', 'apiKey', 'lastDeck'].every(k => text(settings[k])) || settings.tagTemplate !== undefined && !text(settings.tagTemplate) || settings.systemTags !== undefined && typeof settings.systemTags !== 'boolean' || !(value.destination === null || destination(value.destination)) || !Array.isArray(value.cards)) throw new Error('Invalid Anki Bridge state. The file has not been reset.');
   const ids = new Set<string>();
   for (const card of value.cards) {
-    if (!object(card) || !['id', 'nodeId', 'statementHash', 'sessionId', 'nodeName', 'sessionName', 'front', 'back', 'extra'].every(k => text(card[k])) || !/^[\da-f]{8}-(?:[\da-f]{4}-){3}[\da-f]{12}$/i.test(card.id as string) || ids.has(card.id as string) || !['recall', 'why', 'compose', 'discriminate'].includes(card.kind as string) || !['draft', 'approved', 'sending', 'sent', 'failed', 'dropped'].includes(card.status as string)) throw new Error('Invalid card state. The file has not been reset.');
+    if (!object(card) || !['id', 'nodeId', 'statementHash', 'sessionId', 'nodeName', 'sessionName', 'front', 'back', 'extra'].every(k => text(card[k])) || !/^[\da-f]{8}-(?:[\da-f]{4}-){3}[\da-f]{12}$/i.test(card.id as string) || ids.has(card.id as string) || !isStoredKind(card.kind) || !['draft', 'approved', 'sending', 'sent', 'failed', 'dropped'].includes(card.status as string)) throw new Error('Invalid card state. The file has not been reset.');
     ids.add(card.id as string);
     if (card.sourceSnapshot !== undefined && !validSource(card.sourceSnapshot) || card.generationId !== undefined && !text(card.generationId) || card.requestId !== undefined && !text(card.requestId)) throw new Error('Invalid generation card metadata.');
     if (card.destination !== undefined && !destination(card.destination)) throw new Error('Invalid card destination.');
@@ -79,14 +81,21 @@ export function validateState(value: unknown): asserts value is State {
   }
 }
 
-/** Upgrade older snapshots one step per version (1 -> 2 -> 3 -> 4), then validate the result.
+/** Upgrade older snapshots one step per version (1 -> 2 -> 3 -> 4 -> 5), then validate the result.
  * StateStore.open writes only after validation passes, so malformed or newer data is
  * refused and the file is left as it was. */
 export function migrateState(raw: unknown): State {
   let value = raw;
-  if (object(value) && value.schemaVersion === 1) value = { ...value, schemaVersion: 2, generationSettings: defaultGenerationSettings(), generations: [] };
+  if (object(value) && value.schemaVersion === 1) value = { ...value, schemaVersion: 2, generationSettings: { cardsPerNode: 2, enabledKinds: ['recall', 'why', 'compose', 'discriminate'], model: null }, generations: [] };
   if (object(value) && value.schemaVersion === 2) value = { ...value, schemaVersion: 3, flags: [] };
   if (object(value) && value.schemaVersion === 3) value = { ...value, schemaVersion: 4, dismissals: [] };
+  if (object(value) && value.schemaVersion === 4) {
+    const old = value.generationSettings;
+    if (!validLegacyGenerationSettings(old)) throw new Error('Invalid generation state. The file has not been reset.');
+    // The old kinds were on by default, so they don't represent an opt-in. Leave
+    // task inputs and historical settings byte-for-byte equivalent for worker recovery.
+    value = { ...value, schemaVersion: 5, generationSettings: { ...defaultGenerationSettings(), cardsPerNode: old.cardsPerNode, model: old.model } };
+  }
   validateState(value);
   return value;
 }

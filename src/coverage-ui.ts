@@ -119,7 +119,6 @@ export class CoveragePicker {
     }
     if (changed) this.options.changed("read"); this.render();
   }
-  setCardsPerNode(cap: number): void { this.view = { ...this.view, cardsPerNode: cap }; this.render(); }
   markStale(): void { this.stale = true; this.options.changed("read"); this.render(); }
   private withinLimit(count: number): boolean {
     this.selectionWarning.textContent = count > MAX_SELECTED_NODES
@@ -203,9 +202,8 @@ export class CoveragePicker {
     this.flagged?.update({ label: `Select flagged (${flagged.length})`, disabled: this.stale || !flagged.length });
     if (this.flagged) this.flagged.root.hidden = !this.view.nodes.some(n => n.flagged);
     this.clear?.update({ disabled: this.stale || !this.selected.size });
-    const cap = this.view.cardsPerNode;
     this.summary.textContent = this.selected.size
-      ? `${plural(this.selected.size, "idea")} selected, up to ${plural(this.selected.size * cap, "card")}`
+      ? `${plural(this.selected.size, "idea")} selected`
       : "No ideas selected";
     this.footer.dataset.empty = String(!this.selected.size);
     const current = visible.filter(n => !this.historical(n));
