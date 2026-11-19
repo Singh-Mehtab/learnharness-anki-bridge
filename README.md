@@ -1,84 +1,118 @@
 # Anki Bridge
 
-An unofficial LearnHarness community plugin in development. The goal is to draft cards from your knowledge graph, let you edit and approve them, and send them to Anki through AnkiConnect. Delivery is one-way; Anki keeps responsibility for reviews and scheduling. This project is not affiliated with Anki or LearnHarness.
+Anki Bridge turns what you learn in [LearnHarness](https://github.com/amosblomqvist/learnharness) into Anki cards. A model drafts cards from the ideas in your knowledge graph. You check and edit each one, and only the cards you approve go to Anki through AnkiConnect.
 
-**Version 0.7.0 is a personal-use candidate.** It redesigns the plugin to match the rest of LearnHarness, using the app's own buttons, borders and theme colours. The page is now three numbered steps, and connection upkeep lives in settings. There is no public release yet. See the [install guide](docs/install.md) for the install zip, setup and upgrades.
+> Version 0.7.0 is a personal-use candidate. There is no public release yet. Anki Bridge is an unofficial community plugin and is not affiliated with Anki or LearnHarness.
 
-![Anki Bridge 0.7.0 personal-use candidate: choose ideas, write cards, review and send, then delivery to Anki.](docs/images/workflow.svg)
+![Anki Bridge inside LearnHarness. One card has just been sent to a lecture deck with a lecture tag, and the next draft shows its answer as rendered maths.](docs/images/0.7.0-write-and-review.png)
 
-Pick ideas from one teaching session or the whole graph, let a model draft cards in the background, then check, tag and send each card. Coverage labels, flags and reversible dismissals from earlier versions carry over.
+## What it does
 
-## What's done
+- Drafts cards from your own graph. The writer works from the ideas LearnHarness extracted while teaching you, with linked ideas as context.
+- Sends nothing without your approval. Every card starts as a draft, and editing an approved card makes it a draft again.
+- Lets you flag the replies you struggled with. One click in a lesson marks the teacher's reply, and you can leave a note such as "I got the sign wrong" for the writer.
+- Writes maths for Anki's MathJax, with equations on their own lines.
+- Tags cards to match your collection. A template such as `{deck}::Lecture_01` tags each card by deck and lecture, and you can change the tags before each send.
+- Shows what you have already covered. Each idea says whether it has cards in Anki, cards waiting for review, or none, so you can fill the gaps.
+- Only adds notes. It never edits or deletes existing Anki notes, and Anki keeps your reviews and scheduling.
 
-| Version | Status | Work completed |
-| --- | --- | --- |
-| 0.1.0 | Merged | Shared writer input builder, graph context, batching, prompts, result schema and validation. Sonnet bench with real QM nodes and labelled synthetic fixtures. Local browser scoring, JSON results and per-run reports. |
-| 0.1.1 | Merged in [PR #1](https://github.com/Singh-Mehtab/learnharness-anki-bridge/pull/1) | Multiline code support, stronger accuracy and answer-leak guidance, soft word targets, a hard generation-call budget, and separate automated/human scoring. 22 tests, typecheck and browser checks passed. Sol approved the code. |
-| 0.2.0 | Merged in [PR #2](https://github.com/Singh-Mehtab/learnharness-anki-bridge/pull/2) | Connection/profile pairing, owned Basic note type, approval, durable delivery, interrupted-send recovery, presence checks and Show in Anki. Final merged head passed 77 tests, build and typecheck. Real AnkiConnect and scratch LearnHarness checks predate the final renderer fixes and main merge. |
-| 0.3.0 | Merged in [PR #5](https://github.com/Singh-Mehtab/learnharness-anki-bridge/pull/5) (`e88f89d`) | Native graph and model pickers, configurable card kinds and cap, confirmed preflight, worker generation, source-aware editable review with previews, bulk approval/send, dropping cards and generation recovery. 100 tests, typecheck and build pass. A scratch LearnHarness run with a local stub model passed seven end-to-end checks and a restart-during-generation check. Not yet tested with a real model in the app, or by sending generated cards to Anki. See [verification and limits](docs/0.3.0-verification.md). |
-| 0.4.0 | Merged in [PR #4](https://github.com/Singh-Mehtab/learnharness-anki-bridge/pull/4) | Flag for Anki and Make cards in the teaching top bar, flag notes passed to the writer, waiting-for-extraction status, and session node selection that feeds the draft panel. 137 tests, typecheck and build pass. Both Sol reviewers approved after three rounds each. Earlier scratch LearnHarness checks passed 17 session checks and 9 integrated drafting checks with a local stub. No real model or Anki calls were made. See [verification and limits](docs/0.4.0-verification.md). |
-| 0.5.0 | Merged in [PR #7](https://github.com/Singh-Mehtab/learnharness-anki-bridge/pull/7) | Shared destination-aware coverage, changed/missing-source warnings, dismiss/restore, coverage-aware node lists and no-cards backfill. State schema 4 preserves older cards, flags and generation recovery data. See [verification and limits](docs/0.5.0-verification.md). |
-| 0.6.0 | Merged in [PR #9](https://github.com/Singh-Mehtab/learnharness-anki-bridge/pull/9) | First install zip and upgrade instructions. See [verification and limits](docs/0.6.0-verification.md). |
-| 0.6.1 | Merged for personal use | Destination checks, refresh and recovery fixes, collapsed sent history, and Anki field previews. See [verification and limits](docs/0.6.1-verification.md). |
-| 0.7.0 | Merged for personal use | Redesign that fixes the 18 interface issues filed after 0.6.1 (#11 to #28). Three numbered steps, one idea list scoped to a session or the graph, background writing with a single progress line, a card editor with Front, Back and Extra side by side, a deck field that checks names, and a tag template. The writer prompt now asks for MathJax on every variable and prefers display maths. 196 tests, typecheck and build pass. See [verification and limits](docs/0.7.0-verification.md). |
+## How it works
 
-### Card writer
+![Workflow: choose ideas, write cards, review and send, then delivery to Anki.](docs/images/workflow.svg)
 
-- Core kinds: recall, why, compose and discriminate. Why/compose need supporting chains; discriminate needs a relevant neighbour.
-- A cap of one to four cards per node, two by default. The cap is a maximum, not a quota. The writer prefers one useful card over a near-duplicate pair.
-- Soft targets of 30 front words and 15 back words. Correctness and necessary assumptions take priority.
-- Maths, inline code and multiline fenced code. Images and Mermaid are unsupported in cards.
-- Deterministic checks for structure, allowed kinds, duplicates and surface answer leaks. These checks cannot guarantee factual accuracy or detect every semantic leak.
+The Anki Bridge page has three numbered steps.
 
-Mini-problem and spot-the-mistake kinds remain experimental and off by default.
+### 1. Choose ideas
 
-### Quality evidence and limits
+Under "Ideas from", pick one teaching session or your whole graph. In a session, the ideas from flagged replies start ticked. Each idea shows whether it already has cards, and "Select ideas without cards" ticks the gaps.
 
-The original core bench failed the zero-answer-leak criterion. The 0.1.1 follow-up produced 32 cards from previously unused QM target nodes in the same lecture. Sol provisionally kept 24 of 32 as-is or with small edits, with no flagged leaks or factual errors among the kept cards. Five rejected cards had factual-error flags.
+![Step 1. A lecture session is chosen, its flag note is shown, and five flagged ideas are ticked in a bordered list with coverage labels.](docs/images/0.7.0-choose-ideas.png)
 
-That is a partial result, **not a full benchmark pass**. Claude's quota stopped both synthetic-subject batches. The fixtures are hand-written and cleaner than real extraction output; the QM sample is not from an independent lecture. Human spot-checks and model scores remain separate.
+### 2. Write cards
 
-Additional card-quality validation is deferred until before public release. No automatic rerun is scheduled. See the [bench guide](bench/README.md) and [0.1.1 closeout](bench/0.1.1-closeout.md) for methods and limitations. Private graph data, generated cards and per-card scores are not committed.
+Choose a model, the card types you want and the most cards per idea. There are four types. Recall asks for a fact, definition or formula. Why asks for the reason behind an idea. Compose combines linked ideas to reach this one. Contrast tells the idea apart from a similar one.
 
-## Using Anki Bridge (0.7.0)
+Write cards shows the size and estimated cost of the run before anything starts. The model drafts in the background, so you can leave the page. Progress also shows under Background agents.
 
-The page has three numbered steps. Settings hold the AnkiConnect address, the Anki profile, tags and note type repairs.
+![The Write cards dialog lists 5 ideas, up to 10 cards, the model, the number of model calls and an estimated cost, with Cancel and Start writing buttons.](docs/images/0.7.0-write-dialog.png)
 
-![Step 1 in a scratch LearnHarness host: a session chosen in Ideas from, its flag note, and a bordered idea list with labels and a selection count](docs/images/0.7.0-choose-ideas.png)
+### 3. Review and send
 
-1. **Choose ideas.** "Ideas from" picks one teaching session or all sessions. The list below shows only those ideas, in a bordered box with search, a "Without cards" filter and a count of the cards you could get. Each idea is labelled Flagged, To review, In Anki, Not carding or No cards. "Select ideas without cards" ticks every visible idea that has no cards. In a session, flagged ideas start ticked. The menu on each idea lets you stop carding it, make cards for it again, or jump to its cards in step 3.
-2. **Write cards.** Choose the model and card types, and set the most cards per idea. Recall states a fact, Why explains a reason, Compose combines linked ideas, and Contrast separates the idea from a similar one (stored as `discriminate`). Write cards opens a dialog with the idea count, card limit, model calls and any cost estimate. Nothing runs until you press Start writing. Writing runs in the background and shows one progress line with Cancel. When a run ends, one summary offers Retry the rest and Dismiss. Cancelled ideas can be selected again straight away.
-3. **Review and send.** Each card shows Front, Back and Extra side by side with maths rendered. Edit swaps in text boxes with a live preview. Approve cards one at a time or all together. The deck field suggests your Anki decks and says whether a name already exists or will be created. Tags start from your template and can be changed before each send. Sending without a deck or profile shows an error. The More menu holds Write a card by hand, Check unconfirmed sends, presence checks, Show in Anki and Drop all unsent cards.
+Each card shows Front, Back and Extra side by side with the maths rendered. Edit opens the TeX source with a live preview underneath. Approve the cards you're happy with, check the deck and tags, then send. The deck field suggests your Anki decks and tells you when a name is new.
 
-![Step 2 and step 3: card types with explanations, the Write cards button, and draft cards with Front, Back and Extra columns](docs/images/0.7.0-write-and-review.png)
+![Editing a card. The front and back text boxes hold TeX source, and the rendered preview sits under each one.](docs/images/0.7.0-edit.png)
 
-Screenshots come from a scratch LearnHarness host with synthetic sessions and a fake AnkiConnect. They show the interface, not real card quality. Also see the [estimate dialog](docs/images/0.7.0-write-dialog.png), [editing a card](docs/images/0.7.0-edit.png), [a failed run](docs/images/0.7.0-failed-run.png), [settings](docs/images/0.7.0-settings.png), [tags and note type settings](docs/images/0.7.0-settings-tags.png), [the flag dialog](docs/images/0.7.0-flag-dialog.png) and [the light theme](docs/images/0.7.0-light.png). The [0.6.1 page](docs/images/0.6.1-before.png) is kept for comparison.
+## Install
 
-### Tags
+You need LearnHarness 0.6.1 or later, Anki Desktop 26.08 or later with [AnkiConnect](https://git.sr.ht/~foosoft/anki-connect), and a model set up in LearnHarness. Writing cards uses that model provider's quota. Estimates make no model calls.
 
-Set "Tags for new cards" in settings. Separate tags with spaces. `{deck}` becomes the deck name with spaces replaced by underscores, so the template `{deck}::Lecture_01` with the deck `Year 3::Nuclear Physics` gives `Year_3::Nuclear_Physics::Lecture_01`. The send bar shows the result, and any change you make there applies to that send. The `learnharness` and card-type tags are on by default and can be turned off.
+There is no download yet. Build the install zip from a checkout of this repository with Node.js 23.6 or later:
 
-### Session flags
+```sh
+npm ci
+npm run package:plugin
+```
 
-In a teaching session, Flag for Anki in the top bar marks the teacher's latest reply for cards. A click opens a dialog with a plain-text preview of the reply and an optional note such as "I got the sign wrong". The card writer receives the note with that reply's ideas. The shortcut, `Cmd/Ctrl+Shift+A` by default, flags straight away and offers the note in a short confirmation. A flag covers every idea LearnHarness extracted from that reply.
+This writes `anki-bridge-v0.7.0.zip` at the repository root. Then:
 
-LearnHarness extracts ideas after a reply settles and doesn't announce when it finishes. Until then the flag shows that extraction is still running, and the page re-checks when extraction activity changes. Make cards in the top bar opens Anki Bridge scoped to that session with its flagged ideas ticked. Flags in other sessions are listed under step 1 and open their session.
+1. In LearnHarness, open Settings → Community plugins and copy the plugins folder path. Quit LearnHarness.
+2. Unzip the archive and move the `anki-bridge` folder into the plugins folder.
+3. Restart LearnHarness and enable Anki Bridge under Community plugins.
+4. Open Anki with AnkiConnect running. In LearnHarness, open Settings → Anki Bridge. Save the AnkiConnect address, press Test connection, then choose Use the open profile.
+5. Open Anki Bridge from the sidebar.
 
-### Coverage and backfill
+The [install guide](docs/install.md) covers upgrading without losing drafts, rolling back and troubleshooting.
 
-Coverage counts cards sent to the paired URL and profile across all decks. Cards sent to another profile get their own label. These are saved records, not a live presence check. A note deleted in Anki stays deleted and does not return to backfill.
+## Flag replies during a lesson
 
-Selecting ideas without cards keeps backfill intent through estimates, confirmation and retries, including after restart. If an idea gains coverage first, the backend rejects that backfill target. Tick it yourself to ask for another angle. Not carding an idea applies to its current statement across sessions and profiles, never drops drafts and never changes Anki. A changed statement ends the old dismissal and shows a warning. Both views keep a 1,000-idea selection limit.
+In a teaching session, Flag for Anki in the top bar marks the teacher's latest reply. You can add a note for the writer. `Cmd/Ctrl+Shift+A` flags straight away and offers the note in a short confirmation. Make cards opens Anki Bridge with that session's flagged ideas ticked.
 
-If a list read fails, the last rows stay visible and marked out of date, and selection is disabled until Refresh succeeds. Ideas missing from the current graph read appear in a collapsed history section with their cards kept.
+A flag covers every idea LearnHarness extracts from that reply. Extraction runs after the reply finishes, so a new flag can show as waiting for a short time.
 
-## Earlier verification
+![The flag dialog shows a plain-text preview of the teacher's reply and a field for a note to the card writer.](docs/images/0.7.0-flag-dialog.png)
 
-The 0.2.0 tests used LearnHarness 0.6.1, Anki 26.08.1 and AnkiConnect builds 26.10.11.0 and 26.11.15.0. They covered note type creation and repair, duplicate rejection, profile mismatches, Show in Anki, and recovery after killing the bridge immediately after a real `addNote`. See [0.2.0 verification](docs/0.2.0-verification.md) and [0.3.0 verification](docs/0.3.0-verification.md).
+## Tags
 
-## Development setup
+Set "Tags for new cards" in the Anki Bridge settings. Separate tags with spaces. `{deck}` becomes the deck name with spaces replaced by underscores. With the template `{deck}::Lecture_01` and the deck `Year 3::Nuclear Physics`, cards get the tag `Year_3::Nuclear_Physics::Lecture_01`. Anki treats tags that differ only in case as the same tag, so this matches an existing `YEAR_3::Nuclear_Physics` hierarchy.
 
-Use Node.js 23.6 or newer, npm, and Info-ZIP-compatible `zip` and `unzip` for the packaging tests. The tests need `unzip -Z1`, which BusyBox `unzip` does not support.
+The send step shows the tags before each send, and you can change them there. Cards also get `learnharness` and a card-type tag such as `learnharness::kind::why`. You can turn these off in settings.
+
+## Settings
+
+The Anki Bridge settings hold the AnkiConnect address and optional key, the Anki profile cards go to, the tag template, and repairs for the bridge's note type. Test connection says plainly when Anki is closed or AnkiConnect isn't reachable.
+
+![Anki Bridge settings after a connection test. The Connect to Anki box has the address, key, Save and Test connection, with the result under the buttons. The Anki profile box sits below.](docs/images/0.7.0-settings.png)
+
+## The card writer
+
+- One to four cards per idea, two by default. This is a limit, not a target. The writer prefers one useful card to a near-duplicate pair.
+- Fronts aim for about 30 words and backs for about 15. Correctness and any assumptions the answer needs come first.
+- Every variable, symbol and equation is written as maths. Fenced code keeps its indentation. Images and Mermaid diagrams aren't supported in cards.
+- Why and Compose cards need a supporting chain of ideas in the graph, and Contrast cards need a similar neighbouring idea. Otherwise the writer skips them.
+- If the writer can't check a card's claims, it returns no card for that idea and says why.
+- Automatic checks catch broken structure, duplicate cards and answers leaked into the question. They can't prove a card is correct, so read each one before approving it.
+
+## Privacy and safety
+
+- Writing cards sends the chosen ideas, their linked ideas, and for flagged ideas the teacher's reply and your note, to the model provider you picked.
+- The optional AnkiConnect key is stored in plain text in the plugin's `data/` folder. Never share that folder. Use AnkiConnect on your own machine.
+- Community plugins run local code with LearnHarness's permissions. Install builds you trust.
+- Adding missing fields and resetting styling and templates only change the bridge's own note type, and both ask you to confirm first.
+
+## Limitations
+
+- Card quality hasn't been benchmarked yet. An early trial on quantum mechanics lecture ideas kept 24 of 32 cards as written or with small edits. See [development notes](docs/development.md#card-quality-evidence).
+- The 0.7.0 interface was checked in a scratch LearnHarness with made-up data and a stand-in for AnkiConnect. Delivery to real Anki was tested in 0.2.0. See [0.7.0 verification](docs/0.7.0-verification.md).
+- Tested only on macOS with LearnHarness 0.6.1.
+
+## Roadmap
+
+- Done: drafting from the graph, session flags, coverage labels, delivery to Anki and the 0.7.0 redesign. See the [changelog](CHANGELOG.md).
+- Next: a card-quality benchmark on real lecture graphs, then a longer personal trial.
+- After that: a public release, then a listing in the LearnHarness community plugin list.
+- Ideas, not scheduled: sending cards you keep failing in Anki back to LearnHarness as weak spots, and practice sessions aimed at those weak spots.
+
+## Development
 
 ```sh
 npm ci
@@ -87,52 +121,7 @@ npm run typecheck
 npm run build
 ```
 
-Inspect batch packing without making model calls:
-
-```sh
-npm run bench:run -- --dry-run
-```
-
-Dry runs still need the selected fixture sets. The default includes a private `qm` set; [prepare your own fixtures or select synthetic sets](bench/README.md). The following works with the committed fixtures only:
-
-```sh
-npm run bench:run -- --dry-run --sets humanities,programming
-```
-
-The bench uses the authenticated Claude Code CLI. In-app drafting uses your explicitly selected LearnHarness model and its provider account, including subscription quota on Claude Code routes. The automated tests and dry runs make no model calls.
-
-### Try the development workflow
-
-For development tests, use a throwaway Anki profile and a LearnHarness checkout with scratch `LH_DATA_DIR` and `LH_AUTH_FILE` paths. Generation consumes your selected provider's quota only after you confirm the preflight.
-
-1. Install [AnkiConnect](https://git.sr.ht/~foosoft/anki-connect) and open the throwaway Anki profile. The tested AnkiConnect builds require Anki 26.08 or later. The bridge also requires `getActiveProfile`; older builds without it are refused.
-2. Install the built plugin in the scratch app's plugins directory, shown under Settings → Community plugins:
-
-   ```sh
-   npm run install:local -- "/absolute/path/to/scratch/plugins"
-   ```
-
-   The installer replaces `anki-bridge/dist/` and preserves its sibling `data/`. Discovery leaves the plugin disabled. Enable it in settings; restart LearnHarness after changing already-loaded plugin code.
-3. Open the Anki Bridge settings. Save the AnkiConnect address and optional API key, then test the connection. The default is `http://127.0.0.1:8765`; check your local port first because another service may use it. With Anki open on the throwaway profile, choose Use the open profile.
-4. Open Anki Bridge from the sidebar and choose ideas in step 1. In step 2, select a configured model, card types and the most cards per idea, then press Write cards. The dialog shows the idea count, card limit, model calls and a dollar estimate when the catalog has pricing. Estimating calls no model. Start writing runs it in the background; you can leave the page. Cancelling keeps cards from finished batches.
-5. Review each card. The collapsed Source idea shows the statement captured at drafting. Edit and save as needed; editing an approved card returns it to draft. Length warnings are advisory. Drop unwanted cards, then approve cards one at a time or all together. No generated card is approved automatically.
-6. Choose an existing or new deck, check the tags and send approved cards. Check presence or use Show in Anki. URL or profile mismatches block sends and reconciliation; do not switch profiles during a send, since AnkiConnect cannot make a profile check and write atomic.
-
-Completed worker results are applied at most once. Retry the rest offers a new estimate for unsuccessful batches; it does not regenerate successful ones. Source changes and missing ideas are shown without changing Anki notes. Write a card by hand is in the More menu.
-
-The bridge never updates or deletes existing Anki notes or their review history. Field repair and styling replacement are separate actions; styling replacement can overwrite template edits after confirmation. Close affected Anki editors before either operation.
-
-The optional API key is stored in plain text in the plugin's `data/` directory. Keep it private, use loopback and a trusted local AnkiConnect service, and never distribute `data/`. A remote HTTP endpoint can expose both the key and card content. The saved key is not displayed. A blank key input keeps it only while the URL stays the same; saving a different URL clears it, and Remove saved key removes it.
-
-The opt-in [live integration test](docs/0.2.0-verification.md) requires an isolated profile named `Anki Bridge Test`, leaves notes in that collection, and refuses ports 8765 and 8766. It does not start or stop Anki. The core Flashcards plugin is independent and can remain enabled.
-
-## Before public release
-
-The full card-quality benchmark is still open. A personal trial can find setup and workflow problems, but it does not close that quality check. Public availability and community announcements are separate decisions.
-
-## Keeping this page current
-
-Every version change, including patches, must update this README in the same PR. Keep the current version, completed work, test evidence, limitations and screenshots accurate. Mark unmerged or planned work explicitly. Repository instructions enforce this rule for coding agents.
+[Development notes](docs/development.md) cover the scratch test setup, the card-quality bench and earlier verification. The [generation](docs/generation-contract.md) and [session](docs/session-contract.md) contracts describe how the plugin works inside.
 
 ## License and acknowledgements
 

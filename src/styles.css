@@ -125,9 +125,9 @@
 .anki-bridge .ab-banner { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 12px; border-radius: 8px; font-size: 13px;
   border: 1px solid color-mix(in srgb, var(--ab-warn) 45%, var(--ab-border)); background: color-mix(in srgb, var(--ab-warn) 7%, transparent); }
 .anki-bridge .ab-banner[data-tone="bad"] { border-color: color-mix(in srgb, var(--ab-bad) 45%, var(--ab-border)); background: color-mix(in srgb, var(--ab-bad) 7%, transparent); }
-.anki-bridge .ab-send-bar { display: grid; grid-template-columns: minmax(200px, 1fr) minmax(200px, 1fr) auto; align-items: start; gap: 12px 16px; padding: 12px; border: 1px solid var(--ab-border); border-radius: 10px; margin-bottom: 8px; }
-.anki-bridge .ab-send-actions { align-self: start; padding-top: 22px; justify-content: flex-end; }
-@media (max-width: 760px) { .anki-bridge .ab-send-bar { grid-template-columns: 1fr; } .anki-bridge .ab-send-actions { padding-top: 0; justify-content: flex-start; } }
+.anki-bridge .ab-send-bar { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: start; gap: 12px 16px; padding: 12px; border: 1px solid var(--ab-border); border-radius: 10px; margin-bottom: 8px; }
+.anki-bridge .ab-send-actions { grid-column: 1 / -1; justify-content: flex-end; }
+@media (max-width: 760px) { .anki-bridge .ab-send-bar { grid-template-columns: 1fr; } .anki-bridge .ab-send-actions { justify-content: flex-start; } }
 .anki-bridge .ab-send-bar + .ab-status { margin: 0 0 8px; }
 .anki-bridge .ab-cards { display: grid; gap: 12px; margin-top: 12px; }
 .anki-bridge .ab-card { border: 1px solid var(--ab-border); border-radius: 10px; background: var(--card, transparent); overflow: hidden; }
