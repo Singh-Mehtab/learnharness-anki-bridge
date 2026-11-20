@@ -1,0 +1,56 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><link rel="stylesheet" href="common.css">
+<script>window.MathJax = { tex: { inlineMath: [['\\(', '\\)']] }, svg: { fontCache: 'global' } };</script>
+<script src="fonts/tex-svg.js"></script>
+<style>
+#art { width: 1280px; padding: 36px 40px 40px; border-radius: 18px; border: 1px solid var(--rule); }
+.grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 18px; }
+.idea { padding: 4px 8px 0 2px; }
+.idea .node { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--flag); }
+.idea .node i { width: 14px; height: 14px; border-radius: 50%; background: var(--flag); display: inline-block; }
+.idea h2 { font-family: var(--display); font-size: 28px; line-height: 1.1; margin-top: 12px; }
+.idea p { font-family: var(--sans); font-size: 16px; line-height: 1.4; color: var(--muted); margin-top: 10px; }
+.idea p.stmt { color: var(--paper); }
+.card { border-radius: 10px; background: var(--panel); border: 1.5px solid var(--rule); display: flex; flex-direction: column; min-height: 236px; }
+.card.def { border-color: var(--muted); }
+.card header { display: flex; justify-content: space-between; align-items: baseline; padding: 12px 14px 0; font-size: 13px; }
+.card header b { font-weight: 600; color: var(--draft); }
+.card header span { color: var(--faint); }
+.card.def header span { color: var(--paper); }
+.card .q { padding: 10px 14px 14px; font-family: var(--sans); font-size: 16px; line-height: 1.38; color: var(--paper); flex: 1; }
+.card .a { padding: 12px 14px 14px; border-top: 1.5px dashed var(--rule); font-family: var(--sans); font-size: 16px; line-height: 1.38; color: var(--muted); min-height: 72px; }
+.card .what { padding: 0 14px 12px; font-size: 12px; color: var(--faint); line-height: 1.4; }
+</style></head>
+<body><script>document.body.className = new URLSearchParams(location.search).get("theme") || "";</script>
+<div id="art">
+  <div class="grid">
+    <div class="idea">
+      <div class="node"><i></i>One idea from your graph</div>
+      <h2>Carnot efficiency</h2>
+      <p class="stmt">A reversible engine between reservoirs at absolute temperatures \(T_h\) and \(T_c\) has efficiency \(\eta = 1 - T_c/T_h\).</p>
+      <p>Seven kinds of card can test it. Fact and Equation are on by default. Turn on the others in step 2.</p>
+    </div>
+    <div class="card def"><header><b>Fact</b><span>default</span></header>
+      <div class="q">What kind of temperature goes into the Carnot efficiency?</div>
+      <div class="a">Absolute temperature, in kelvin.</div></div>
+    <div class="card def"><header><b>Equation</b><span>default</span></header>
+      <div class="q">What is the efficiency of a reversible engine between \(T_h\) and \(T_c\)?</div>
+      <div class="a">\(\eta = 1 - \dfrac{T_c}{T_h}\)</div></div>
+    <div class="card"><header><b>Steps</b><span>optional</span></header>
+      <div class="q">How do you find the best possible efficiency from two reservoir temperatures?</div>
+      <div class="a">Convert both to kelvin, divide cold by hot, subtract from 1.</div></div>
+    <div class="card"><header><b>Apply</b><span>optional</span></header>
+      <div class="q">A plant raises steam at 550&nbsp;K and cools it with a river at 290&nbsp;K. What caps its efficiency?</div>
+      <div class="a">The Carnot limit, \(1 - 290/550 \approx 47\%\).</div></div>
+    <div class="card"><header><b>Why</b><span>optional</span></header>
+      <div class="q">Why can no engine between two reservoirs beat a reversible one?</div>
+      <div class="a">It could drive the reversible engine backwards and break the Kelvin-Planck statement.</div></div>
+    <div class="card"><header><b>Compose</b><span>optional</span></header>
+      <div class="q">All reversible engines between two reservoirs share one efficiency, and for them \(Q_c/Q_h = T_c/T_h\). What is it?</div>
+      <div class="a">\(\eta = 1 - Q_c/Q_h = 1 - T_c/T_h\)</div></div>
+    <div class="card"><header><b>Contrast</b><span>optional</span></header>
+      <div class="q">Which can exceed 1: an engine's efficiency or a refrigerator's coefficient of performance?</div>
+      <div class="a">The coefficient of performance. Efficiency is always below 1.</div></div>
+  </div>
+</div>
+</body></html>

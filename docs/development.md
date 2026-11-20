@@ -71,3 +71,5 @@ The 0.2.0 tests used LearnHarness 0.6.1, Anki 26.08.1 and AnkiConnect builds 26.
 ## Keeping the README current
 
 Every version change, including patches, updates the README in the same PR. The README is the product page. It covers what Anki Bridge does, how to use it with current screenshots, how to install it, its limitations and a short roadmap. Version history goes in `CHANGELOG.md`, and test evidence goes in the version's verification note in `docs/`. Mark unmerged or planned work explicitly.
+
+README images live in `docs/images/readme/`. Screenshots are taken at 2x from a scratch LearnHarness with synthetic data, then framed. The diagrams and frames are rendered from HTML in [docs/images/readme/src](images/readme/src/README.md). When the interface or a status changes, retake the affected screenshots, update the matching diagram text, and check the alt text in the README.

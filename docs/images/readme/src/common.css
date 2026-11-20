@@ -1,0 +1,36 @@
+@font-face { font-family: "CMU Display"; src: url(fonts/cmunbx.ttf) format("truetype"); font-weight: 700; }
+@font-face { font-family: "JB Mono"; src: url(fonts/jbmono-latin.woff2) format("woff2"); font-weight: 100 800; }
+@font-face { font-family: "Source Sans"; src: url(fonts/sourcesans-latin.woff2) format("woff2"); font-weight: 200 900; }
+
+:root {
+  --ink: #141414;
+  --panel: #1d1d1d;
+  --panel-2: #232323;
+  --rule: #343434;
+  --paper: #e9e7e2;
+  --muted: #8d8a84;
+  --faint: #5d5b57;
+  --flag: #d6a531;
+  --draft: #7aa2d6;
+  --anki: #63b07f;
+  --mono: "JB Mono", ui-monospace, monospace;
+  --sans: "Source Sans", system-ui, sans-serif;
+  --display: "CMU Display", Georgia, serif;
+}
+body.light {
+  --ink: #f6f5f2;
+  --panel: #ffffff;
+  --panel-2: #f0eee9;
+  --rule: #d9d6cf;
+  --paper: #1c1b19;
+  --muted: #6c6963;
+  --faint: #a29e96;
+  --flag: #a87a06;
+  --draft: #2f64a8;
+  --anki: #2e7d4b;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { background: transparent; }
+body { font-family: var(--mono); color: var(--paper); -webkit-font-smoothing: antialiased; }
+#art { display: inline-block; background: var(--ink); }
+mjx-container { color: inherit; }
