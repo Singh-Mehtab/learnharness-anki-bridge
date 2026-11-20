@@ -4,7 +4,8 @@
 <script src="fonts/tex-svg.js"></script>
 <style>
 #art { width: 1280px; padding: 36px 40px 40px; border-radius: 18px; border: 1px solid var(--rule); }
-.grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 18px; }
+.grid { display: grid; grid-template-columns: 1.15fr repeat(3, 1fr); gap: 18px; }
+.idea { grid-row: span 2; }
 .idea { padding: 4px 8px 0 2px; }
 .idea .node { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--flag); }
 .idea .node i { width: 14px; height: 14px; border-radius: 50%; background: var(--flag); display: inline-block; }
@@ -28,7 +29,7 @@
       <div class="node"><i></i>One idea from your graph</div>
       <h2>Carnot efficiency</h2>
       <p class="stmt">A reversible engine between reservoirs at absolute temperatures \(T_h\) and \(T_c\) has efficiency \(\eta = 1 - T_c/T_h\).</p>
-      <p>Seven kinds of card can test it. Fact and Equation are on by default. Turn on the others in step 2.</p>
+      <p>Six kinds of card can test it. Fact and Equation are on by default. Why and Steps are switched on in the Write step, Apply and Contrast in Settings.</p>
     </div>
     <div class="card def"><header><b>Fact</b><span>default</span></header>
       <div class="q">What kind of temperature goes into the Carnot efficiency?</div>
@@ -36,21 +37,19 @@
     <div class="card def"><header><b>Equation</b><span>default</span></header>
       <div class="q">What is the efficiency of a reversible engine between \(T_h\) and \(T_c\)?</div>
       <div class="a">\(\eta = 1 - \dfrac{T_c}{T_h}\)</div></div>
-    <div class="card"><header><b>Steps</b><span>optional</span></header>
-      <div class="q">How do you find the best possible efficiency from two reservoir temperatures?</div>
-      <div class="a">Convert both to kelvin, divide cold by hot, subtract from 1.</div></div>
-    <div class="card"><header><b>Apply</b><span>optional</span></header>
-      <div class="q">A plant raises steam at 550&nbsp;K and cools it with a river at 290&nbsp;K. What caps its efficiency?</div>
-      <div class="a">The Carnot limit, \(1 - 290/550 \approx 47\%\).</div></div>
-    <div class="card"><header><b>Why</b><span>optional</span></header>
+    <div class="card"><header><b>Why</b><span>Write step</span></header>
       <div class="q">Why can no engine between two reservoirs beat a reversible one?</div>
       <div class="a">It could drive the reversible engine backwards and break the Kelvin-Planck statement.</div></div>
-    <div class="card"><header><b>Compose</b><span>optional</span></header>
-      <div class="q">All reversible engines between two reservoirs share one efficiency, and for them \(Q_c/Q_h = T_c/T_h\). What is that efficiency?</div>
-      <div class="a">\(\eta = 1 - Q_c/Q_h = 1 - T_c/T_h\)</div></div>
-    <div class="card"><header><b>Contrast</b><span>optional</span></header>
-      <div class="q">Which can exceed 1: an engine's efficiency or a refrigerator's coefficient of performance?</div>
-      <div class="a">The coefficient of performance. Efficiency is always below 1.</div></div>
+    <div class="card"><header><b>Steps</b><span>Write step</span></header>
+      <div class="q">Finding an engine's Carnot limit, you have converted both reservoir temperatures to kelvin. What next?</div>
+      <div class="a">Divide \(T_c\) by \(T_h\).</div></div>
+    <div class="card"><header><b>Apply</b><span>Settings</span></header>
+      <div class="q">A plant raises steam at 550&nbsp;K and cools it with a river at 290&nbsp;K. Which relation caps its efficiency, and what tells you?</div>
+      <div class="a">The Carnot efficiency. Heat flows between two reservoirs at fixed temperatures.</div></div>
+    <div class="card"><header><b>Contrast</b><span>Settings</span></header>
+      <div class="q">A reversible device between 300&nbsp;K and 600&nbsp;K scores 0.5 on its figure of merit. What kind of device is it?</div>
+      <div class="a">A heat engine, \(\eta = 1 - 300/600\). A refrigerator there would have a COP of 1.</div></div>
   </div>
+</div>
 </div>
 </body></html>
