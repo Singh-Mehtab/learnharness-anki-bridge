@@ -33,9 +33,9 @@ Anki Bridge is a community plugin for [LearnHarness](https://github.com/amosblom
 
 **Cards start from your graph.** Each LearnHarness idea is a single claim, linked to the ideas that support it and the teaching reply it came from. The model gets the idea, nearby linked ideas and an excerpt of that reply, so a Why card can ask for the reasoning you were taught.
 
-**You review every card.** Model-written cards are often close but not quite right, so every draft waits for you to check and edit it. Making your own cards also helps memory compared with studying a premade deck ([Pan et al., 2022](https://doi.org/10.1037/mac0000083)). The review screen is built for editing, with the source idea one click away and a live preview below each field.
+**You review every card.** Model-written cards are often close but not quite right, so every draft waits for you to check and edit it. Studies find that cards learners make themselves work better than premade decks ([Pan et al., 2022](https://doi.org/10.1037/mac0000083)), and checking and editing each draft keeps part of that work with you. The review screen is built for editing, with the source idea one click away and a live preview below each field.
 
-**It only adds notes.** Anki Bridge creates notes in its own note type. It never edits or deletes an existing note and never changes scheduling or review history. If you change a card in Anki, your change stays.
+**It only adds notes.** A send creates notes in Anki Bridge's own note type. It never edits or deletes an existing note and never changes scheduling or review history. If you change a card in Anki, your change stays. Importing a downloaded package is different, because Anki decides what an import does (see [Download a package instead](#download-a-package-instead)).
 
 **Maths and code keep their formatting.** Cards use MathJax for equations and keep fenced code blocks with their indentation, both in the preview and in Anki.
 
@@ -53,7 +53,7 @@ You don't have to flag anything. You can make cards for any idea in your graph.
 
 Open **Anki Bridge** from the LearnHarness sidebar. The page has three steps, top to bottom.
 
-Under **Ideas from**, pick a session or your whole graph, and tick the ideas you want cards for. Each idea shows where it stands: flagged, no cards yet, drafts to review, already in Anki, or changed since you made its cards. **Select ideas without cards** ticks every idea in the current view that has none. If that would be more than 1,000 ideas, it asks you to narrow the view first. To stop seeing an idea, choose **Don't make cards for this idea** from its menu.
+Under **Ideas from**, pick a session or your whole graph, and tick the ideas you want cards for. Each idea shows where it stands: flagged, no cards yet, drafts to review, already in Anki, or changed since you made its cards. **Select ideas without cards** ticks every idea in the current view that has none. If that would be more than 1,000 ideas, it asks you to narrow the view first. To leave an idea out of future card writing, choose **Don't make cards for this idea** from its menu.
 
 ![Step 1, Choose ideas. A flag banner with the note about temperatures sits above a list of ideas from the heat engines session with badges such as Flagged, No cards, 1 to review, 1 in Anki and Changed since carded. A bar at the bottom reads 7 ideas selected.](docs/images/readme/choose-ideas.png)
 
@@ -61,9 +61,9 @@ Under **Ideas from**, pick a session or your whole graph, and tick the ideas you
 
 Tick the card types you want (Fact, Equation, Why and Steps) and set the most cards per idea. **See examples** shows a sample card for each type. Leave the model picker blank to use your LearnHarness cheap model, or pick another model.
 
-Press **Write cards**. A dialog shows the number of model calls, the most cards it can write, a cost estimate for the first attempt when the model has pricing, and a summary of what will be sent to the model. Nothing is sent until you press **Start writing**.
+Press **Write cards**. A dialog shows the number of model calls, the most cards it can write, a cost estimate for the first attempt when the model has pricing, and a summary of what will be sent to the model. It also lists any ideas it will skip, such as ones too large for the model's limits. Nothing is sent until you press **Start writing**.
 
-Writing happens in the background, so you can keep learning. If a run is cancelled or a batch fails, cards from finished batches are kept. **Retry the rest** estimates again for the remaining ideas only, or **Try again** if no batch finished.
+Writing happens in the background, so you can keep learning. If a run is cancelled or a batch fails, cards from finished batches are kept. **Retry the rest** (or **Try again**, if no batch finished) makes a new estimate for the remaining ideas.
 
 ![Step 2, Write cards. Fact, Equation and Why are ticked and Steps is not, the model picker is blank, and the limit is 2 cards per idea. The Write cards dialog lists 2 ideas, up to 4 cards, Claude Haiku 4.5 as the cheap model, 1 model call or up to 3 if answers need fixing, and a cost of about one cent for the first attempt.](docs/images/readme/write.png)
 
@@ -83,7 +83,7 @@ Pick a deck (or type a new one), check the tags and press **Send to Anki**. The 
 
 **Download .apkg**, next to Send to Anki, saves the approved cards as a package file. It needs a deck name but no AnkiConnect, and Anki can be closed. Open the file with Anki, or use **File → Import**, to add the cards. The package has the same fields, formatting, tags and note type as a send.
 
-A download is not a send. The cards stay approved, they don't count as in Anki, and you can still send them. Anki decides how to match an imported package with your collection, so importing can add duplicates of cards you already sent, and Anki Bridge can't check this.
+A download is not a send. The cards stay approved, they don't count as in Anki, and you can still send them. Anki decides how to match an imported package with your collection. Depending on Anki's import settings, importing can add duplicates of cards you sent directly, or update notes from an earlier package of the same cards, including edits you made to them in Anki. Anki Bridge can't check what an import will do.
 
 ## Card types
 
@@ -102,7 +102,7 @@ A download is not a send. The cards stay approved, they don't count as in Anki, 
 | Apply | Pick the rule or method that fits a new situation | Settings, under **More card types** |
 | Contrast | Tell apart two ideas that are easy to mix up | Settings, under **More card types** |
 
-The model writes only types that fit an idea. Why needs supporting ideas in the graph, and Contrast needs a similar neighbouring idea. An idea can also get no card at all if the model can't write a useful one it can check, and it says why. The numerical values of physical constants are not carded unless you flag the idea that states one. A conversion constant you use in calculations, such as $\hbar c$, can still get a card.
+The model writes only types that fit an idea. Why needs supporting ideas in the graph, and Contrast needs a similar neighbouring idea. An idea can also get no card at all if the model can't write a useful one it can check, and it says why. The numerical values of physical constants are not carded unless you flag the idea that states one or ask for it in a flag note. A conversion constant you use in calculations, such as $\hbar c$, can still get a card.
 
 Earlier versions also drafted Compose cards. Cards you already have of that type stay readable.
 
@@ -112,9 +112,9 @@ Earlier versions also drafted Compose cards. Cards you already have of that type
 
 ## Topics to revisit
 
-Open **Topics to revisit** from the sidebar, or from **More** in step 3, and press **Check Anki reviews**. Nothing is read from Anki before you press it. Anki Bridge then reads review results for the notes it sent to your paired profile and lists a topic when one of its cards has 3 or more lapses, 2 or more Again presses on reviews in the last 30 days, or Anki's leech tag.
+Open **Topics to revisit** from the sidebar, or from **More** in step 3, and press **Check Anki reviews**. Anki Bridge reads review history only when you press it. It reads review results for the notes it sent to your paired profile and lists a topic when one of its cards has 3 or more lapses, 2 or more Again presses in the last 30 days (on reviews or relearning steps), or Anki's leech tag.
 
-Each topic shows its cards with their lapses, reviews, recent Again dates and deck, with buttons to open the session the idea came from and to show a card in Anki. The list suggests what to look at again. It doesn't prove you don't know something, because a card you keep missing may be badly worded. Results stay in memory until you press **Clear** or close LearnHarness. They are not saved, added to your graph or sent to a model.
+Each topic shows its cards with their lapses, reviews, recent Again dates and deck, with buttons to open the session the idea came from and to show a card in Anki. The list suggests what to look at again. It doesn't prove you don't know something, because a card you keep missing may be badly worded. Results stay in memory until you press **Clear**, change the Anki address, key or profile, or close LearnHarness. They are not saved, added to your graph or sent to a model.
 
 ![Topics to revisit after a check. Two topics are listed. Refrigerator coefficient of performance has 4 lapses and 3 Again presses in 30 days, with its card, review dates and a Show in Anki button. Michaelis-Menten equation below it has 2 lapses, 1 Again and a Leech badge.](docs/images/readme/topics.png)
 
@@ -163,9 +163,9 @@ From then on, the plugin checks the profile before every send and review check, 
 | To your model | The chosen ideas, nearby linked ideas, an excerpt of the reply each idea came from when there is one, your flag notes, and up to six recent cards Anki Bridge made for each idea | When you press **Start writing** |
 | Written to Anki | Approved cards as new notes in the note type `LearnHarness Basic` (fields Front, Back, Extra, Source, LH_ID and LH_Node). A send also creates the deck and the note type if they are missing. | When you press **Send to Anki** |
 | Changed in Anki on request | The `LearnHarness Basic` note type's missing fields, styling and templates | Only when you confirm a repair or reset in settings |
-| Read from Anki | The open profile, deck names and tags, the note type, and the notes Anki Bridge sent, to check they still exist | When you open the page, send, or run a check |
-| Read for Topics to revisit | Lapses, reviews, review logs, tags, deck and suspended status of the notes Anki Bridge sent to the paired profile | Only when you press **Check Anki reviews** |
-| Saved to a file | Approved cards, their source names and their Anki Bridge IDs, in an `.apkg` package | When you press **Download .apkg**. Neither Anki nor your model is contacted. |
+| Read from Anki | The open profile, deck names and tags, the note type, and the notes Anki Bridge sent, to check they still exist | Profile, decks and tags when you open the page. The rest when you send, when you run a check from the **More** menu, and when LearnHarness starts with an unconfirmed send. |
+| Read for Topics to revisit | Lapses, reviews, review logs, fields, tags, deck and suspended status of the notes Anki Bridge sent to the paired profile | Only when you press **Check Anki reviews** |
+| Saved to a file | Approved cards, their source names and their Anki Bridge and LearnHarness IDs, in an `.apkg` package | When you press **Download .apkg**. Neither Anki nor your model is contacted. |
 | Never changed | Existing note content, scheduling and review history | Never |
 
 If you set an API key, it goes with every AnkiConnect request. By default each note also gets the tags `learnharness` and `learnharness::kind::<type>` (Contrast cards use `discriminate`), so you can find plugin cards in Anki. You can turn these tags off in settings. Drafts, flags and send records stay in the plugin's own data folder inside LearnHarness. Your LearnHarness graph and sessions are read, never changed.
@@ -175,7 +175,7 @@ If you set an API key, it goes with every AnkiConnect request. By default each n
 - Cards are Basic front-and-back notes. Cloze, reversed and type-in cards are not supported.
 - Images and Mermaid diagrams cannot go in cards.
 - Card quality depends on your model, so check every draft. The writer was tuned on one lecture and has not been benchmarked on new subjects.
-- The 0.8.0 interface was checked with synthetic data in a scratch LearnHarness. The writer has not yet been tested end to end with a live model and a real Anki profile.
+- The 0.8.0 interface was checked with synthetic data in a scratch LearnHarness. The 0.8.0 writer has not yet been tested end to end with a live model and a real Anki profile.
 - Downloaded packages have been checked with SQLite and zip readers but not yet imported into Anki.
 - Sending and Topics to revisit need Anki Desktop open with AnkiConnect. Don't switch Anki profiles during a send, because AnkiConnect cannot check the profile and write in a single step.
 - An optional AnkiConnect API key is stored in plain text in the plugin's data folder.
@@ -192,9 +192,9 @@ These are plans, not commitments.
 
 **Does this replace the built-in Flashcards plugin?** No. Flashcards schedules reviews inside LearnHarness. Anki Bridge hands cards to Anki and lets Anki schedule them. The two share no data and can both be enabled.
 
-**What happens if I edit a card in Anki?** Your edit stays. The plugin never updates a note after sending it. If you write more cards for an idea, the model sees up to six recent cards Anki Bridge made for it, as the plugin stored them, and tries new angles. It does not see edits made in Anki.
+**What happens if I edit a card in Anki?** Your edit stays. The plugin never updates a note after sending it. (Re-importing a downloaded package can, depending on Anki's import settings.) If you write more cards for an idea, the model sees up to six recent cards Anki Bridge made for it, as the plugin stored them, and tries new angles. It does not see edits made in Anki.
 
-**What if a send is interrupted?** The plugin records each card before adding its note. After a crash or restart, reconnect to the same address and profile, then use **Check unconfirmed sends** in the **More** menu. It looks for each card in Anki and marks it sent or failed. Use **Retry send** only on cards marked failed. If the check itself fails, leave those cards alone and try the check again later.
+**What if a send is interrupted?** The plugin records each card before adding its note. When LearnHarness starts again, the plugin looks for those cards in Anki itself and marks each one sent or failed. If Anki wasn't open on the paired profile, reconnect to the same address and profile, then use **Check unconfirmed sends** in the **More** menu. Use **Retry send** only on cards marked failed. If the check itself fails, leave those cards alone and try the check again later.
 
 **Is it affiliated with Anki or LearnHarness?** No. It is an unofficial community plugin.
 
