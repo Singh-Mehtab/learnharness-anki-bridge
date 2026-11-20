@@ -9,16 +9,16 @@
 .idea .node { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--flag); }
 .idea .node i { width: 14px; height: 14px; border-radius: 50%; background: var(--flag); display: inline-block; }
 .idea h2 { font-family: var(--display); font-size: 28px; line-height: 1.1; margin-top: 12px; }
-.idea p { font-family: var(--sans); font-size: 16px; line-height: 1.4; color: var(--muted); margin-top: 10px; }
+.idea p { font-family: var(--sans); font-size: 17px; line-height: 1.4; color: var(--body); margin-top: 10px; }
 .idea p.stmt { color: var(--paper); }
 .card { border-radius: 10px; background: var(--panel); border: 1.5px solid var(--rule); display: flex; flex-direction: column; min-height: 236px; }
 .card.def { border-color: var(--muted); }
-.card header { display: flex; justify-content: space-between; align-items: baseline; padding: 12px 14px 0; font-size: 13px; }
+.card header { display: flex; justify-content: space-between; align-items: baseline; padding: 12px 14px 0; font-size: 14px; }
 .card header b { font-weight: 600; color: var(--draft); }
-.card header span { color: var(--faint); }
+.card header span { color: var(--muted); }
 .card.def header span { color: var(--paper); }
-.card .q { padding: 10px 14px 14px; font-family: var(--sans); font-size: 16px; line-height: 1.38; color: var(--paper); flex: 1; }
-.card .a { padding: 12px 14px 14px; border-top: 1.5px dashed var(--rule); font-family: var(--sans); font-size: 16px; line-height: 1.38; color: var(--muted); min-height: 72px; }
+.card .q { padding: 10px 14px 14px; font-family: var(--sans); font-size: 17px; line-height: 1.38; color: var(--paper); flex: 1; }
+.card .a { padding: 12px 14px 14px; border-top: 1.5px dashed var(--rule); font-family: var(--sans); font-size: 17px; line-height: 1.38; color: var(--body); min-height: 72px; }
 .card .what { padding: 0 14px 12px; font-size: 12px; color: var(--faint); line-height: 1.4; }
 </style></head>
 <body><script>document.body.className = new URLSearchParams(location.search).get("theme") || "";</script>
@@ -46,7 +46,7 @@
       <div class="q">Why can no engine between two reservoirs beat a reversible one?</div>
       <div class="a">It could drive the reversible engine backwards and break the Kelvin-Planck statement.</div></div>
     <div class="card"><header><b>Compose</b><span>optional</span></header>
-      <div class="q">All reversible engines between two reservoirs share one efficiency, and for them \(Q_c/Q_h = T_c/T_h\). What is it?</div>
+      <div class="q">All reversible engines between two reservoirs share one efficiency, and for them \(Q_c/Q_h = T_c/T_h\). What is that efficiency?</div>
       <div class="a">\(\eta = 1 - Q_c/Q_h = 1 - T_c/T_h\)</div></div>
     <div class="card"><header><b>Contrast</b><span>optional</span></header>
       <div class="q">Which can exceed 1: an engine's efficiency or a refrigerator's coefficient of performance?</div>

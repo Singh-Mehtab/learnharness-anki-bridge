@@ -4,20 +4,20 @@
 #art { width: 1280px; padding: 40px 48px 44px; border-radius: 18px; border: 1px solid var(--rule); }
 .zones { display: grid; grid-template-columns: 3fr 2fr; position: relative; }
 .zone h2 { font-family: var(--display); font-size: 30px; font-weight: 700; letter-spacing: -0.2px; }
-.zone p.sub { font-size: 14px; color: var(--muted); margin-top: 6px; }
+.zone p.sub { font-size: 16px; color: var(--muted); margin-top: 6px; }
 .zone.anki { padding-left: 44px; }
 .divider { position: absolute; left: 60%; top: -8px; bottom: -8px; border-left: 2px dashed var(--rule); }
-.divider .tag { position: absolute; top: 192px; left: -66px; width: 132px; text-align: center; background: var(--ink); padding: 8px 0; font-size: 13px; color: var(--paper); line-height: 1.35; }
+.divider .tag { position: absolute; top: 192px; left: -66px; width: 132px; text-align: center; background: var(--ink); padding: 8px 0; font-size: 15px; color: var(--paper); line-height: 1.35; }
 .divider .tag b { display: block; color: var(--flag); font-weight: 600; }
 .track { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0; margin-top: 34px; }
 .track.anki { grid-template-columns: repeat(2, 1fr); }
 .st { position: relative; padding-right: 18px; }
 .st svg { display: block; height: 96px; }
-.st .n { font-size: 13px; color: var(--muted); margin-top: 16px; }
-.st h3 { font-size: 17px; font-weight: 600; margin-top: 4px; }
-.st p { font-family: var(--sans); font-size: 16px; line-height: 1.4; color: var(--muted); margin-top: 8px; max-width: 228px; }
+.st .n { font-size: 15px; color: var(--muted); margin-top: 16px; }
+.st h3 { font-size: 20px; font-weight: 600; margin-top: 4px; }
+.st p { font-family: var(--sans); font-size: 19px; line-height: 1.35; color: var(--body); margin-top: 8px; max-width: 228px; }
 .st p em { font-style: normal; color: var(--paper); }
-.foot { margin-top: 34px; padding-top: 18px; border-top: 1px solid var(--rule); display: grid; grid-template-columns: 3fr 2fr; font-family: var(--sans); font-size: 15px; color: var(--muted); }
+.foot { margin-top: 34px; padding-top: 18px; border-top: 1px solid var(--rule); display: grid; grid-template-columns: 3fr 2fr; font-family: var(--sans); font-size: 17px; color: var(--body); }
 .foot span + span { padding-left: 44px; }
 .key { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin: 0 6px 0 14px; vertical-align: 0; }
 .key:first-child { margin-left: 0; }
@@ -39,7 +39,7 @@
           </svg>
           <div class="n">Step 1</div>
           <h3>Choose ideas</h3>
-          <p>Pick ideas from a session or the whole graph. <em>Flag for Anki</em> marks a teaching reply as you go.</p>
+          <p>Tick ideas from a session. <em>Flag for Anki</em> marks replies as you learn.</p>
         </div>
         <div class="st">
           <svg viewBox="0 0 200 96" width="200">
@@ -52,7 +52,7 @@
           </svg>
           <div class="n">Step 2</div>
           <h3>A model drafts</h3>
-          <p>Your LearnHarness model writes draft cards in the background, using linked ideas and the reply each came from.</p>
+          <p>Your model writes drafts in the background from each idea and its context.</p>
         </div>
         <div class="st">
           <svg viewBox="0 0 200 96" width="200">
@@ -65,7 +65,7 @@
           </svg>
           <div class="n">Step 3</div>
           <h3>You review</h3>
-          <p>Edit, drop or approve each card beside the idea it came from. Maths and code render as you type.</p>
+          <p>Edit, drop or approve each draft. The source idea is one click away.</p>
         </div>
       </div>
     </div>
@@ -83,7 +83,7 @@
           </svg>
           <div class="n">Send</div>
           <h3>New notes</h3>
-          <p>Approved cards go to the deck you pick, with tags, through AnkiConnect.</p>
+          <p>Approved cards go to your deck through AnkiConnect.</p>
         </div>
         <div class="st">
           <svg viewBox="0 0 200 96" width="200">
@@ -94,7 +94,7 @@
           </svg>
           <div class="n">Review</div>
           <h3>Anki schedules</h3>
-          <p>Anki keeps the schedule and your review history. The plugin never edits or deletes a note.</p>
+          <p>Anki schedules reviews. The plugin never edits or deletes notes.</p>
         </div>
       </div>
     </div>

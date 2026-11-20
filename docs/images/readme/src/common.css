@@ -10,6 +10,7 @@
   --paper: #e9e7e2;
   --muted: #8d8a84;
   --faint: #5d5b57;
+  --body: #b3afa7;
   --flag: #d6a531;
   --draft: #7aa2d6;
   --anki: #63b07f;
@@ -25,6 +26,7 @@ body.light {
   --paper: #1c1b19;
   --muted: #6c6963;
   --faint: #a29e96;
+  --body: #4a4843;
   --flag: #a87a06;
   --draft: #2f64a8;
   --anki: #2e7d4b;
