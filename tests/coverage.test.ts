@@ -102,11 +102,13 @@ test('session defaults and bulk selection consume the same coverage eligibility'
   assert.deepEqual(rows.filter(isUncardedNode).map(n => n.id), ['id-0']);
 });
 
-async function fixture(fn: (host: FakeHost, c: ReturnType<FakeHost['context']>, directory: string, close: () => Promise<void>) => Promise<void>) {
+async function fixture(fn: (host: FakeHost, c: ReturnType<FakeHost['context']>, directory: string, close: () => Promise<void>) => Promise<void>, seed?: State) {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'anki-coverage-'));
   const host = new FakeHost(), c = host.context(directory); let close: (() => Promise<void>) | undefined;
-  try { close = await activate(c.ctx); await fn(host, c, directory, close); }
-  finally { await close?.(); await rm(directory, { recursive: true, force: true }); }
+  try {
+    if (seed) await writeFile(path.join(directory, 'state.json'), JSON.stringify(seed));
+    close = await activate(c.ctx); await fn(host, c, directory, close);
+  } finally { await close?.(); await rm(directory, { recursive: true, force: true }); }
 }
 
 test('coverage works without catalog/model/Anki, persists dismissals, and refuses late handlers', () => fixture(async (host, c, directory, close) => {
@@ -170,10 +172,10 @@ test('delivery mutation succeeds when warnings for a saved source cannot be refr
 
 test('dismissal rejects malformed, stale and missing sources and never drops waiting cards', () => fixture(async (host, c) => {
   await assert.rejects(c.call('dismissNode', { nodeId: node.id, statementHash: 'invalid' }), /current source/);
-  await assert.rejects(c.call('dismissNode', { nodeId: node.id, statementHash: '0'.repeat(64) }), /Source changed/);
+  await assert.rejects(c.call('dismissNode', { nodeId: node.id, statementHash: '0'.repeat(64) }), /Idea changed\. Refresh first/);
   await assert.rejects(c.call('dismissNode', { nodeId: 'gone', statementHash: source.statementHash }), /missing/);
   await c.call('draft', { nodeId: node.id, front: 'Question', back: 'Answer' });
-  await assert.rejects(c.call('dismissNode', { nodeId: node.id, statementHash: source.statementHash }), /waiting/);
+  await assert.rejects(c.call('dismissNode', { nodeId: node.id, statementHash: source.statementHash }), /Review or drop waiting cards/);
   assert.equal((await c.call('snapshot')).cards[0].status, 'draft');
   const original = c.ctx.learning.graph;
   c.ctx.learning.graph = () => { throw new Error('Graph unavailable'); };
@@ -181,6 +183,31 @@ test('dismissal rejects malformed, stale and missing sources and never drops wai
   await assert.rejects(c.call('dismissNode', { nodeId: node.id, statementHash: source.statementHash }), /Graph unavailable/);
   c.ctx.learning.graph = original; assert.equal(host.workers.starts.length, 0);
 }));
+
+test('dismissal directs an unconfirmed send to Check unconfirmed sends, even with a waiting draft', () => fixture(async (_host, c) => {
+  await assert.rejects(c.call('dismissNode', { nodeId: node.id, statementHash: source.statementHash }), {
+    message: 'Use Check unconfirmed sends before dismissing this idea.',
+  });
+  const [idea] = (await c.call<CoverageContext>('coverageContext')).nodes;
+  assert.equal(idea.coverage.unresolved, 1);
+  assert.equal(idea.coverage.dismissed, false);
+  assert.deepEqual((await c.call('snapshot')).cards.map((c: Card) => c.status), ['draft', 'sending']);
+}, { ...initialState(), destination: paired, cards: [card(), card({ status: 'sending', destination: paired, deck: 'One' })] }));
+
+test('dismissal explains which sent cards block it and still allows dismissal after the source changes', () => fixture(async (_host, c) => {
+  const input = { nodeId: node.id, statementHash: source.statementHash };
+  await assert.rejects(c.call('dismissNode', input), /This destination has sent cards for this idea version/);
+  const changed = `${node.statement} Added condition.`;
+  const read = c.ctx.learning.graph;
+  c.ctx.learning.graph = () => {
+    const graph = read();
+    return { ...graph, propositions: graph.propositions.map(p => p.id === node.id ? { ...p, statement: changed } : p) };
+  };
+  const current = { nodeId: node.id, statementHash: statementHash(changed) };
+  await c.call('dismissNode', current);
+  await assert.rejects(c.call('dismissNode', current), /Idea is already dismissed/);
+  assert.equal((await c.call('snapshot')).cards[0].status, 'sent');
+}, { ...initialState(), settings: { ...initialState().settings, url: paired.url }, destination: paired, cards: [sent()] }));
 
 test('dismiss/restore cannot revive old confirmation and changed coverage requires a fresh estimate', () => fixture(async (host, c) => {
   await c.call('generationSettings', { model: { provider: 'scratch', id: 'writer' } });
@@ -201,7 +228,7 @@ test('pending generation is activity, blocks bulk selection/dismissal, and zero-
   await until(() => host.workers.starts.length === 1);
   let n = (await c.call<CoverageContext>('coverageContext')).nodes[0];
   assert.equal(n.coverage.state, 'no-cards'); assert.equal(n.coverage.generating, true); assert.equal(n.coverage.uncarded, false);
-  await assert.rejects(c.call('dismissNode', { nodeId: node.id, statementHash: source.statementHash }), /settle generation/);
+  await assert.rejects(c.call('dismissNode', { nodeId: node.id, statementHash: source.statementHash }), /Wait for card writing to finish/);
   host.workers.succeed('task-1', { targets: [{ nodeId: node.id, cards: [], skipReason: 'Prior knowledge' }] });
   await until(async () => (await c.call('generationStatus')).generations[0].status === 'completed');
   n = (await c.call<CoverageContext>('coverageContext')).nodes[0];
@@ -215,10 +242,10 @@ test('dismissal racing a card-producing worker result preserves the draft and re
   const p = await c.call('preflight', { nodeIds: [node.id] }); await c.call('generate', { preflightId: p.preflightId });
   await until(() => host.workers.starts.length === 1);
   host.workers.succeed('task-1', { targets: [{ nodeId: node.id, cards: [{ kind: 'fact', front: 'Which condition makes this fixture result valid?', back: 'Assumption A.' }] }] });
-  await assert.rejects(c.call('dismissNode', { nodeId: node.id, statementHash: source.statementHash }), /waiting|settle generation/);
+  await assert.rejects(c.call('dismissNode', { nodeId: node.id, statementHash: source.statementHash }), /Wait for card writing to finish|Review or drop waiting cards/);
   await until(async () => (await c.call('generationStatus')).generations[0].status === 'completed');
   assert.equal((await c.call('snapshot')).cards.length, 1);
-  await assert.rejects(c.call('dismissNode', { nodeId: node.id, statementHash: source.statementHash }), /waiting/);
+  await assert.rejects(c.call('dismissNode', { nodeId: node.id, statementHash: source.statementHash }), /Review or drop waiting cards/);
   assert.equal((await c.call<CoverageContext>('coverageContext')).nodes[0].coverage.state, 'drafts-waiting');
 }));
 

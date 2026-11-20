@@ -106,14 +106,14 @@ export class SessionService {
     const sessionId = sessionIdInput(input.sessionId), messageIds = messageIdsInput(input.messageIds);
     const note = input.note === undefined ? undefined : normalizeNote(input.note);
     const record = this.session(sessionId);
-    if (!record) throw new Error('Session not found. It may have been deleted.');
+    if (!record) throw new Error('Session not found.');
     if (record.kind !== undefined && record.kind !== 'teach') throw new Error('Flags are for teaching sessions.');
     // Only saved teacher prose can anchor extracted nodes; streamed or optimistic
     // messages have no saved ID yet.
     const failed = failedOutputCallIds(record.messages);
     for (const id of messageIds) {
       const message = record.messages.find(m => m.id === id);
-      if (!message || !teacherProse(message, failed).length) throw new Error('That reply is not saved yet. Wait for it to finish, then flag again.');
+      if (!message || !teacherProse(message, failed).length) throw new Error('Reply not saved yet. Wait for it to finish, then flag again.');
     }
     let created = false;
     const flag = await this.delivery.exclusive(async () => {
@@ -128,7 +128,7 @@ export class SessionService {
           result = { ...first, messageIds: ids, note: keptNote, sessionTitle: record.title || first.sessionTitle };
           state.flags = state.flags.filter(f => !rest.includes(f)).map(f => f === first ? result : f);
         } else {
-          if (state.flags.length >= MAX_FLAGS) throw new Error(`Anki Bridge holds ${MAX_FLAGS} flags. Remove some before adding more.`);
+          if (state.flags.length >= MAX_FLAGS) throw new Error(`Limit is ${MAX_FLAGS} flags. Remove some first.`);
           created = true;
           result = { id: randomUUID(), sessionId, sessionTitle: record.title ?? '', messageIds, note: note ?? '', flaggedAt: new Date().toISOString() };
           state.flags.push(result);

@@ -307,7 +307,7 @@ test('the flag cap gives a clear message and leaves state valid', async () => wi
   const h = host(), store = await StateStore.open(dir), delivery = new DeliveryService(store);
   const session = new SessionService(h.learning as never, store, delivery);
   try {
-    await assert.rejects(session.command('flag', { sessionId: 's1', messageIds: ['a1'] }), /holds 5000 flags/);
+    await assert.rejects(session.command('flag', { sessionId: 's1', messageIds: ['a1'] }), /Limit is 5000 flags\. Remove some first/);
     assert.equal(store.snapshot().flags.length, 5000);
   } finally { await delivery.close(); await store.close(); }
 }));

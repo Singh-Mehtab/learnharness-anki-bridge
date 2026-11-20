@@ -109,7 +109,7 @@ export class DeliveryService {
   async exclusive<T>(operation: () => Promise<T>, background = false): Promise<T> {
     this.active();
     while (this.busy && (background || this.busyOwner === 'background')) { await this.busy.catch(() => undefined); this.active(); }
-    if (this.busy) throw new Error('Anki Bridge is busy. Wait for the current operation to finish.');
+    if (this.busy) throw new Error('Busy. Wait for the current action to finish.');
     // Set the fence before invoking operation, even if it throws synchronously.
     const pending = Promise.resolve().then(operation);
     this.busy = pending; this.busyOwner = background ? 'background' : 'user';
@@ -136,16 +136,16 @@ export class DeliveryService {
   private async destination(client: AnkiClient): Promise<Destination> {
     this.active();
     const state = this.store.snapshot();
-    if (!state.destination || state.destination.url !== state.settings.url) throw new Error('Pair Anki Bridge with this URL and profile before sending or reconciling.');
+    if (!state.destination || state.destination.url !== state.settings.url) throw new Error('Choose a profile for this address in settings first.');
     const profile = await client.call<unknown>('getActiveProfile');
     this.active();
-    if (profile === null) throw new Error('Open a profile in Anki. Sending and reconciliation are blocked.');
+    if (profile === null) throw new Error('Open a profile in Anki.');
     if (typeof profile !== 'string' || !profile) throw new Error('AnkiConnect returned an invalid active profile.');
-    if (profile !== state.destination.profile) throw new Error(`Destination mismatch. Open the paired Anki profile "${state.destination.profile}" or explicitly re-pair in settings.`);
+    if (profile !== state.destination.profile) throw new Error(`Anki has a different profile open. Open "${state.destination.profile}" or choose the profile again in settings.`);
     return { url: state.settings.url, profile };
   }
   private async find(client: AnkiClient, card: Card, destination: Destination): Promise<number[]> {
-    if (card.status === 'sending' && !sameDestination(card.destination, destination)) throw new Error('An unresolved delivery belongs to another destination. Reconnect and pair with its original URL and profile first.');
+    if (card.status === 'sending' && !sameDestination(card.destination, destination)) throw new Error('An unconfirmed send belongs to another profile or address. Switch back to it first.');
     await this.destination(client);
     const found = noteIds(await client.call('findNotes', { query: query(card.id) }));
     await this.destination(client);
@@ -159,7 +159,7 @@ export class DeliveryService {
     for (const card of this.store.snapshot().cards.filter(c => c.status === 'sending')) {
       const found = await this.find(client, card, destination);
       if (found.length) { await this.recordFound(card.id, found, destination); matched.push(card.id); }
-      else await this.patchCard(card.id, { status: 'failed', lastError: 'No note found for the interrupted delivery. You may retry this approved card.' });
+      else await this.patchCard(card.id, { status: 'failed', lastError: 'No note found for the interrupted send. You can retry this card.' });
     }
     this.recoveryError = undefined;
     return matched;
@@ -211,9 +211,9 @@ export class DeliveryService {
         this.active();
         if (!connection.profile) throw new Error('Open a profile in Anki before pairing.');
         const destination = { url: this.store.snapshot().settings.url, profile: connection.profile };
-        if (value.expectedDestination !== undefined) expectDestination(value.expectedDestination, destination, 'The destination changed while pairing was being confirmed. Test the connection and confirm again.');
+        if (value.expectedDestination !== undefined) expectDestination(value.expectedDestination, destination, 'Destination changed while confirming. Test the connection and confirm again.');
         const unresolved = this.store.snapshot().cards.filter(c => c.status === 'sending');
-        if (unresolved.some(c => !sameDestination(c.destination, destination))) throw new Error('Resolve interrupted deliveries in their original Anki profile and URL before re-pairing.');
+        if (unresolved.some(c => !sameDestination(c.destination, destination))) throw new Error('Check unconfirmed sends in their original profile and address before switching.');
         await this.save(s => { s.destination = destination; });
         this.recoveryError = undefined;
       } else if (name === 'draft') {
@@ -234,7 +234,7 @@ export class DeliveryService {
         await this.save(s => { s.cards.push(card); });
       } else if (name === 'edit') {
         const card = this.card(value.id);
-        if (card.noteId || ['sent', 'sending', 'dropped'].includes(card.status)) throw new Error('Sent or unresolved cards cannot be edited by Anki Bridge. Edit sent notes in Anki.');
+        if (card.noteId || ['sent', 'sending', 'dropped'].includes(card.status)) throw new Error('Sent cards cannot be edited here. Edit them in Anki.');
         const front = requiredText(value.front, 'Front'), back = requiredText(value.back, 'Back'), extra = optionalText(value.extra, 'Extra');
         renderMarkdown(front); renderMarkdown(back); renderMarkdown(extra);
         await this.patchCard(card.id, { front, back, extra, status: 'draft', lastError: undefined });
@@ -249,13 +249,13 @@ export class DeliveryService {
       } else if (name === 'send') {
         const ids = idsInput(value.ids);
         const deck = requiredText(value.deck, 'Deck').trim();
-        if (deck.length > 250 || /[\r\n]/.test(deck)) throw new Error('Use a deck name shorter than 251 characters on one line.');
+        if (deck.length > 250 || /[\r\n]/.test(deck)) throw new Error('Use a one-line deck name under 251 characters.');
         const settings = this.store.snapshot().settings;
         const chosenTags = validateTags(value.tags === undefined ? expandTagTemplate(settings.tagTemplate ?? '', deck) : value.tags);
         for (const id of ids) this.card(id);
         // The settings dialog can re-pair while a review view still shows the old destination.
         const paired = this.store.snapshot().destination;
-        if (paired) expectDestination(value.expectedDestination, paired, 'The paired Anki destination changed. Check the destination shown and send again.');
+        if (paired) expectDestination(value.expectedDestination, paired, 'Paired destination changed. Check it and send again.');
         const client = this.client(), destination = await this.destination(client);
         // Reconcile all interrupted cards first, never against another collection.
         const found = (await this.recover(client, destination)).filter(id => ids.includes(id));
@@ -299,13 +299,13 @@ export class DeliveryService {
               else { await this.patchCard(card.id, { status: 'failed', lastError: this.message(error) }); failed.push(card.id); }
               continue;
             }
-            await this.patchCard(card.id, { lastError: `Delivery outcome is uncertain: ${this.message(error)}. Reconcile before retrying.` });
+            await this.patchCard(card.id, { lastError: `Send unconfirmed: ${this.message(error)}. Use Check unconfirmed sends before retrying.` });
             this.recoveryError = this.message(error);
             throw error;
           }
           if (!Number.isSafeInteger(result) || (result as number) <= 0) {
-            await this.patchCard(card.id, { lastError: 'AnkiConnect returned an invalid addNote result. Reconcile before retrying.' });
-            throw new Error('Uncertain addNote result. Reconcile before retrying.');
+            await this.patchCard(card.id, { lastError: 'Invalid AnkiConnect result. Use Check unconfirmed sends before retrying.' });
+            throw new Error('Unconfirmed send. Use Check unconfirmed sends before retrying.');
           }
           // Profile changes during a call leave the UUID unresolved rather than asserting a destination.
           await this.destination(client);
@@ -342,7 +342,7 @@ export class DeliveryService {
         if (name === 'updateStyling' && value.confirmed !== true) throw new Error('Confirm that Anki-side styling and template edits will be replaced.');
         // Same guard as send: a stale view must not change another profile's note type.
         const paired = this.store.snapshot().destination;
-        if (paired) expectDestination(value.expectedDestination, paired, 'The paired Anki destination changed. Check the destination shown and confirm again.');
+        if (paired) expectDestination(value.expectedDestination, paired, 'Paired destination changed. Check it and confirm again.');
         const client = this.client();
         await this.destination(client);
         if (name === 'repairFields') await repairFields(client); else await updateStyling(client);

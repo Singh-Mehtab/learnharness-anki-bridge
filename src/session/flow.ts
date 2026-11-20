@@ -145,14 +145,14 @@ export function validFlag(v: unknown): v is Flag {
 }
 
 export function validateFlags(value: unknown): asserts value is Flag[] {
-  if (!Array.isArray(value) || value.length > MAX_FLAGS) throw new Error('Invalid flag list. The file has not been reset.');
+  if (!Array.isArray(value) || value.length > MAX_FLAGS) throw new Error('Invalid flag list.');
   const ids = new Set<string>(), anchors = new Set<string>();
   for (const flag of value) {
-    if (!validFlag(flag) || ids.has(flag.id)) throw new Error('Invalid flag. The file has not been reset.');
+    if (!validFlag(flag) || ids.has(flag.id)) throw new Error('Invalid flag.');
     ids.add(flag.id);
     for (const m of flag.messageIds) {
       const key = `${flag.sessionId}\u0000${m}`;
-      if (anchors.has(key)) throw new Error('Two flags claim the same message. The file has not been reset.');
+      if (anchors.has(key)) throw new Error('Two flags claim the same message.');
       anchors.add(key);
     }
   }

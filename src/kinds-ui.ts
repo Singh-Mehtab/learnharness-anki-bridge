@@ -9,12 +9,12 @@ export const KIND_NAMES: Record<StoredCardKind, string> = {
 
 /** What each kind drafts, in one short sentence. */
 export const KIND_HELP: Record<CoreCardKind, string> = {
-  fact: "Remember a definition, unit, prefix or other fact.",
-  equation: "Recall a formula or relation.",
+  fact: "Remember a definition, unit or other fact.",
+  equation: "Recall a formula.",
   why: "Explain why a result holds.",
-  steps: "Recall the next step in a method you carry out.",
-  apply: "Pick the rule or method that fits a new situation.",
-  discriminate: "Tell apart two ideas that are easy to mix up.",
+  steps: "Recall the next step of a method.",
+  apply: "Pick the rule that fits a new situation.",
+  discriminate: "Tell apart two easily confused ideas.",
 };
 
 /** Illustrative cards, not model output. Plain text, since this copy is not rendered as maths. */

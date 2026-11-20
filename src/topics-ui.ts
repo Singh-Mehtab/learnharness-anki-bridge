@@ -32,18 +32,16 @@ export function cardEvidence(c: CardEvidence): string {
 
 const REASON: Record<CardEvidence["reasons"][number], string> = { lapses: "3+ lapses", again: "2+ Again in 30 days", leech: "Leech" };
 
-export function mountTopics(ctx: PluginFrontendContext, container: HTMLElement, signal: AbortSignal, peers: Peers = new Set()): () => void {
-  const root = el("div", undefined, "anki-bridge ab-page ab-topics");
-  const head = el("header", undefined, "ab-topics-head");
-  head.append(el("h2", "Topics to revisit", "ab-step-title"));
-  const intro = el("p", "Anki Bridge can look at how the cards it sent are going in Anki and list the topics they came from. A topic is listed when one of its cards has 3 or more lapses, 2 or more Again presses on reviews in the last 30 days, or a leech tag. These are suggestions to look at, not a judgement of what you know: a missed card can mean the card is unclear, the idea needs more practice, or an ordinary slip of memory. Check the card and its source before deciding.", "ab-intro");
-  const privacy = el("p", undefined, "ab-note ab-topics-privacy");
-  const actions = el("div", undefined, "ab-actions");
+export function mountTopics(ctx: PluginFrontendContext, container: HTMLElement, signal: AbortSignal, peers: Peers = new Set(), actions: HTMLElement = el("div")): () => void {
+  const root = el("div", undefined, "ab-topics");
+  const intro = el("p", undefined, "ab-muted ab-topics-intro");
+  if (!actions.isConnected) root.append(actions);
+  actions.classList.add("ab-actions");
   const feedback = status();
   const summary = el("p", undefined, "ab-muted ab-topics-summary");
   const list = el("div", undefined, "ab-topic-list");
-  const footer = el("ul", undefined, "ab-note ab-topics-footer");
-  root.append(head, intro, privacy, actions, feedback, summary, list, footer);
+  const footer = el("p", undefined, "ab-muted ab-topics-footer");
+  root.append(intro, feedback, summary, list, footer);
   container.append(root);
 
   let disposed = false, busy = false, stale = false, refreshPending = false, loads = 0;
@@ -56,32 +54,28 @@ export function mountTopics(ctx: PluginFrontendContext, container: HTMLElement, 
     const s = barScope.reset();
     actions.replaceChildren();
     const destination = paired();
-    privacy.textContent = destination
-      ? `Checking reads review results from the paired Anki profile "${destination.profile}", only for notes Anki Bridge sent there. Nothing in Anki changes. Results stay in this window's memory until you clear them or close LearnHarness. They are not saved, added to the graph or sent to a model.`
-      : "Choose an Anki profile in settings first. Checking reads review results only for notes Anki Bridge sent to that profile, and changes nothing in Anki.";
-    button(ctx, actions, s, { label: busy ? "Checking…" : "Check Anki reviews", variant: "default", disabled: busy || !destination, onClick: () => void runCheck() });
-    if (!destination) button(ctx, actions, s, { label: "Open settings", onClick: () => ctx.app.openSettings() });
+    const criteria = "Ideas whose cards have 3+ lapses, 2+ Again presses in 30 days, or a leech tag.";
+    intro.textContent = `${criteria} ${destination ? `Checks profile "${destination.profile}".` : "Connect to Anki in settings first."}`;
     if (check) button(ctx, actions, s, { label: "Clear", variant: "ghost", disabled: busy, onClick: () => void clear() });
+    if (!destination) button(ctx, actions, s, { label: "Open settings", onClick: () => ctx.app.openSettings() });
+    button(ctx, actions, s, { label: busy ? "Checking…" : "Check Anki reviews", variant: "default", disabled: busy || !destination, onClick: () => void runCheck() });
   }
 
   function render(): void {
     const s = scope.reset();
-    list.replaceChildren(); footer.replaceChildren(); summary.textContent = "";
-    if (!check) {
-      list.append(el("p", "Not checked yet. Nothing has been read from Anki.", "ab-empty"));
-      return;
-    }
+    list.replaceChildren(); footer.textContent = ""; summary.textContent = "";
+    if (!check) { summary.textContent = "Not checked yet."; return; }
     const c = check.counts;
-    summary.textContent = `${stale ? "Last checked" : "Checked"} at ${time(check.checkedAt)} in profile "${check.destination.profile}". ${plural(c.checked, "card")} read.${stale ? " This result may be out of date." : ""}`;
-    if (!c.sent) list.append(el("p", "No cards have been sent to this profile yet.", "ab-empty"));
-    else if (!check.topics.length) list.append(el("p", "No topics to revisit right now.", "ab-empty"));
+    summary.textContent = `${stale ? "Last checked" : "Checked"} at ${time(check.checkedAt)} in "${check.destination.profile}". ${plural(c.checked, "card")} read.${stale ? " May be out of date." : ""}`;
+    if (!c.sent) list.append(el("p", "No cards sent to this profile yet.", "ab-empty"));
+    else if (!check.topics.length) list.append(el("p", c.checked ? "No review signals found." : "No cards could be checked.", "ab-empty"));
     for (const topic of check.topics) list.append(renderTopic(topic, s));
     const notes: string[] = [];
-    if (c.quietTopics) notes.push(`${plural(c.quietTopics, "other topic")} had reviews with nothing to flag.`);
-    if (c.notReviewed) notes.push(`${plural(c.notReviewed, "card")} not reviewed in Anki yet.`);
-    if (c.changed) notes.push(`${plural(c.changed, "card")} changed in Anki (different note type or delivery ID) and ${c.changed === 1 ? "was" : "were"} skipped.`);
-    if (c.missing) notes.push(`${plural(c.missing, "card")} no longer in Anki and ${c.missing === 1 ? "was" : "were"} skipped.`);
-    for (const text of notes) footer.append(el("li", text));
+    if (c.quietTopics) notes.push(`Nothing flagged in ${plural(c.quietTopics, "other topic")}.`);
+    if (c.notReviewed) notes.push(`${plural(c.notReviewed, "card")} not reviewed yet.`);
+    if (c.changed) notes.push(`Skipped ${plural(c.changed, "card")} with a different note type or delivery ID.`);
+    if (c.missing) notes.push(`Skipped ${plural(c.missing, "card")} no longer in Anki.`);
+    footer.textContent = notes.join(" ");
   }
 
   function renderTopic(topic: Topic, s: AbortSignal): HTMLElement {
@@ -93,17 +87,17 @@ export function mountTopics(ctx: PluginFrontendContext, container: HTMLElement, 
     if (topic.totals.lapses) title.append(pill(plural(topic.totals.lapses, "lapse"), "warn"));
     if (topic.totals.recentAgain) title.append(pill(`${topic.totals.recentAgain} Again in 30 days`, "warn"));
     if (topic.totals.leech) title.append(pill("Leech", "bad"));
-    if (topic.inGraph === false) title.append(pill("No longer in graph", "neutral"));
+    if (topic.inGraph === false) title.append(pill("Missing from this graph read", "neutral"));
     headRow.append(title);
     section.append(headRow);
     const body = el("div", undefined, "ab-topic-body");
-    body.append(el("p", topicSummary(topic), "ab-topic-summary"));
-    if (topic.sessions.length) {
-      const links = el("div", undefined, "ab-actions ab-topic-sessions");
-      links.append(el("span", "From", "ab-muted"));
-      for (const session of topic.sessions) button(ctx, links, s, { label: `Open session: ${session.name}`, variant: "ghost", onClick: () => ctx.app.openSession(session.id) });
-      body.append(links);
-    } else body.append(el("p", "No source session recorded for this topic.", "ab-muted"));
+    // The source session is the main way back: a missed card points at the idea, not at Anki.
+    for (const session of topic.sessions) {
+      const row = el("div", undefined, "ab-actions ab-topic-sessions");
+      row.append(el("span", `From ${session.name}`, "ab-muted"));
+      button(ctx, row, s, { label: "Open session", variant: "default", onClick: () => ctx.app.openSession(session.id) });
+      body.append(row);
+    }
     for (const card of topic.cards) body.append(renderCard(card, s));
     section.append(body);
     return section;
@@ -112,8 +106,6 @@ export function mountTopics(ctx: PluginFrontendContext, container: HTMLElement, 
   function renderCard(card: CardEvidence, s: AbortSignal): HTMLElement {
     const article = el("article", undefined, "ab-topic-card");
     article.dataset.lhId = card.lhId;
-    const reasons = el("div", undefined, "ab-card-title");
-    for (const reason of card.reasons) reasons.append(pill(REASON[reason], reason === "leech" ? "bad" : "warn"));
     const grid = el("div", undefined, "ab-card-fields");
     for (const [name, text] of [["Front", card.front], ["Back", card.back]] as const) {
       const col = el("section", undefined, "ab-card-field");
@@ -125,11 +117,11 @@ export function mountTopics(ctx: PluginFrontendContext, container: HTMLElement, 
     const foot = el("div", undefined, "ab-card-foot");
     foot.append(el("p", cardEvidence(card), "ab-muted ab-topic-evidence"));
     const buttons = el("div", undefined, "ab-actions");
-    button(ctx, buttons, s, { label: "Show in Anki", onClick: async () => {
+    button(ctx, buttons, s, { label: "Show in Anki", variant: "ghost", onClick: async () => {
       try { await ctx.call("show", { ids: [card.lhId] }); } catch (error) { if (alive()) feedback.show(message(error), "error"); }
     } });
     foot.append(buttons);
-    article.append(reasons, grid, foot);
+    article.append(grid, foot);
     return article;
   }
 

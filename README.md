@@ -12,12 +12,12 @@
   <a href="#install">Install</a> ·
   <a href="#how-it-works">How it works</a> ·
   <a href="#card-types">Card types</a> ·
-  <a href="#topics-to-revisit">Topics to revisit</a> ·
+  <a href="#check-anki-reviews">Check Anki reviews</a> ·
   <a href="#what-goes-where">What goes where</a> ·
   <a href="CHANGELOG.md">Changelog</a>
 </p>
 
-<p align="center"><sub>Version 0.8.0 · No public release yet · Build from source</sub></p>
+<p align="center"><sub>Version 0.8.2 · No public release yet · Build from source</sub></p>
 
 Anki Bridge is a community plugin for [LearnHarness](https://github.com/amosblomqvist/learnharness). It reads the ideas in your knowledge graph, has your model draft flashcards from them, and adds the ones you approve to [Anki](https://apps.ankiweb.net/). You edit and approve every draft, and Anki schedules the reviews. Only cards you approve are added, either when you press Send or when you import a package you downloaded.
 
@@ -26,7 +26,7 @@ Anki Bridge is a community plugin for [LearnHarness](https://github.com/amosblom
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/readme/how-it-works-dark.png">
   <source media="(prefers-color-scheme: light)" srcset="docs/images/readme/how-it-works-light.png">
-  <img src="docs/images/readme/how-it-works-light.png" alt="Diagram in two halves. In LearnHarness, step 1 is choosing ideas, and replies you flag during teaching mark their ideas. In step 2 a model drafts cards, and in step 3 you review them. A dashed line separates this from Anki. You press Send to add approved cards, or download an .apkg to import, and Anki schedules the reviews. Topics to revisit reads them back when you ask. Only cards you approve cross the line.">
+  <img src="docs/images/readme/how-it-works-light.png" alt="Diagram in two halves. In LearnHarness, step 1 is choosing ideas, and replies you flag during teaching mark their ideas. In step 2 a model drafts cards, and in step 3 you review them. A dashed line separates this from Anki. You press Send to add approved cards, or download an .apkg to import, and Anki schedules the reviews. Check Anki reviews reads them back when you ask. Only cards you approve cross the line.">
 </picture>
 
 ## Why it works this way
@@ -47,11 +47,9 @@ When a teaching reply covers something you want to keep, press **Flag for Anki**
 
 You don't have to flag anything. You can make cards for any idea in your graph.
 
-![A LearnHarness teaching session about heat engines, with Flag for Anki and Make cards in the top bar. The Flag for Anki dialog shows an excerpt of the latest reply and the note "I mix up which temperature goes on top."](docs/images/readme/flag.png)
-
 ### 1. Choose ideas
 
-Open **Anki Bridge** from the LearnHarness sidebar. The page has three steps, top to bottom.
+Open **Anki Bridge** from the LearnHarness sidebar. Under **Make cards**, follow the three steps from top to bottom.
 
 Under **Ideas from**, pick a session or your whole graph, and tick the ideas you want cards for. Each idea shows where it stands: flagged, no cards yet, drafts to review, already in Anki, or changed since you made its cards. **Select ideas without cards** ticks every idea in the current view that has none. If that would be more than 1,000 ideas, it asks you to narrow the view first. To leave an idea out of future card writing, choose **Don't make cards for this idea** from its menu.
 
@@ -65,19 +63,13 @@ Press **Write cards**. A dialog shows the number of model calls, the most cards 
 
 Writing happens in the background, so you can keep learning. If a run is cancelled or a batch fails, cards from finished batches are kept. **Retry the rest** (or **Try again**, if no batch finished) makes a new estimate for the remaining ideas.
 
-![Step 2, Write cards. Fact, Equation and Why are ticked and Steps is not, the model picker is blank, and the limit is 2 cards per idea. The Write cards dialog lists 2 ideas, up to 4 cards, Claude Haiku 4.5 as the cheap model, 1 model call or up to 3 if answers need fixing, and a cost of about one cent for the first attempt.](docs/images/readme/write.png)
+![Write cards with Fact, Equation and Why selected, followed by the review and send step.](docs/images/readme/write.png)
 
 ### 3. Review and send
 
 Every draft shows its front, back and optional extra field, with maths and code rendered. Open **Idea when this card was written** to compare a card with its source. Edit, drop or approve cards one at a time, or approve all drafts once you have read them. Long cards get a warning but can still be approved. You can also write a card by hand from the **More** menu.
 
-![Editing a card. The raw text with MathJax delimiters sits above a live preview of the rendered question and the equation for Carnot efficiency.](docs/images/readme/edit.png)
-
-![A Steps card for insertion sort whose answer is a syntax-highlighted Python loop with its indentation intact.](docs/images/readme/code.png)
-
 Pick a deck (or type a new one), check the tags and press **Send to Anki**. The deck field suggests your Anki decks and says when a name is new. The tags field suggests tags from your Anki collection and starts from a template you set once in settings. A green panel confirms how many cards were sent, to which deck, with which tags, and **Show in Anki** opens them in Anki's browser.
-
-![A green confirmation panel reading 5 cards sent to Anki, with the deck Physics::Thermodynamics, the tags that were added, and Show in Anki and Dismiss buttons.](docs/images/readme/sent.png)
 
 #### Download a package instead
 
@@ -106,28 +98,24 @@ The model writes only types that fit an idea. Why needs supporting ideas in the 
 
 Earlier versions also drafted Compose cards. Cards you already have of that type stay readable.
 
-<p align="center">
-  <img src="docs/images/readme/more-card-types.png" alt="The More card types panel in Anki Bridge settings. It explains that Fact, Equation, Why and Steps are chosen on the Write step, then offers Apply and Contrast checkboxes, each with an example card." width="640">
-</p>
+## Check Anki reviews
 
-## Topics to revisit
-
-Open **Topics to revisit** from the sidebar, or from **More** in step 3, and press **Check Anki reviews**. Anki Bridge reads review history only when you press it. It reads review results for the notes it sent to your paired profile and lists a topic when one of its cards has 3 or more lapses, 2 or more Again presses in the last 30 days (on reviews or relearning steps), or Anki's leech tag.
+Open **Anki Bridge**, select the **Check Anki reviews** tab, and press **Check Anki reviews**. Anki Bridge reads review history only when you press it. It reads review results for the notes it sent to your paired profile and lists a topic when one of its cards has 3 or more lapses, 2 or more Again presses in the last 30 days (on reviews or relearning steps), or Anki's leech tag.
 
 Each topic shows its cards with their lapses, reviews, recent Again dates and deck, with buttons to open the session the idea came from and to show a card in Anki. The list suggests what to look at again. It doesn't prove you don't know something, because a card you keep missing may be badly worded. Results stay in memory until you press **Clear**, change the Anki address, key or profile, or close LearnHarness. They are not saved, added to your graph or sent to a model.
 
-![Topics to revisit after a check. Two topics are listed. Refrigerator coefficient of performance has 4 lapses and 3 Again presses in 30 days, with its card, review dates and a Show in Anki button. Michaelis-Menten equation below it has 2 lapses, 1 Again and a Leech badge.](docs/images/readme/topics.png)
+![Check Anki reviews tab with two topics. Each shows a card, review counts, Open session and Show in Anki.](docs/images/readme/topics.png)
 
 ## Install
 
 > [!NOTE]
-> Anki Bridge has no public release yet. Version 0.8.1 is the current build for personal use. Use the `anki-bridge-v0.8.1.zip` install archive if you have it, or build it from source using the [install guide](docs/install.md#build-the-zip-from-source). GitHub's automatically generated source zip is not the install archive.
+> Anki Bridge has no public release yet. Version 0.8.2 is the current build for personal use. Use the `anki-bridge-v0.8.2.zip` install archive if you have it, or build it from source using the [install guide](docs/install.md#build-the-zip-from-source). GitHub's automatically generated source zip is not the install archive.
 
 ### What you need
 
 - [LearnHarness](https://github.com/amosblomqvist/learnharness) with community plugins (plugin API v1). Tested on 0.6.1 on macOS. The plugin allows later versions but has not been tested on them.
 - A model set up in LearnHarness, for writing cards. Choosing ideas, estimating cost and sending make no model calls. Writing cards uses your provider's quota.
-- For sending and Topics to revisit, Anki Desktop 26.08 or later with the [AnkiConnect](https://git.sr.ht/~foosoft/anki-connect) add-on, running while you use them. Tested with AnkiConnect 26.10.11.0 and 26.11.15.0. Builds without `getActiveProfile` are refused, because the plugin uses it to check it is writing to the right profile. **Download .apkg** works without AnkiConnect.
+- For sending and checking Anki reviews, Anki Desktop 26.08 or later with the [AnkiConnect](https://git.sr.ht/~foosoft/anki-connect) add-on, running while you use them. Tested with AnkiConnect 26.10.11.0 and 26.11.15.0. Builds without `getActiveProfile` are refused, because the plugin uses it to check it is writing to the right profile. **Download .apkg** works without AnkiConnect.
 - To build the zip yourself, Node.js 23.6 or later, npm and the `zip` command. You don't need these to install a prebuilt zip.
 
 ### Steps
@@ -152,10 +140,6 @@ Skip this if you only want to download packages. Otherwise, open Anki on the pro
 
 From then on, the plugin checks the profile before every send and review check, and stops if a different one is open.
 
-<p align="center">
-  <img src="docs/images/readme/settings.png" alt="Anki Bridge settings inside LearnHarness Settings. Connect to Anki has the address http://127.0.0.1:8765, an empty API key field, and Save and Test connection buttons. Anki profile reads No profile chosen yet, with a Use the open profile button." width="720">
-</p>
-
 ## What goes where
 
 | | What | When |
@@ -164,7 +148,7 @@ From then on, the plugin checks the profile before every send and review check, 
 | Written to Anki | Approved cards as new notes in the note type `LearnHarness Basic` (fields Front, Back, Extra, Source, LH_ID and LH_Node). A send also creates the deck and the note type if they are missing. | When you press **Send to Anki** |
 | Changed in Anki on request | The `LearnHarness Basic` note type's missing fields, styling and templates | Only when you confirm a repair or reset in settings |
 | Read from Anki | The open profile, deck names and tags, the note type, and the notes Anki Bridge sent, to check they still exist | Profile, decks and tags when you open the page. The rest when you send, when you run a check from the **More** menu, and when LearnHarness starts with an unconfirmed send. |
-| Read for Topics to revisit | Lapses, reviews, review logs, fields, tags, deck and suspended status of the notes Anki Bridge sent to the paired profile | Only when you press **Check Anki reviews** |
+| Read for review checks | Lapses, reviews, review logs, fields, tags, deck and suspended status of the notes Anki Bridge sent to the paired profile | Only when you press **Check Anki reviews** |
 | Saved to a file | Approved cards, their source names and their Anki Bridge and LearnHarness IDs, in an `.apkg` package | When you press **Download .apkg**. Neither Anki nor your model is contacted. |
 | Never changed | Existing note content, scheduling and review history | Never |
 
@@ -175,16 +159,16 @@ If you set an API key, it goes with every AnkiConnect request. By default each n
 - Cards are Basic front-and-back notes. Cloze, reversed and type-in cards are not supported.
 - Images and Mermaid diagrams cannot go in cards.
 - Card quality depends on your model, so check every draft. The writer was tuned on one lecture and has not been benchmarked on new subjects.
-- The 0.8.0 interface was checked with synthetic data in a scratch LearnHarness. Native Windows testing of 0.8.1 remains open, as does an end-to-end test of the 0.8.0 writer with a live model and a real Anki profile.
+- The 0.8.2 interface was checked with synthetic data in a scratch LearnHarness. Native Windows testing of 0.8.1 remains open, as does an end-to-end test of the 0.8.0 writer with a live model and a real Anki profile.
 - Downloaded packages have been checked with SQLite and zip readers but not yet imported into Anki.
-- Sending and Topics to revisit need Anki Desktop open with AnkiConnect. Don't switch Anki profiles during a send, because AnkiConnect cannot check the profile and write in a single step.
+- Sending and review checks need Anki Desktop open with AnkiConnect. Don't switch Anki profiles during a send, because AnkiConnect cannot check the profile and write in a single step.
 - An optional AnkiConnect API key is stored in plain text in the plugin's data folder.
 
 ## Roadmap
 
 These are plans, not commitments.
 
-- Use 0.8.0 day to day and test card quality on material the writer was not tuned on.
+- Use Anki Bridge day to day and test card quality on material the writer was not tuned on.
 - A first public release.
 - An idea for later: practice sessions aimed at topics to revisit.
 

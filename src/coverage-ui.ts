@@ -78,7 +78,7 @@ export class CoveragePicker {
       this.clear = button(ctx, this.footer, signal, { label: "Clear", onClick: () => this.select([]) });
     }
     this.footer.prepend(this.summary);
-    this.history.append(this.historySummary, el("p", "These ideas are missing from the current graph read. Their cards are kept.", "ab-muted ab-history-note"), this.historicalRows);
+    this.history.append(this.historySummary, el("p", "Their cards are kept.", "ab-muted ab-history-note"), this.historicalRows);
     this.root.append(this.toolbar, this.quick, this.warning, this.selectionWarning, this.rows, this.history, this.footer);
     this.render();
   }
@@ -122,7 +122,7 @@ export class CoveragePicker {
   markStale(): void { this.stale = true; this.options.changed("read"); this.render(); }
   private withinLimit(count: number): boolean {
     this.selectionWarning.textContent = count > MAX_SELECTED_NODES
-      ? `That would select ${count} ideas. The limit is ${MAX_SELECTED_NODES}. Narrow the search first.` : "";
+      ? `Limit is ${MAX_SELECTED_NODES} ideas. Narrow the search.` : "";
     return count <= MAX_SELECTED_NODES;
   }
   select(ids: readonly string[], backfillNodeIds: readonly string[] = [], resetFilters = false): void {
@@ -189,13 +189,13 @@ export class CoveragePicker {
   }
   private render(): void {
     this.rows.replaceChildren(); this.historicalRows.replaceChildren();
-    this.warning.textContent = this.stale ? "This list may be out of date. Refresh to update it before writing cards." : this.view.pairingWarning
-      ? "The Anki address changed since you chose a profile. Choose the profile again in settings." : "";
+    this.warning.textContent = this.stale ? "List may be out of date. Refresh it." : this.view.pairingWarning
+      ? "Anki address changed. Choose the profile again in settings." : "";
     this.search.disabled = this.scope.disabled = this.stale;
     const visible = this.visible();
     const historical = visible.filter(n => this.historical(n));
     this.history.hidden = !historical.length;
-    this.historySummary.textContent = `Ideas no longer in the graph (${historical.length})`;
+    this.historySummary.textContent = `Ideas missing from this graph read (${historical.length})`;
     const uncarded = visible.filter(n => this.eligible(n) && isUncardedNode(n));
     this.bulk?.update({ label: `Select ideas without cards (${uncarded.length})`, disabled: this.stale || !uncarded.length });
     const flagged = visible.filter(n => n.flagged && this.eligible(n));
@@ -208,7 +208,7 @@ export class CoveragePicker {
     this.footer.dataset.empty = String(!this.selected.size);
     const current = visible.filter(n => !this.historical(n));
     if (!current.length) {
-      const empty = el("li", this.view.nodes.length ? "No ideas match this search." : this.options.empty?.() ?? "No ideas yet.", "ab-empty");
+      const empty = el("li", this.view.nodes.length ? "No matches." : this.options.empty?.() ?? "No ideas yet.", "ab-empty");
       this.rows.append(empty);
     }
     for (const n of current) this.rows.append(this.renderRow(n));

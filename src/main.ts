@@ -1,5 +1,6 @@
 import type { PluginFrontendContext } from "../sdk/index.d.ts";
 import { mountDrafting } from "./drafting-ui.ts";
+import { ICON } from "./icons.ts";
 import { mountReview } from "./review-ui.ts";
 import { mountSources, registerSessionActions, SessionRequests } from "./session-ui.ts";
 import { mountSettings } from "./settings-ui.ts";
@@ -7,10 +8,9 @@ import { mountTopics } from "./topics-ui.ts";
 import type { Peers } from "./settings-ui.ts";
 import { el, stepHeading } from "./ui.ts";
 
-/** Main page: three numbered steps, as in a guided flow. Settings hold connection and upkeep. */
+/** Card drafting and Anki review checks share one page. */
 function mount(ctx: PluginFrontendContext, container: HTMLElement, signal: AbortSignal, requests: SessionRequests, peers: Peers): () => void {
   const root = el("div", undefined, "anki-bridge ab-page");
-  const intro = el("p", "Pick ideas, let a model draft cards, then check each one before it goes to Anki. Nothing is sent without your approval.", "ab-intro");
 
   const ideas = el("section", undefined, "ab-step");
   const ideasSource = el("div"), ideasList = el("div");
@@ -25,7 +25,44 @@ function mount(ctx: PluginFrontendContext, container: HTMLElement, signal: Abort
   const reviewBody = el("div");
   review.append(stepHeading(3, "Review and send", reviewMenu), reviewBody);
 
-  root.append(intro, ideas, write, review);
+  const tabs = el("div", undefined, "ab-tabs");
+  tabs.setAttribute("role", "tablist");
+  tabs.setAttribute("aria-label", "Anki Bridge");
+  const cardsTab = el("button", "Make cards", "ab-tab");
+  const topicsTab = el("button", "Check Anki reviews", "ab-tab");
+  const cards = el("div"), topics = el("div");
+  cards.append(ideas, write, review);
+  const topicsActions = el("div"), topicsBody = el("div");
+  topics.append(topicsActions, topicsBody);
+  const pairs = [[cardsTab, cards], [topicsTab, topics]] as const;
+  function selectTab(index: number, focus = false): void {
+    pairs.forEach(([tab, panel], i) => {
+      const selected = i === index;
+      tab.setAttribute("aria-selected", String(selected));
+      tab.tabIndex = selected ? 0 : -1;
+      panel.hidden = !selected;
+    });
+    if (focus) pairs[index][0].focus();
+  }
+  pairs.forEach(([tab, panel], i) => {
+    tab.type = "button";
+    tab.id = `ab-tab-${i}`;
+    tab.setAttribute("role", "tab");
+    tab.setAttribute("aria-controls", `ab-panel-${i}`);
+    panel.id = `ab-panel-${i}`;
+    panel.setAttribute("role", "tabpanel");
+    panel.setAttribute("aria-labelledby", tab.id);
+    tab.addEventListener("click", () => selectTab(i), { signal });
+    tab.addEventListener("keydown", event => {
+      if (event.key === "ArrowRight" || event.key === "ArrowLeft" || event.key === "Home" || event.key === "End") {
+        event.preventDefault();
+        selectTab(event.key === "Home" ? 0 : event.key === "End" ? 1 : 1 - i, true);
+      }
+    }, { signal });
+    tabs.append(tab);
+  });
+  selectTab(0);
+  root.append(tabs, cards, topics);
   container.append(root);
 
   let reviewHandle: ReturnType<typeof mountReview> | undefined;
@@ -34,18 +71,19 @@ function mount(ctx: PluginFrontendContext, container: HTMLElement, signal: Abort
     nodeId => { void reviewHandle?.showWaiting(nodeId); }, peers);
   reviewHandle = mountReview(ctx, reviewBody, signal, { peers, headerAside: reviewMenu, onChanged: () => drafting.refresh() });
   const sources = mountSources(ctx, ideasSource, signal, { requests, drafting });
-  return () => { sources(); drafting.dispose(); reviewHandle?.dispose(); root.remove(); };
+  const unsubscribeRequests = requests.subscribe(() => {
+    const active = root.ownerDocument.activeElement;
+    selectTab(0, !topics.hidden && (topicsTab.contains(active) || topics.contains(active)));
+  });
+  const disposeTopics = mountTopics(ctx, topicsBody, signal, peers, topicsActions);
+  return () => { unsubscribeRequests(); sources(); drafting.dispose(); reviewHandle?.dispose(); disposeTopics(); root.remove(); };
 }
 
 export function activate(ctx: PluginFrontendContext): void {
   const requests = new SessionRequests(), peers: Peers = new Set();
   ctx.cleanup(ctx.registerView({ id: "bridge", name: "Anki Bridge", mount: (container, signal) => mount(ctx, container, signal, requests, peers) }));
   registerSessionActions(ctx, requests);
-  ctx.cleanup(ctx.registerAction({ id: "open-bridge", name: "Anki Bridge", run: () => ctx.app.openView("bridge") }));
+  ctx.cleanup(ctx.registerAction({ id: "open-bridge", name: "Anki Bridge", icon: ICON, run: () => ctx.app.openView("bridge") }));
   ctx.cleanup(ctx.placeAction({ id: "bridge-sidebar", actionId: "open-bridge", location: "sidebar" }));
-  // Topics to revisit reads Anki only when the user presses Check Anki reviews on that page.
-  ctx.cleanup(ctx.registerView({ id: "topics", name: "Topics to revisit", mount: (container, signal) => mountTopics(ctx, container, signal, peers) }));
-  ctx.cleanup(ctx.registerAction({ id: "open-topics", name: "Topics to revisit", run: () => ctx.app.openView("topics") }));
-  ctx.cleanup(ctx.placeAction({ id: "topics-sidebar", actionId: "open-topics", location: "sidebar" }));
   ctx.cleanup(ctx.registerSettings((container, signal) => mountSettings(ctx, container, signal, peers)));
 }

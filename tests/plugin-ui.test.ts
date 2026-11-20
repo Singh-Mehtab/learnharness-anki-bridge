@@ -101,7 +101,7 @@ async function setup(options: { handler?: (name: string, input: any) => unknown;
     status: () => container.querySelector(".ab-send-bar + .ab-status")!.textContent,
     more: async (label: string | RegExp) => { button("More", container).click(); await chooseMenu(label); },
     openSidebar: () => {
-      assert.deepEqual(placements.map(p => [p.actionId, p.location]), [["flag-for-anki", "top-bar"], ["make-cards", "top-bar"], ["open-bridge", "sidebar"], ["open-topics", "sidebar"]]);
+      assert.deepEqual(placements.map(p => [p.actionId, p.location]), [["flag-for-anki", "top-bar"], ["make-cards", "top-bar"], ["open-bridge", "sidebar"]]);
       actions.get("open-bridge")?.run(); return openedView;
     },
     settingsOpened: () => settingsOpened,
@@ -145,7 +145,7 @@ test("a Settings refresh from Write cannot overwrite a newer card-type save", as
     hold = true;
     why.click(); await tick();
     hold = false;
-    assert.equal(held, 2, "held the Review and Settings reloads from Write before saving Apply");
+    assert.equal(held, 3, "held the Review, Settings and Anki reviews reloads from Write before saving Apply");
     apply.click(); await tick();
     assert.equal(apply.checked, true);
     assert.ok(state.generationSettings.enabledKinds.includes("apply"));
@@ -163,12 +163,12 @@ test("Settings switch Apply and Contrast on for drafting, with examples, and Wri
     assert.ok(panel, "card types panel");
     const boxes = () => Array.from(panel.querySelectorAll("input[type=checkbox]")) as unknown as HTMLInputElement[];
     assert.deepEqual(Array.from(panel.querySelectorAll("label") as ArrayLike<HTMLElement>).map(l => l.textContent), [
-      "Apply: pick the rule or method that fits a new situation.", "Contrast: tell apart two ideas that are easy to mix up."]);
+      "Apply: pick the rule that fits a new situation.", "Contrast: tell apart two easily confused ideas."]);
     assert.deepEqual(boxes().map(b => b.checked), [false, false], "off by default");
     assert.match(panel.textContent!, /Front: You know an electron beam's momentum.*Front: A proton speeds up/s);
     assert.doesNotMatch(s.host.textContent!, /Compose/);
     const write = () => f.container.querySelector(".ab-kind-help")!.textContent!;
-    assert.doesNotMatch(write(), /Also on in Settings/);
+    assert.doesNotMatch(write(), /Also on/);
 
     // Write changed after Settings loaded; the Settings toggle must keep that change.
     f.state.generationSettings.enabledKinds = ["fact", "equation", "why"];
@@ -177,11 +177,11 @@ test("Settings switch Apply and Contrast on for drafting, with examples, and Wri
     assert.deepEqual(f.state.generationSettings.enabledKinds, ["fact", "equation", "why", "apply"]);
     assert.match(panel.textContent!, /Apply on\./);
     assert.deepEqual(boxes().map(b => b.checked), [true, false]);
-    assert.match(write(), /Also on in Settings: Apply\./, "the open Write step updates");
+    assert.match(write(), /Also on: Apply\./, "the open Write step updates");
 
     boxes()[0]!.checked = false; boxes()[0]!.dispatchEvent(f.event("change")); await tick();
     assert.deepEqual(f.state.generationSettings.enabledKinds, ["fact", "equation", "why"]);
-    assert.doesNotMatch(write(), /Also on in Settings/);
+    assert.doesNotMatch(write(), /Also on/);
 
     // A Write change reaches an open Settings panel: with Contrast alone it is locked on, until Write turns Fact on.
     f.state.generationSettings.enabledKinds = ["discriminate"];
@@ -210,11 +210,11 @@ test("settings save a key without showing the stored one, warn about localhost a
     const s = await f.mountSettings();
     const [url, key] = Array.from(s.host.querySelectorAll("input")) as unknown as HTMLInputElement[];
     assert.equal(key.type, "password"); assert.equal(key.value, "");
-    assert.match(key.placeholder, /Saved key/);
+    assert.match(key.placeholder, /Saved\. Type to replace\./);
     assert.equal(f.button("Save", s.host).disabled, true, "nothing to save yet");
     f.type(url, "http://localhost:8765");
-    assert.match(s.host.textContent!, /Use 127\.0\.0\.1 instead of localhost/);
-    assert.match(s.host.textContent!, /Saving a different address removes the saved API key/);
+    assert.match(s.host.textContent!, /Use 127\.0\.0\.1, not localhost/);
+    assert.match(s.host.textContent!, /Saving a new address removes the saved key/);
     f.type(url, "http://127.0.0.1:8765/"); f.type(key, "secret");
     f.button("Save", s.host).click(); await tick();
     assert.deepEqual(f.calls.find(c => c.name === "settings")!.input, { url: "http://127.0.0.1:8765/", apiKey: "secret" });
@@ -235,7 +235,7 @@ test("changing the address clears a key typed for the previous one", async () =>
     f.type(key, "typed-for-old");
     f.type(url, "http://127.0.0.1:9999");
     assert.equal(key.value, "");
-    assert.match(s.host.textContent!, /The key you typed was cleared because the address changed\./);
+    assert.match(s.host.textContent!, /Key cleared because the address changed\. Type it again\./);
     f.type(key, "typed-for-new");
     assert.doesNotMatch(s.host.textContent!, /The key you typed was cleared/);
     s.close();
@@ -248,19 +248,19 @@ test("the connection test reports Anki closed, no profile, or a short success wi
   try {
     const s = await f.mountSettings();
     f.button("Test connection", s.host).click(); await tick();
-    assert.match(s.host.textContent!, /Couldn't reach Anki at http:\/\/127\.0\.0\.1:8765\/\. Open Anki, check that AnkiConnect is installed, then test again\./);
+    assert.match(s.host.textContent!, /Couldn't reach Anki at http:\/\/127\.0\.0\.1:8765\/\. Open Anki and check AnkiConnect is installed\./);
     assert.equal(s.host.querySelector('.ab-status[data-tone="error"]') !== null, true);
     result = () => ({ profile: null, decks: [] });
     f.button("Test connection", s.host).click(); await tick();
-    assert.match(s.host.textContent!, /no profile is loaded/);
+    assert.match(s.host.textContent!, /No profile loaded\. Open a profile in Anki/);
     result = () => ({ profile: "Throwaway", decks: ["Scratch", "New::Deck"] });
     f.button("Test connection", s.host).click(); await tick();
-    assert.match(s.host.textContent!, /Connected\. Profile Throwaway is open with 2 decks\./);
+    assert.match(s.host.textContent!, /Connected\. Profile Throwaway, 2 decks\./);
     assert.doesNotMatch(s.host.textContent!, /New::Deck/);
     const [url] = Array.from(s.host.querySelectorAll("input")) as unknown as HTMLInputElement[];
     f.type(url, "http://127.0.0.1:9999");
     f.button("Test connection", s.host).click(); await tick();
-    assert.match(s.host.textContent!, /Save the new address or key first/);
+    assert.match(s.host.textContent!, /Save your changes first/);
     assert.equal(connectionText("u", new Error("HTTP 500")).text, "Connection failed: HTTP 500");
     s.close();
   } finally { await f.dispose(); }
@@ -271,15 +271,15 @@ test("choosing a profile needs dialog confirmation, refuses a closed profile, an
   let profile: string | null = null;
   const f = await setup({ state, connection: () => ({ profile, decks: [] }) });
   try {
-    assert.match(f.container.textContent!, /Choose an Anki profile in settings before sending/);
+    assert.match(f.container.textContent!, /Choose an Anki profile to send\. Download \.apkg works without one/);
     f.button("Open settings", f.container).click(); assert.equal(f.settingsOpened(), 1);
     const s = await f.mountSettings();
     f.button("Use the open profile", s.host).click(); await tick();
     assert.equal(f.dialog(), null, "no dialog without an open profile");
-    assert.match(s.host.textContent!, /no profile is loaded/);
+    assert.match(s.host.textContent!, /No profile loaded\. Open a profile in Anki/);
     profile = "Throwaway";
     f.button("Use the open profile", s.host).click(); await tick();
-    assert.match(f.dialog()!.textContent!, /New cards will go to the Anki profile Throwaway/);
+    assert.match(f.dialog()!.textContent!, /Send new cards to profile Throwaway at http:\/\/127\.0\.0\.1:8765\//);
     f.button("Cancel", f.dialog()!).click(); await tick();
     assert.equal(f.calls.some(c => c.name === "pair"), false);
     f.button("Use the open profile", s.host).click(); await tick();
@@ -287,7 +287,7 @@ test("choosing a profile needs dialog confirmation, refuses a closed profile, an
     assert.deepEqual(f.calls.find(c => c.name === "pair")!.input, { confirmed: true, expectedDestination: { url: "http://127.0.0.1:8765/", profile: "Throwaway" } });
     assert.match(s.host.textContent!, /New cards go to profile Throwaway/);
     await tick();
-    assert.doesNotMatch(f.container.textContent!, /Choose an Anki profile in settings/, "the open page refreshed after pairing");
+    assert.doesNotMatch(f.container.textContent!, /Choose an Anki profile to send/, "the open page refreshed after pairing");
     s.close();
   } finally { await f.dispose(); }
 });
@@ -297,7 +297,7 @@ test("note type repairs name the shown profile and resetting styling is a confir
   try {
     const s = await f.mountSettings();
     f.button("Reset styling and templates", s.host).click(); await tick();
-    assert.match(f.dialog()!.textContent!, /profile Throwaway.*will be lost/s);
+    assert.match(f.dialog()!.textContent!, /profile Throwaway.*Your edits to them in Anki are lost/s);
     f.button("Cancel", f.dialog()!).click(); await tick();
     assert.equal(f.calls.some(c => c.name === "updateStyling"), false);
     f.button("Reset styling and templates", s.host).click(); await tick();
@@ -336,10 +336,21 @@ test("cards show Front, Back and Extra side by side, and source text stays inert
   try {
     const columns = Array.from(f.review().querySelectorAll(".ab-card-field h4")).map(h => h.textContent);
     assert.deepEqual(columns, ["Front", "Back", "Extra"]);
-    assert.match(f.review().textContent!, /The idea has changed since this card was written/);
+    assert.match(f.review().textContent!, /Idea changed since this card was written/);
     assert.equal(f.container.querySelector("script"), null);
     assert.match(f.review().querySelector(".ab-card-source")!.textContent!, /<script>Untrusted source<\/script>/);
     assert.equal(f.container.querySelector("iframe"), null, "no raw field formatting preview");
+  } finally { await f.dispose(); }
+});
+
+test("a missing source warning refers to the graph snapshot without implying deletion", async () => {
+  const state = fixture();
+  state.cards = [card("a", { sourceMissing: true, sourceStatement: "Saved source statement" })];
+  const f = await setup({ state });
+  try {
+    assert.equal(f.review().querySelector(".ab-card-warning")!.textContent,
+      "Source idea wasn't found in this graph snapshot. Check the card before approving.");
+    assert.match(f.review().querySelector(".ab-card-source")!.textContent!, /Saved source statement/);
   } finally { await f.dispose(); }
 });
 
@@ -350,7 +361,7 @@ test("editing previews live, warns about long cards, keeps typing through a refr
     f.button("Edit", f.review().querySelector(".ab-card")!).click(); await tick();
     const front = f.review().querySelector("textarea") as unknown as HTMLTextAreaElement;
     f.type(front, "word ".repeat(32));
-    assert.match(f.review().textContent!, /Long card: 32 words on the front/);
+    assert.match(f.review().textContent!, /Long front: 32 words/);
     assert.match(f.review().querySelector(".ab-markdown-preview")!.textContent!, /word word/);
     await f.resync();
     assert.equal((f.review().querySelector("textarea") as unknown as HTMLTextAreaElement).value, "word ".repeat(32), "unsaved text survives a refresh");
@@ -537,9 +548,9 @@ test("approve and send use named calls with deck, tags and destination; an empty
     assert.deepEqual(f.calls.find(c => c.name === "approve")!.input, { ids: ["a"] });
     assert.equal(f.review().querySelector(".ab-card")!.getAttribute("data-status"), "approved", "the approved card stays in place");
     f.type(f.deck(), "");
-    assert.match(f.container.textContent!, /Type a deck name/);
+    assert.equal(f.deck().value, "", "the deck field stays empty after clearing it");
     assert.equal(f.tags().value, "", "no invented deck in the tags");
-    assert.match(f.container.textContent!, /Tags fill in from your template once you choose a deck\./);
+    assert.match(f.container.textContent!, /Tags fill in after you choose a deck\./);
     f.button("Send 1 card to Anki").click(); await tick();
     assert.match(f.status()!, /Choose a deck first\./);
     assert.equal(f.deck().value, "", "the error does not refill the last deck");
@@ -550,7 +561,7 @@ test("approve and send use named calls with deck, tags and destination; an empty
     f.type(f.deck(), "New::Deck");
     assert.match(f.container.textContent!, /Existing deck\./);
     f.type(f.deck(), "Brand new");
-    assert.match(f.container.textContent!, /New deck\. Anki Bridge creates it when you send\./);
+    assert.match(f.container.textContent!, /New deck\./);
     f.type(f.tags(), "YEAR_3::NPP extra");
     f.button("Send 1 card to Anki").click(); await tick();
     assert.deepEqual(f.calls.find(c => c.name === "send")!.input, { ids: ["a"], deck: "Brand new", tags: ["YEAR_3::NPP", "extra"], expectedDestination: paired() });
@@ -598,7 +609,7 @@ test("Drop all unsent from an open More menu confirms the current cards after re
     await f.resync();
     assert.match(f.review().textContent!, /Idea b/);
     await chooseMenu("Drop all unsent cards (1)"); await tick();
-    assert.match(f.dialog()!.textContent!, /Drop 2 cards that you have not sent/);
+    assert.match(f.dialog()!.textContent!, /Drop 2 unsent cards/);
     assert.equal(f.calls.some(c => c.name === "drop"), false, "wait for confirmation of the updated count");
     f.button("Drop cards", f.dialog()!).click(); await tick();
     assert.deepEqual(f.calls.filter(c => c.name === "drop").map(c => c.input), [{ ids: ["a", "b"] }]);
@@ -627,7 +638,7 @@ test("sent and unconfirmed cards offer no resend, and recovery lives in the menu
   const f = await setup({ state });
   try {
     const unsure = f.review().querySelector(".ab-card")!;
-    assert.match(unsure.textContent!, /isn't sure this card reached Anki/);
+    assert.match(unsure.textContent!, /May not have reached Anki\. Use Check unconfirmed sends/);
     for (const label of ["Approve", "Edit", "Send this card", "Retry send", "Drop"]) assert.equal(f.find(label, unsure), undefined, label);
     const history = f.container.querySelector(".ab-history") as unknown as HTMLDetailsElement;
     history.open = true; history.dispatchEvent(f.event("toggle"));
@@ -675,7 +686,7 @@ test("a send error is shown, and saved per-card results are refreshed without of
 test("Anki being closed shows a banner on the page and an unknown deck hint", async () => {
   const f = await setup({ connection: () => { throw new Error("Could not complete the AnkiConnect request."); } });
   try {
-    assert.match(f.container.textContent!, /Anki isn't reachable\. Open Anki to send cards and see your decks\./);
+    assert.match(f.container.textContent!, /Anki isn't reachable\. Open Anki\./);
     assert.match(f.container.textContent!, /Open Anki to check this deck name\./);
   } finally { await f.dispose(); }
 });
@@ -901,7 +912,7 @@ test("a saved address that differs from the pairing offers no decks until it is 
     assert.equal(f.calls.filter(c => c.name === "connection").length, asked, "no lookup at the unpaired address");
     assert.deepEqual(options(), []);
     f.type(f.deck(), "Scratch");
-    assert.match(f.container.textContent!, /Choose the profile again in settings to check this deck name at the new address\./);
+    assert.match(f.container.textContent!, /Address changed\. Choose the profile again in settings\./);
   } finally { await f.dispose(); }
 });
 
@@ -950,7 +961,7 @@ test("tags suggest the profile's Anki tags and take their casing from the collec
     const options = () => Array.from(f.container.querySelectorAll("#anki-bridge-tags option") as unknown as ArrayLike<HTMLOptionElement>).map(o => o.value);
     assert.equal(f.tags().getAttribute("list"), "anki-bridge-tags");
     assert.equal(f.tags().value, "YEAR_3::NPP1::Lecture_01", "the template's {deck} follows the collection's YEAR_3 casing");
-    assert.match(f.container.textContent!, /Your Anki tags are suggested as you type\./);
+    assert.match(f.container.textContent!, /Separate tags with spaces\./);
     f.type(f.tags(), "YEAR_3::NPP1::Lecture_01 ph");
     assert.deepEqual(options(), ["YEAR_3::NPP1::Lecture_01 physics"]);
     f.type(f.tags(), "y");
@@ -999,7 +1010,7 @@ test("Download .apkg works unpaired, saves the package, keeps cards approved and
   };
   try {
     assert.equal(f.button(/^Send 2 cards to Anki/).disabled, false);
-    assert.match(f.button(/^Send 2 cards/).title, /Choose an Anki profile/);
+    assert.match(f.button(/^Send 2 cards/).title, /Choose a profile in settings\./);
     const download = f.button("Download .apkg");
     assert.equal(download.disabled, false, "no profile or running Anki needed");
     f.type(f.deck(), "");
@@ -1016,9 +1027,9 @@ test("Download .apkg works unpaired, saves the package, keeps cards approved and
     assert.equal(saved[0].bytes.readUInt32LE(0), 0x04034b50, "the saved file is the zip package");
     const panel = f.container.querySelector(".ab-sent")!;
     assert.equal(panel.getAttribute("data-kind"), "download");
-    assert.match(panel.textContent!, /Download of 2 cards requested as anki-bridge-synthetic-deck\.apkg/);
-    assert.match(panel.textContent!, /Not sent\. These cards stay approved and don't count as in Anki/);
-    assert.match(panel.textContent!, /Importing can add duplicates of cards already in Anki, or update notes from an earlier package/);
+    assert.match(panel.textContent!, /Download requested: anki-bridge-synthetic-deck\.apkg, 2 cards/);
+    assert.match(panel.textContent!, /Saved, not sent\. Open the file in Anki to import it/);
+    assert.match(panel.textContent!, /Importing may duplicate cards already in Anki or update notes from an earlier package/);
     assert.doesNotMatch(panel.textContent!, /sent to Anki/);
     assert.equal(f.calls.some(c => c.name === "send"), false, "a download never sends");
     assert.deepEqual(Array.from(f.review().querySelectorAll(".ab-card")).map(c => c.getAttribute("data-status")), ["approved", "draft", "failed"], "nothing marked sent");
@@ -1047,7 +1058,7 @@ test("a found note is not called newly sent or assigned the requested deck and t
     f.button("Send 1 card to Anki").click(); await tick();
     const sent = f.container.querySelector(".ab-sent") as unknown as HTMLElement;
     assert.equal(sent.hidden, false);
-    assert.match(sent.textContent!, /Found 1 existing note in Anki\. No deck or tag changes were made/);
+    assert.match(sent.textContent!, /Found 1 existing note in Anki\. Left unchanged/);
     assert.doesNotMatch(sent.textContent!, /sent to Anki|Not the actual deck|not-applied/);
     f.button("Show in Anki", sent).click(); await tick();
     assert.match(f.status()!, /No matching cards found/);

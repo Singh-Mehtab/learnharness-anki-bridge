@@ -11,9 +11,9 @@ import { initialState, StateStore } from "../src/anki/state.ts";
 import type { State } from "../src/anki/state.ts";
 import { REVIEW_READ_ACTIONS } from "../src/anki/review-reader.ts";
 import { ReviewService } from "../src/reviews/service.ts";
-import type { PluginFrontendContext, PluginView } from "../sdk/index.d.ts";
+import type { PluginAction, PluginActionContext, PluginFrontendContext, PluginView } from "../sdk/index.d.ts";
 import { fakeAnkiConnect } from "./fake-anki-connect.ts";
-import { chooseMenu, fakeUi } from "./fake-ui.ts";
+import { fakeUi } from "./fake-ui.ts";
 
 const DAY = 86_400_000;
 const NOW = Date.UTC(2026, 10, 20, 12);
@@ -46,8 +46,8 @@ async function setup(options: { paired?: boolean } = {}) {
   const window = new Window();
   Object.assign(globalThis, { document: window.document });
   const views = new Map<string, PluginView>();
-  const actions = new Map<string, { run: () => void }>();
-  const calls: string[] = [], shown: unknown[] = [], sessions: string[] = [];
+  const actions = new Map<string, PluginAction>();
+  const calls: string[] = [], shown: unknown[] = [], sessions: string[] = [], sessionReads: string[] = [];
   let opened = "", settingsOpened = 0;
   const resyncs: (() => void)[] = [];
   let hold: Promise<void> | undefined;
@@ -55,7 +55,7 @@ async function setup(options: { paired?: boolean } = {}) {
     signal: new AbortController().signal,
     cleanup: () => {},
     registerView: (v: PluginView) => { views.set(v.id, v); return () => {}; },
-    registerAction: (a: { id: string; run: () => void }) => { actions.set(a.id, a); return () => {}; },
+    registerAction: (a: PluginAction) => { actions.set(a.id, a); return () => {}; },
     placeAction: () => () => {}, onAppEvent: () => () => {}, onResync: (f: () => void) => { resyncs.push(f); return () => {}; }, registerSettings: () => () => {},
     app: { openView: (id: string) => { opened = id; }, openSettings: () => { settingsOpened++; }, openSession: (id: string) => { sessions.push(id); } },
     call: async (name: string, input: any) => {
@@ -66,6 +66,12 @@ async function setup(options: { paired?: boolean } = {}) {
       if (name === "coverageContext") return { nodes: [], missing: [], cardsPerNode: 2, paired: true, pairingKey: "", pairingWarning: false };
       if (name === "generationStatus") return { generationSettings: { cardsPerNode: 2, enabledKinds: ["fact"], constantValues: false, model: null }, generations: [] };
       if (name === "sessions") return { sessions: [], unresolved: [] };
+      if (name === "sessionFlow") {
+        sessionReads.push(input.sessionId);
+        return { session: { id: input.sessionId, title: "Nuclear lecture", exists: true }, nodes: [
+          { id: "node-r", name: "Nuclear radius", statement: "Nuclear radius varies with mass number.", flagged: true, cards: { waiting: 0, sent: 0, sentElsewhere: 0 } },
+        ], flags: [{ status: "matched", note: "Review the scaling law", flaggedAt: "2026-11-20T08:00:00Z", nodeIds: ["node-r"] }], cardsPerNode: 2, paired: true };
+      }
       if (name === "connection") return { profile: "Throwaway", decks: ["Scratch"], tags: [] };
       throw new Error(`unexpected call ${name}`);
     },
@@ -75,25 +81,36 @@ async function setup(options: { paired?: boolean } = {}) {
   const doc = window.document as any;
   const scope = new AbortController();
   const container = doc.createElement("div"); doc.body.append(container);
-  const mount = async (id = "topics") => { const dispose = await views.get(id)!.mount(container, scope.signal); await tick(); return dispose; };
-  const find = (label: string | RegExp) => Array.from(container.querySelectorAll("button") as ArrayLike<HTMLButtonElement>).find(b => typeof label === "string" ? b.textContent === label : label.test(b.textContent ?? ""));
+  const tab = (label: string) => Array.from(container.querySelectorAll('[role="tab"]') as ArrayLike<HTMLButtonElement>).find(b => b.textContent === label)!;
+  const panel = (label: string) => doc.getElementById(tab(label).getAttribute("aria-controls")) as HTMLElement;
+  const openReviews = async () => { tab("Check Anki reviews").click(); await tick(); };
+  const mount = async () => { const dispose = await views.get("bridge")!.mount(container, scope.signal); await tick(); return dispose; };
+  const mountReviews = async () => { const dispose = await mount(); await openReviews(); return dispose; };
+  const reviewRoot = () => tab("Check Anki reviews") ? panel("Check Anki reviews") : container as HTMLElement;
+  const find = (label: string | RegExp) => Array.from(reviewRoot().querySelectorAll("button")).find(b => typeof label === "string" ? b.textContent === label : label.test(b.textContent ?? ""));
   const click = async (label: string | RegExp) => { const b = find(label); assert.ok(b, `button ${label}`); assert.equal(b.disabled, false, `button ${label} is enabled`); b.click(); await tick(); };
-  const text = () => container.textContent as string;
+  const text = () => reviewRoot().textContent!;
   const cleanup = async () => { scope.abort(); service.close(); await store.close(); await anki.close(); await rm(directory, { recursive: true, force: true }); };
-  return { setHold: (p: Promise<void> | undefined) => { hold = p; }, ctx, scope, resyncs, destination, anki, store, service, views, actions, calls, shown, sessions, opened: () => opened, settingsOpened: () => settingsOpened, doc, container, mount, find, click, text, cleanup };
+  return { setHold: (p: Promise<void> | undefined) => { hold = p; }, ctx, scope, resyncs, destination, anki, store, service, views, actions, calls, shown, sessions, sessionReads, opened: () => opened, settingsOpened: () => settingsOpened, doc, container, window, tab, panel, openReviews, mount, mountReviews, find, click, text, cleanup };
 }
 
 test("Topics to revisit reads nothing until Check Anki reviews, then groups cards by node with evidence and links", async () => {
   const t = await setup();
   try {
-    assert.ok(t.views.has("topics"));
-    t.actions.get("open-topics")!.run();
-    assert.equal(t.opened(), "topics");
+    assert.deepEqual([...t.views.keys()], ["bridge"]);
+    assert.equal(t.actions.has("open-topics"), false);
     await t.mount();
-    assert.match(t.text(), /Not checked yet\. Nothing has been read from Anki\./);
-    assert.match(t.text(), /paired Anki profile "Throwaway"/);
-    assert.match(t.text(), /suggestions to look at, not a judgement of what you know/);
-    assert.equal(t.anki.state.requests.length, 0, "opening the page sends nothing to Anki");
+    assert.equal(t.panel("Make cards").hidden, false);
+    assert.equal(t.panel("Check Anki reviews").hidden, true);
+    assert.equal(t.anki.state.requests.length, 0, "mounting sends no review read");
+    assert.ok(!t.calls.includes("checkReviews"));
+    await t.openReviews();
+    assert.equal(t.panel("Make cards").hidden, true);
+    assert.equal(t.panel("Check Anki reviews").hidden, false);
+    assert.match(t.text(), /Not checked yet\./);
+    assert.match(t.text(), /Checks profile "Throwaway"/);
+    assert.match(t.text(), /3\+ lapses, 2\+ Again presses in 30 days, or a leech tag/);
+    assert.equal(t.anki.state.requests.length, 0, "switching tabs sends no review read");
     assert.ok(!t.calls.includes("checkReviews"));
 
     await t.click("Check Anki reviews");
@@ -102,19 +119,24 @@ test("Topics to revisit reads nothing until Check Anki reviews, then groups card
     assert.deepEqual(topics.map(n => n.dataset.nodeId), ["node-f", "node-r"]);
     const femto = topics[0]!.textContent!;
     assert.match(femto, /Femto prefix/);
-    assert.match(femto, /2 Again presses on reviews in the last 30 days\./);
-    assert.match(femto, /1 card tagged leech in Anki\./);
+    assert.match(femto, /2 Again in 30 days/);
+    assert.match(femto, /tagged leech/);
     assert.match(femto, /What does femto denote\?/);
     assert.match(femto, /suspended in Anki/);
     const radius = topics[1]!.textContent!;
-    assert.match(radius, /4 lapses on 1 card\./);
+    assert.match(radius, /4 lapses/);
     assert.match(radius, /deck Year 3::Nuclear/);
-    assert.match(t.text(), /1 card no longer in Anki and was skipped\./);
-    assert.match(t.text(), /1 card changed in Anki \(different note type or delivery ID\) and was skipped\./);
-    assert.match(t.text(), /Checked at .* in profile "Throwaway"\. 2 cards read\./);
+    assert.match(t.text(), /Skipped 1 card no longer in Anki\./);
+    assert.match(t.text(), /Skipped 1 card with a different note type or delivery ID\./);
+    assert.match(t.text(), /Checked at .* in "Throwaway"\. 2 cards read\./);
 
-    await t.click("Open session: Nuclear lecture");
-    await t.click("Open session: Prefixes workshop");
+    for (const [topic, session] of [[topics[1]!, "Nuclear lecture"], [topics[0]!, "Prefixes workshop"]] as const) {
+      const row = topic.querySelector(".ab-topic-sessions")!;
+      assert.equal(row.querySelector("span")!.textContent, `From ${session}`);
+      const open = row.querySelector("button")!;
+      assert.equal(open.textContent, "Open session");
+      open.click(); await tick();
+    }
     assert.deepEqual(t.sessions, ["chat-1", "chat-2"]);
     const show = Array.from(topics[1]!.querySelectorAll("button") as ArrayLike<HTMLButtonElement>).find(b => b.textContent === "Show in Anki")!;
     show.click(); await tick();
@@ -137,10 +159,33 @@ test("Topics to revisit reads nothing until Check Anki reviews, then groups card
   } finally { await t.cleanup(); }
 });
 
+test("review checks distinguish no signals from all cards skipped", async () => {
+  const t = await setup();
+  try {
+    const [radius, femto] = t.anki.state.notes;
+    radius.cards[0].lapses = 0;
+    femto.tags = [];
+    femto.cards[0].reviews = [];
+    const emptyState = () => t.container.querySelector(".ab-topics .ab-empty")?.textContent;
+    await t.mountReviews();
+    await t.click("Check Anki reviews");
+    await settle(() => emptyState() !== undefined);
+    assert.equal(emptyState(), "No review signals found.");
+    assert.match(t.text(), /2 cards read\./);
+
+    t.anki.state.notes.splice(0, 2);
+    await t.click("Check Anki reviews");
+    await settle(() => /0 cards read\./.test(t.text()));
+    assert.equal(emptyState(), "No cards could be checked.");
+    assert.match(t.text(), /Skipped 3 cards no longer in Anki\./);
+    assert.match(t.text(), /Skipped 1 card with a different note type or delivery ID\./);
+  } finally { await t.cleanup(); }
+});
+
 test("a wrong profile shows a plain error, reads no notes and drops the old result", async () => {
   const t = await setup();
   try {
-    await t.mount();
+    await t.mountReviews();
     await t.click("Check Anki reviews");
     await settle(() => !!t.container.querySelector(".ab-topic"));
     t.anki.state.profile = "Someone else";
@@ -156,7 +201,7 @@ test("a wrong profile shows a plain error, reads no notes and drops the old resu
 test("Anki closed keeps the earlier result marked as possibly out of date", async () => {
   const t = await setup();
   try {
-    await t.mount();
+    await t.mountReviews();
     await t.click("Check Anki reviews");
     await settle(() => !!t.container.querySelector(".ab-topic"));
     await t.anki.close();
@@ -164,7 +209,7 @@ test("Anki closed keeps the earlier result marked as possibly out of date", asyn
     await t.click("Check Anki reviews");
     await settle(() => /out of date/.test(t.text()));
     assert.match(t.text(), /Anki isn't running or AnkiConnect isn't reachable/);
-    assert.match(t.text(), /Last checked at .*This result may be out of date\./);
+    assert.match(t.text(), /Last checked at .*May be out of date\./);
     assert.equal(t.container.querySelectorAll(".ab-topic").length, 2);
   } finally { await t.cleanup(); }
 });
@@ -172,23 +217,100 @@ test("Anki closed keeps the earlier result marked as possibly out of date", asyn
 test("without a pairing the check is unavailable and points to settings", async () => {
   const t = await setup({ paired: false });
   try {
-    await t.mount();
+    await t.mountReviews();
     assert.equal(t.find("Check Anki reviews")!.disabled, true);
-    assert.match(t.text(), /Choose an Anki profile in settings first/);
+    assert.match(t.text(), /Connect to Anki in settings first/);
     await t.click("Open settings");
     assert.equal(t.settingsOpened(), 1);
     assert.equal(t.anki.state.requests.length, 0);
   } finally { await t.cleanup(); }
 });
 
-test("step 3's More menu opens Topics to revisit without reading Anki", async () => {
+test("tabs use arrow keys (with wraparound), Home and End with roving focus", async () => {
   const t = await setup();
   try {
-    await t.mount("bridge");
-    await settle(() => !!t.find("More"));
-    await t.click("More");
-    await chooseMenu("Topics to revisit");
-    assert.equal(t.opened(), "topics");
+    await t.mount();
+    const tabs = [t.tab("Make cards"), t.tab("Check Anki reviews")];
+    const assertSelected = (index: number) => {
+      assert.equal(t.doc.activeElement, tabs[index]);
+      tabs.forEach((tab, i) => {
+        const selected = i === index;
+        const panel = t.panel(tab.textContent!);
+        assert.equal(tab.getAttribute("aria-selected"), String(selected));
+        assert.equal(tab.tabIndex, selected ? 0 : -1);
+        assert.equal(panel.getAttribute("role"), "tabpanel");
+        assert.equal(panel.getAttribute("aria-labelledby"), tab.id);
+        assert.equal(panel.hidden, !selected);
+      });
+    };
+    assert.equal(t.container.querySelector('[role="tablist"]').getAttribute("aria-label"), "Anki Bridge");
+    tabs[0]!.focus(); assertSelected(0);
+    for (const [key, index] of [["ArrowLeft", 1], ["ArrowRight", 0], ["End", 1], ["Home", 0], ["ArrowRight", 1], ["ArrowLeft", 0]] as const) {
+      const event = new t.window.KeyboardEvent("keydown", { key, bubbles: true, cancelable: true });
+      t.doc.activeElement.dispatchEvent(event);
+      assert.equal(event.defaultPrevented, true, key);
+      assertSelected(index);
+    }
+    assert.ok(!t.calls.includes("checkReviews"));
+    assert.equal(t.anki.state.requests.length, 0);
+  } finally { await t.cleanup(); }
+});
+
+test("switching tabs preserves card filters and review results without another read", async () => {
+  const t = await setup();
+  try {
+    await t.mount();
+    const search = t.panel("Make cards").querySelector<HTMLInputElement>('input[type="search"]')!;
+    search.value = "nuclear";
+    search.dispatchEvent(new t.window.Event("input", { bubbles: true }) as never);
+    await t.openReviews();
+    await t.click("Check Anki reviews");
+    await settle(() => !!t.container.querySelector(".ab-topic"));
+    const readCount = t.anki.state.requests.length;
+    assert.ok(readCount > 0);
+    t.tab("Make cards").click(); await tick();
+    assert.equal(t.panel("Make cards").querySelector('input[type="search"]'), search);
+    assert.equal(search.value, "nuclear");
+    await t.openReviews();
+    assert.deepEqual([...t.panel("Check Anki reviews").querySelectorAll<HTMLElement>(".ab-topic")].map(topic => topic.dataset.nodeId), ["node-f", "node-r"]);
+    assert.equal(t.calls.filter(call => call === "checkReviews").length, 1);
+    assert.equal(t.anki.state.requests.length, readCount);
+  } finally { await t.cleanup(); }
+});
+
+test("a session Make cards action selects the cards tab, transfers focus if needed and scopes the ideas", async () => {
+  const t = await setup();
+  try {
+    await t.mount();
+    const cards = t.tab("Make cards"), reviews = t.tab("Check Anki reviews");
+    const outside = t.doc.createElement("button");
+    t.doc.body.append(outside);
+    const context = { surface: "session", placement: "top-bar", sessionId: "chat-1", kind: "teaching" } as PluginActionContext;
+    for (const from of [reviews, t.find("Check Anki reviews")!, outside]) {
+      await t.openReviews();
+      from.focus();
+      assert.equal(t.doc.activeElement, from);
+      await t.actions.get("make-cards")!.run(context);
+      assert.equal(t.doc.activeElement, from === outside ? outside : cards);
+      assert.equal(t.opened(), "bridge");
+      assert.equal(cards.getAttribute("aria-selected"), "true");
+      assert.equal(t.panel("Make cards").hidden, false);
+      assert.equal(t.panel("Check Anki reviews").hidden, true);
+      await tick();
+    }
+    const panel = t.panel("Make cards");
+    assert.equal(panel.querySelector<HTMLSelectElement>('select[aria-label="Ideas from"]')!.value, "chat-1");
+    assert.match(panel.textContent!, /Review the scaling law/);
+    const selected = () => panel.querySelector<HTMLInputElement>('input[aria-label="Select Nuclear radius"]')!.checked;
+    const flagTitle = () => panel.querySelector(".ab-flags-title")!.textContent;
+    assert.equal(selected(), true, "the eligible flagged idea is preselected");
+    assert.equal(flagTitle(), "1 flagged reply");
+    const clear = Array.from(panel.querySelectorAll("button")).find(b => b.textContent === "Clear")!;
+    clear.click();
+    assert.equal(selected(), false);
+    assert.equal(flagTitle(), "1 flagged reply", "the count is independent of selection");
+    assert.ok(t.sessionReads.length > 0);
+    assert.deepEqual([...new Set(t.sessionReads)], ["chat-1"]);
     assert.ok(!t.calls.includes("checkReviews"));
     assert.equal(t.anki.state.requests.length, 0);
   } finally { await t.cleanup(); }
@@ -197,23 +319,23 @@ test("step 3's More menu opens Topics to revisit without reading Anki", async ()
 test("S5: after the pairing changes elsewhere, the page re-reads it so the next check uses the new profile", async () => {
   const t = await setup();
   try {
-    await t.mount();
+    await t.mountReviews();
     await t.store.replace({ ...t.store.snapshot(), destination: { url: t.destination.url, profile: "Second" } });
     await t.click("Check Anki reviews");
-    await settle(() => /paired Anki profile changed/.test(t.text()));
+    await settle(() => /Paired profile changed/.test(t.text()));
     await settle(() => /profile "Second"/.test(t.text()));
-    assert.match(t.text(), /paired Anki profile "Second"/);
+    assert.match(t.text(), /Checks profile "Second"/);
     assert.equal(t.anki.state.requests.length, 0);
     t.anki.state.profile = "Second";
     await t.click("Check Anki reviews");
     await settle(() => /Checked at/.test(t.text()));
-    assert.match(t.text(), /in profile "Second"/);
+    assert.match(t.text(), /in "Second"/);
 
     // A host resync also re-reads the pairing.
     await t.store.replace({ ...t.store.snapshot(), destination: { url: t.destination.url, profile: "Third" } });
     for (const f of t.resyncs) f();
-    await settle(() => /paired Anki profile "Third"/.test(t.text()));
-    assert.match(t.text(), /paired Anki profile "Third"/);
+    await settle(() => /Checks profile "Third"/.test(t.text()));
+    assert.match(t.text(), /Checks profile "Third"/);
   } finally { await t.cleanup(); }
 });
 
@@ -228,15 +350,15 @@ test("F5: a Settings save in another pane re-reads the pairing, even during a ch
     await t.store.replace({ ...t.store.snapshot(), destination: { ...t.destination } });
     for (const peer of peers) peer();
     await settle(() => t.find("Check Anki reviews")?.disabled === false);
-    assert.match(t.text(), /paired Anki profile "Throwaway"/);
+    assert.match(t.text(), /Checks profile "Throwaway"/);
 
     // A save during a check is held until the check ends, then applied.
     t.anki.state.delay = 40;
     await t.click("Check Anki reviews");
     await t.store.replace({ ...t.store.snapshot(), destination: { url: t.destination.url, profile: "Later" } });
     for (const peer of peers) peer();
-    await settle(() => /paired Anki profile "Later"/.test(t.text()));
-    assert.match(t.text(), /paired Anki profile "Later"/);
+    await settle(() => /Checks profile "Later"/.test(t.text()));
+    assert.match(t.text(), /Checks profile "Later"/);
     dispose();
     assert.equal(peers.size, 0);
   } finally { await t.cleanup(); }
@@ -245,7 +367,7 @@ test("F5: a Settings save in another pane re-reads the pairing, even during a ch
 test("round 3 S2: an older reload that answers last does not bring back the previous pairing", async () => {
   const t = await setup();
   try {
-    await t.mount();
+    await t.mountReviews();
     let release!: () => void;
     t.setHold(new Promise<void>(resolve => { release = resolve; }));
     for (const f of t.resyncs) f();            // reload 1 reads profile "Throwaway", then waits
@@ -253,17 +375,17 @@ test("round 3 S2: an older reload that answers last does not bring back the prev
     t.setHold(undefined);
     await t.store.replace({ ...t.store.snapshot(), destination: { url: t.destination.url, profile: "Second" } });
     for (const f of t.resyncs) f();            // reload 2 reads "Second" and answers first
-    await settle(() => /paired Anki profile "Second"/.test(t.text()));
+    await settle(() => /Checks profile "Second"/.test(t.text()));
     release(); await tick();                   // reload 1 answers last
-    assert.match(t.text(), /paired Anki profile "Second"/);
-    assert.doesNotMatch(t.text(), /paired Anki profile "Throwaway"/);
+    assert.match(t.text(), /Checks profile "Second"/);
+    assert.doesNotMatch(t.text(), /Checks profile "Throwaway"/);
   } finally { await t.cleanup(); }
 });
 
 test("round 4 S1: a superseded reload that fails does not replace newer feedback", async () => {
   const t = await setup();
   try {
-    await t.mount();
+    await t.mountReviews();
     let fail!: (e: Error) => void;
     t.setHold(new Promise<void>((_, reject) => { fail = reject; }));
     for (const f of t.resyncs) f();            // reload 1 waits, then fails
@@ -282,7 +404,7 @@ test("Clear cannot report success while a check started in a previous mount is r
   let release!: () => void;
   const held = new Promise<void>(resolve => { release = resolve; });
   try {
-    const dispose = await t.mount();
+    const dispose = await t.mountReviews();
     await t.click("Check Anki reviews");
     await settle(() => !!t.container.querySelector(".ab-topic"));
     assert.ok(t.find("Clear"));
@@ -290,7 +412,7 @@ test("Clear cannot report success while a check started in a previous mount is r
     await t.click("Check Anki reviews");
     assert.equal((await t.service.command("lastReviewCheck")).running, true);
     if (typeof dispose === "function") dispose();
-    await t.mount();
+    await t.mountReviews();
 
     const confirmClear = async () => {
       await t.click("Clear");
@@ -298,7 +420,8 @@ test("Clear cannot report success while a check started in a previous mount is r
       confirm.click(); await tick();
     };
     await confirmClear();
-    assert.match(t.text(), /Wait for the review check to finish before clearing/);
+    assert.match(t.text(), /Wait for the review check to finish\./);
+    assert.doesNotMatch(t.text(), /Cleared\./);
     assert.ok((await t.service.command("lastReviewCheck")).check, "nothing was cleared during the check");
 
     release();
@@ -313,7 +436,7 @@ test("Clear cannot report success while a check started in a previous mount is r
 test("round 4 S2: a reload begun before Clear cannot bring the cleared result back", async () => {
   const t = await setup();
   try {
-    await t.mount();
+    await t.mountReviews();
     await t.click("Check Anki reviews");
     await settle(() => !!t.container.querySelector(".ab-topic"));
     let release!: () => void;

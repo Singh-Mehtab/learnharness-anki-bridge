@@ -25,11 +25,11 @@ export function connectionText(url: string, result: Connection | Error): { text:
     const detail = result.message;
     const closed = /refused|ECONNREFUSED|timed out|fetch failed|network|reach|could not complete the AnkiConnect request/i.test(detail);
     return { tone: "error", text: closed
-      ? `Couldn't reach Anki at ${url}. Open Anki, check that AnkiConnect is installed, then test again.`
+      ? `Couldn't reach Anki at ${url}. Open Anki and check AnkiConnect is installed.`
       : `Connection failed: ${detail}` };
   }
-  if (result.profile === null) return { tone: "error", text: "Anki is open but no profile is loaded. Open a profile in Anki, then test again." };
-  return { tone: "success", text: `Connected. Profile ${result.profile} is open with ${plural(result.decks.length, "deck")}.` };
+  if (result.profile === null) return { tone: "error", text: "No profile loaded. Open a profile in Anki." };
+  return { tone: "success", text: `Connected. Profile ${result.profile}, ${plural(result.decks.length, "deck")}.` };
 }
 
 interface SettingsSnapshot { settings: Settings; destination: Destination | null; generationSettings?: { enabledKinds: CoreCardKind[] } }
@@ -51,11 +51,10 @@ export function mountSettings(ctx: PluginFrontendContext, container: HTMLElement
   const keySaved = el("div", undefined, "ab-inline");
   const urlHint = el("span", undefined, "ab-muted");
   const urlField = field("AnkiConnect address", url); urlField.append(urlHint);
-  const keyField = field("API key", key, "Only needed if you set apiKey in AnkiConnect's config. It is stored in plain text in this plugin's data folder.");
+  const keyField = field("API key", key, "Only needed if AnkiConnect has an apiKey. Stored in plain text in this plugin's data folder.");
   const connectionActions = el("div", undefined, "ab-actions");
   const connectionStatus = status();
   connection.append(el("h3", "Connect to Anki", "ab-panel-title"),
-    el("p", "Anki Bridge sends cards through the AnkiConnect add-on. Keep Anki open while you send.", "ab-muted ab-panel-intro"),
     urlField, keyField, keySaved, connectionActions, connectionStatus);
 
   // Destination profile
@@ -75,7 +74,7 @@ export function mountSettings(ctx: PluginFrontendContext, container: HTMLElement
   systemLabel.append(systemTags, el("span", "Also add learnharness and card-type tags"));
   const tagStatus = status();
   tags.append(el("h3", "Tags", "ab-panel-title"),
-    field("Tags for new cards", template, "Separate tags with spaces. {deck} becomes the deck name with spaces replaced by underscores. You can still change the tags before each send."),
+    field("Tags for new cards", template, "Separate with spaces. {deck} becomes the deck name, with underscores for spaces."),
     systemLabel, tagStatus);
 
   // Card types that stay off the Write step (#38)
@@ -83,7 +82,7 @@ export function mountSettings(ctx: PluginFrontendContext, container: HTMLElement
   const kindStatus = status();
   const kindBoxes = new Map<CoreCardKind, HTMLInputElement>();
   kinds.append(el("h3", "More card types", "ab-panel-title"),
-    el("p", "Fact, Equation, Why and Steps are chosen on the Write step. These types are off by default. When one is on, the writer may use it for any idea it fits, and the Write step says so.", "ab-muted ab-panel-intro"));
+    el("p", "Extra card types the writer may use.", "ab-muted ab-panel-intro"));
   for (const kind of SETTINGS_KINDS) {
     const box = el("input"); box.type = "checkbox";
     const label = el("label", undefined, "ab-check");
@@ -91,7 +90,7 @@ export function mountSettings(ctx: PluginFrontendContext, container: HTMLElement
     kindBoxes.set(kind, box);
     box.onchange = () => {
       const wanted = box.checked;
-      if (busy) { syncKinds(); kindStatus.show("Wait for the current action to finish, then try again.", "error"); return; }
+      if (busy) { syncKinds(); kindStatus.show("Wait for the current action to finish.", "error"); return; }
       void act(kindStatus, async () => {
         // Send only this change; the backend applies it to the saved types, so it can't undo one made on the Write step.
         await apply("generationSettings", { toggleKind: { kind, enabled: wanted } });
@@ -107,7 +106,7 @@ export function mountSettings(ctx: PluginFrontendContext, container: HTMLElement
   const noteActions = el("div", undefined, "ab-actions");
   const noteStatus = status();
   noteType.append(el("h3", "Note type", "ab-panel-title"),
-    el("p", "Cards use the LearnHarness Basic note type, which Anki Bridge creates on the first send. Use these only if Anki Bridge reports a problem with it. Neither changes your cards or review history.", "ab-muted ab-panel-intro"),
+    el("p", "Use only if Anki Bridge reports a problem with the LearnHarness Basic note type.", "ab-muted ab-panel-intro"),
     noteActions, noteStatus);
 
   root.append(connection, destination, tags, kinds, noteType);
@@ -124,9 +123,9 @@ export function mountSettings(ctx: PluginFrontendContext, container: HTMLElement
   let keyCleared = false;
   function urlAdvice(): void {
     const changed = state?.settings.hasApiKey && endpoint(url.value) !== endpoint(savedUrl);
-    urlHint.textContent = (/localhost/i.test(url.value) ? "Use 127.0.0.1 instead of localhost, which can fail over IPv6." : "Usually http://127.0.0.1:8765. Use the root address, not an API path.")
-      + (changed ? " Saving a different address removes the saved API key." : "")
-      + (keyCleared ? " The key you typed was cleared because the address changed. Type it again for this address." : "");
+    urlHint.textContent = (/localhost/i.test(url.value) ? "Use 127.0.0.1, not localhost." : "Usually http://127.0.0.1:8765. No API path.")
+      + (changed ? " Saving a new address removes the saved key." : "")
+      + (keyCleared ? " Key cleared because the address changed. Type it again." : "");
   }
   /** Checkboxes follow the saved types. At least one type stays on across Write and Settings. */
   function syncKinds(): void {
@@ -179,10 +178,10 @@ export function mountSettings(ctx: PluginFrontendContext, container: HTMLElement
     try { await apply("settings", value); }
     finally { url.readOnly = false; key.readOnly = false; }
     key.value = ""; keyCleared = false; urlAdvice();
-    return "Saved. Test the connection to check it.";
+    return "Saved.";
   }, "Saving…") });
   testButton = button(ctx, connectionActions, signal, { label: "Test connection", onClick: () => {
-    if (dirty()) { connectionStatus.show("Save the new address or key first, then test.", "error"); return; }
+    if (dirty()) { connectionStatus.show("Save your changes first.", "error"); return; }
     return act(connectionStatus, async () => {
       const result = await test();
       const shown = connectionText(savedUrl, result);
@@ -198,25 +197,25 @@ export function mountSettings(ctx: PluginFrontendContext, container: HTMLElement
     const current = state?.destination;
     if (current?.profile === profile && current.url === savedUrl) return `Already sending to profile ${profile}.`;
     const ok = await confirmDialog(ctx, signal, { title: "Send cards to this profile?", confirm: "Use this profile",
-      body: `New cards will go to the Anki profile ${profile} at ${savedUrl}. Cards you already sent stay where they are.` });
+      body: `Send new cards to profile ${profile} at ${savedUrl}?` });
     if (!ok || !alive()) return "";
     await apply("pair", { confirmed: true, expectedDestination });
-    return `New cards will go to profile ${profile}.`;
+    return `Sending to profile ${profile}.`;
   }, "Checking Anki…") });
 
   const shown = () => state?.destination ?? undefined;
   button(ctx, noteActions, signal, { label: "Add missing fields", onClick: () => act(noteStatus, async () => {
     const target = shown();
     const ok = await confirmDialog(ctx, signal, { title: "Add missing fields", confirm: "Add fields",
-      body: `Add any missing fields to LearnHarness Basic in ${target ? `profile ${target.profile}` : "the paired profile"}. Templates and cards are not changed.` });
+      body: `Add missing fields to LearnHarness Basic in ${target ? `profile ${target.profile}` : "the paired profile"}.` });
     if (!ok || !alive()) return "";
     await ctx.call("repairFields", { expectedDestination: target });
-    return "Fields checked and added where missing.";
+    return "Fields checked.";
   }) });
   button(ctx, noteActions, signal, { label: "Reset styling and templates", onClick: () => act(noteStatus, async () => {
     const target = shown();
     const ok = await confirmDialog(ctx, signal, { title: "Reset styling and templates", confirm: "Reset", destructive: true,
-      body: `Replace the LearnHarness Basic styling and templates in ${target ? `profile ${target.profile}` : "the paired profile"}. Any edits you made to them in Anki will be lost. Card content and review history stay the same.` });
+      body: `Replace LearnHarness Basic styling and templates in ${target ? `profile ${target.profile}` : "the paired profile"}. Your edits to them in Anki are lost.` });
     if (!ok || !alive()) return "";
     await ctx.call("updateStyling", { confirmed: true, expectedDestination: target });
     return "Styling and templates reset.";
@@ -245,15 +244,15 @@ export function mountSettings(ctx: PluginFrontendContext, container: HTMLElement
       if (endpoint(url.value) !== before) key.value = "";
       lastEndpoint = endpoint(url.value) ?? "";
     }
-    key.placeholder = next.settings.hasApiKey ? "Saved key. Type a new one to replace it." : "None";
+    key.placeholder = next.settings.hasApiKey ? "Saved. Type to replace." : "None";
     const ks = keyScope.reset();
     keySaved.replaceChildren();
     removeKey = undefined;
     if (next.settings.hasApiKey) {
-      keySaved.append(el("span", "An API key is saved for this address.", "ab-muted"));
+      keySaved.append(el("span", "Key saved for this address.", "ab-muted"));
       removeKey = button(ctx, keySaved, ks, { label: "Remove saved key", onClick: () => act(connectionStatus, async () => {
         await apply("settings", { url: savedUrl, apiKey: "" });
-        return "Saved key removed.";
+        return "Key removed.";
       }) });
     }
     // Leave unsaved tag edits alone; a queued save will send them.
@@ -265,9 +264,9 @@ export function mountSettings(ctx: PluginFrontendContext, container: HTMLElement
     destinationText.replaceChildren();
     if (d) {
       destinationText.append("New cards go to profile ", el("strong", d.profile), ` at ${d.url}`);
-      if (endpoint(d.url) !== endpoint(next.settings.url)) destinationText.append(el("span", " The saved address has changed since you chose this profile. Choose the profile again before sending.", "ab-warning"));
+      if (endpoint(d.url) !== endpoint(next.settings.url)) destinationText.append(el("span", " Address changed. Choose the profile again.", "ab-warning"));
     } else {
-      destinationText.append("No profile chosen yet. Open the profile you want in Anki, then choose it here. Use a throwaway profile while you try Anki Bridge.");
+      destinationText.append("No profile chosen. Open one in Anki, then choose it here.");
     }
     pairButton.update({ label: d ? "Switch to the open profile" : "Use the open profile" });
     syncKinds(); urlAdvice(); syncButtons();

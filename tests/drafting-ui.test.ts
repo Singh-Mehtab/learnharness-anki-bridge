@@ -110,7 +110,7 @@ test("writing needs a selection, defaults to the cheap model, confirms the estim
   const f = setup();
   try {
     await f.panel.setScope(undefined); await tick();
-    assert.match(f.text(), /Model to write cards.*Leave blank to use the cheap model\./s);
+    assert.match(f.text(), /Model to write cards.*Blank uses the cheap model\./s);
     assert.doesNotMatch(f.text(), /LearnHarness cheap model/);
     assert.equal(f.modelValue(), undefined, "the picker starts blank");
     const clear = () => [...f.write.querySelectorAll(".ab-model-row button")].find(b => b.textContent === "Clear") as unknown as HTMLButtonElement | undefined;
@@ -129,7 +129,7 @@ test("writing needs a selection, defaults to the cheap model, confirms the estim
     assert.equal(clear(), undefined);
     f.button("Write cards for 1 idea").click(); await tick();
     assert.ok(f.dialog(), "estimate dialog opens");
-    assert.match(f.dialog()!.textContent!, /Up to 2.*writer \(cheap model\).*1, or up to 3 if answers need fixing.*No estimate for this model/s);
+    assert.match(f.dialog()!.textContent!, /Up to 2.*writer \(cheap model\).*Model calls1, up to 3 with fixes.*CostNo estimate/s);
     assert.equal(f.calls.some(c => c.name === "generate"), false);
     f.button("Start writing").click(); await tick();
     assert.deepEqual(f.calls.filter(c => c.name === "generate").map(c => c.input), [{ preflightId: "p1" }]);
@@ -139,7 +139,7 @@ test("writing needs a selection, defaults to the cheap model, confirms the estim
     assert.equal(f.button("Write cards for 1 idea").disabled, true, "one generation at a time");
     f.button("Cancel").click(); await tick();
     assert.deepEqual(f.calls.find(c => c.name === "cancelGeneration")!.input, { id: "p1" });
-    assert.match(f.text(), /Cancelled\. Finished cards are kept/);
+    assert.match(f.text(), /Cancelled\. Saved cards are kept/);
     f.button("Try again").click(); await tick();
     assert.deepEqual(f.calls.filter(c => c.name === "retryGeneration").map(c => c.input), [{ id: "p1" }]);
     assert.ok(f.dialog(), "retry confirms its own estimate");
@@ -156,7 +156,7 @@ test("a selection change while the dialog is open blocks the start", async () =>
     f.select(false); f.select(true); await tick();
     f.button("Start writing").click(); await tick();
     assert.equal(f.calls.some(c => c.name === "generate"), false);
-    assert.match(f.text(), /selection changed while the dialog was open/);
+    assert.match(f.text(), /Selection changed\. Press Write cards again/);
   } finally { await f.close(); }
 });
 
@@ -171,7 +171,7 @@ test("an estimate that returns after the selection changed opens no dialog", asy
     release(); await tick();
     assert.equal(f.dialog(), null);
     assert.equal(f.calls.some(c => c.name === "generate"), false);
-    assert.match(f.text(), /selection changed/);
+    assert.match(f.text(), /Selection changed\. Press Write cards again/);
   } finally { await f.close(); }
 });
 
@@ -184,13 +184,13 @@ test("Write shows four card types with Fact and Equation on, explains them and h
     const toggles = [...f.write.querySelectorAll(".ab-chips input[type=checkbox]")] as unknown as HTMLInputElement[];
     assert.deepEqual(toggles.map(box => box.checked), [true, true, false, false]);
     const help = f.write.querySelector(".ab-kind-lines")!.textContent!;
-    assert.match(help, /Fact Remember a definition, unit, prefix or other fact\..*Equation Recall a formula or relation\..*Why Explain why a result holds\..*Steps Recall the next step in a method you carry out\./s);
+    assert.match(help, /Fact Remember a definition, unit or other fact\..*Equation Recall a formula\..*Why Explain why a result holds\..*Steps Recall the next step of a method\./s);
     const examples = f.write.querySelector("details.ab-kind-examples") as unknown as HTMLDetailsElement;
     assert.equal(examples.open, false);
     assert.equal(examples.querySelector("summary")!.textContent, "See examples");
     assert.equal(examples.querySelectorAll(".ab-kind-example").length, 4);
     assert.match(examples.textContent!, /Front: What power of ten does the prefix femto- represent\?Back: 10⁻¹⁵/);
-    assert.doesNotMatch(f.write.textContent!, /Compose|Apply|Contrast|physical constants|Also on in Settings/);
+    assert.doesNotMatch(f.write.textContent!, /Compose|Apply|Contrast|physical constants|Also on/);
   } finally { await f.close(); }
 });
 
@@ -206,14 +206,14 @@ test("card types and cap save as soon as they change, keep Settings types, and t
     toggles()[2]!.checked = true; toggles()[2]!.dispatchEvent(f.event("change")); await tick();
     assert.deepEqual(f.calls.filter(c => c.name === "generationSettings").map(c => c.input), [{ cardsPerNode: 4 }, { toggleKind: { kind: "why", enabled: true } }]);
     assert.deepEqual(f.state.generationSettings.enabledKinds, ["fact", "equation", "why", "apply"]);
-    assert.match(f.text(), /Also on in Settings: Apply\./);
+    assert.match(f.text(), /Also on: Apply\./);
     for (const i of [1, 2]) { toggles()[i]!.checked = false; toggles()[i]!.dispatchEvent(f.event("change")); await tick(); }
     assert.deepEqual(f.state.generationSettings.enabledKinds, ["fact", "apply"]);
     assert.equal(toggles()[0]!.disabled, false, "Apply is still on, so Fact can go off");
     f.state.generationSettings.enabledKinds = ["fact"];
     f.peers.forEach(peer => peer()); await tick();
     assert.equal(toggles()[0]!.disabled, true, "the only remaining type cannot be turned off");
-    assert.doesNotMatch(f.text(), /Also on in Settings/);
+    assert.doesNotMatch(f.text(), /Also on/);
   } finally { await f.close(); }
 });
 
@@ -239,10 +239,10 @@ test("a Settings change reaches Write through the shared peers without a reload"
   const f = setup();
   try {
     await f.panel.setScope(undefined); await tick();
-    assert.doesNotMatch(f.text(), /Also on in Settings/);
+    assert.doesNotMatch(f.text(), /Also on/);
     f.state.generationSettings.enabledKinds = ["fact", "equation", "apply", "discriminate"];
     f.peers.forEach(peer => peer()); await tick();
-    assert.match(f.text(), /Also on in Settings: Apply and Contrast\./);
+    assert.match(f.text(), /Also on: Apply and Contrast\./);
   } finally { await f.close(); }
 });
 
@@ -259,7 +259,7 @@ test("polling updates progress without rebuilding the model picker and refreshes
     f.state.generations[0].status = "completed"; f.state.generations[0].tasks[0].status = "applied";
     f.state.generations[0].tasks[0].result = { targets: [{ nodeId: "n_a", cards: [{}, {}] }] };
     await new Promise(resolve => setTimeout(resolve, 1300)); await tick();
-    assert.match(f.text(), /Wrote 2 cards for 1 idea\. Review them in step 3\./);
+    assert.match(f.text(), /Wrote 2 cards for 1 idea\./);
     assert.equal(f.refreshed(), refreshed + 1);
     assert.equal(f.modelMounts(), mounts);
   } finally { await f.close(); }
@@ -321,7 +321,7 @@ test("failed batches show the provider message, not raw JSON", async () => {
     f.state.generations.push({ id: "g", status: "failed", nodeIds: ["n_a"], skipped: [], settings: {}, createdAt: "", tasks: [
       { requestId: "r", status: "failed", input: {}, outputAllowance: 1, sources: [], error: '401 {"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}' }] });
     await f.panel.setScope(undefined); await tick();
-    assert.match(f.text(), /Couldn't write cards\. One batch failed\./);
+    assert.match(f.text(), /No cards written\. 1 batch failed\./);
     assert.match(f.text(), /Invalid x-api-key \(HTTP 401\)\./);
     assert.doesNotMatch(f.text(), /authentication_error/);
     assert.equal(readableError("plain failure"), "plain failure");
@@ -499,7 +499,7 @@ test("a programmatic handoff accepts 1000 ideas and refuses 1001 with a warning"
     assert.equal(f.ideas.querySelectorAll("li input:checked").length, 1000);
     await f.panel.setScope(undefined, { nodeIds: ids }); await tick();
     assert.equal(f.ideas.querySelectorAll("li input:checked").length, 0, "a new scope starts from an empty selection");
-    assert.match(f.text(), /That would select 1001 ideas/);
+    assert.match(f.text(), /Limit is 1000 ideas\. Narrow the search\./);
   } finally { await f.close(); }
 });
 
@@ -514,7 +514,7 @@ test("Retry saving uses the finished result without a model confirmation", async
       { status: "applied", result: { targets: [{ nodeId: "n_a", cards: [{}] }] } },
     ] }] } }));
     await f.panel.setScope(undefined); await tick();
-    assert.match(f.text(), /A finished result has not been saved/);
+    assert.match(f.text(), /Result not saved/);
     assert.equal(f.has("Dismiss"), false);
     f.button("Retry saving").click(); await tick();
     assert.deepEqual(f.calls.filter(c => ["preflight", "retryGeneration", "generate"].includes(c.name)), [{ name: "retryGeneration", input: { id: "g1" } }]);
@@ -534,7 +534,7 @@ test("abandoning an unavailable result requires its own confirmation and release
     await f.panel.setScope(undefined); await tick();
     assert.equal(f.box().disabled, true);
     f.button("Abandon unavailable result").click(); await tick();
-    assert.match(f.dialog()!.textContent!, /No model call will start.*run a new estimate and confirm it/);
+    assert.match(f.dialog()!.textContent!, /This stops recovery of the unsaved result\. Saved cards are kept\. No model call starts\..*run a new estimate and confirm it/);
     f.button("Cancel").click(); await tick();
     assert.equal(f.calls.some(c => c.name === "abandonGenerationResult"), false);
     assert.equal(f.box().disabled, true);
@@ -546,7 +546,7 @@ test("abandoning an unavailable result requires its own confirmation and release
     assert.equal(f.box().disabled, false);
     assert.equal(f.has("Retry saving"), false);
     assert.equal(f.has("Dismiss"), true);
-    assert.match(f.text(), /You can select those ideas again/);
+    assert.match(f.text(), /Result abandoned\./);
     assert.doesNotMatch(f.text(), /model call failed/);
   } finally { await f.close(); }
 });

@@ -69,12 +69,12 @@ export class ReviewService {
     if (Object.keys(input).some(k => !allowed.includes(k))) throw new Error('Unsupported review check input.');
     if (name === 'lastReviewCheck') return { check: this.current(), running: this.running };
     if (name === 'clearReviewCheck') {
-      if (this.running) throw new Error('Wait for the review check to finish before clearing the results.');
+      if (this.running) throw new Error('Wait for the review check to finish.');
       this.last = undefined;
       return { check: null, running: false };
     }
     if (name !== 'checkReviews') throw new Error('Unknown review check operation.');
-    if (this.running) throw new Error('A review check is already running. Wait for it to finish.');
+    if (this.running) throw new Error('A review check is already running.');
     this.running = true;
     const apiKey = this.store.snapshot().settings.apiKey;
     try {
@@ -121,11 +121,11 @@ export class ReviewService {
   private async check(expected: unknown, revision: number): Promise<ReviewCheck> {
     const state = this.store.snapshot();
     const paired = state.destination;
-    if (!paired || paired.url !== state.settings.url) throw new Error('Pair Anki Bridge with this address and profile in Settings before checking reviews.');
+    if (!paired || paired.url !== state.settings.url) throw new Error('Choose a profile for this address in settings first.');
     if (expected !== undefined) {
       const ok = record(expected) && typeof expected.url === 'string' && typeof expected.profile === 'string' &&
         (() => { try { return normalizeUrl(expected.url as string) === paired.url; } catch { return false; } })() && expected.profile === paired.profile;
-      if (!ok) throw new Error('The paired Anki profile changed. Check the profile shown and try again.');
+      if (!ok) throw new Error('Paired profile changed. Check it and try again.');
     }
     const { apiKey } = state.settings;
     const local = state.cards.filter((c): c is Card & { noteId: number } => c.status === 'sent' && !!c.noteId && sameDestination(c.destination, paired));

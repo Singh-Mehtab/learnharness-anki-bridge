@@ -41,13 +41,13 @@ test("coverage picker labels mixed coverage and warnings, and only current dismi
       row("uncertain", { state: "drafts-waiting", base: "drafts-waiting", selectable: false, uncarded: false, canDismiss: false, unresolved: 1 }),
     ], missing: [row("history", { state: "source-missing", selectable: false, uncarded: false, canDismiss: false })] });
     const text = f.picker.root.textContent!;
-    for (const label of ["Anki address changed", "3 in Anki", "2 to review", "1 in another profile", "Changed since carded", "1 deleted in Anki", "Not carding", "Writing…", "1 unconfirmed", "Ideas no longer in the graph (1)"]) assert.ok(text.includes(label), label);
+    for (const label of ["Anki address changed", "3 in Anki", "2 to review", "1 in another profile", "Changed since carded", "1 deleted in Anki", "Not carding", "Writing…", "1 unconfirmed", "Ideas missing from this graph read (1)"]) assert.ok(text.includes(label), label);
     assert.deepEqual(f.picker.ids, [], "global selection starts empty");
     assert.equal(f.box("mixed").disabled, false);
     for (const id of ["dismissed", "running", "uncertain"]) assert.equal(f.box(id).disabled, true);
     assert.equal(f.picker.root.querySelector('[aria-label="Select history"]'), null);
     const historical = f.picker.root.querySelector("details")!;
-    assert.equal(historical.hidden, false); assert.match(historical.textContent!, /missing from the current graph read/);
+    assert.equal(historical.hidden, false); assert.match(historical.textContent!, /Ideas missing from this graph read.*Their cards are kept/);
     assert.match(historical.textContent!, /Statement for history/);
     assert.doesNotMatch(f.picker.root.querySelector("ul")!.textContent!, /Statement for history/);
     assert.equal(f.picker.root.querySelector('button[aria-label="More actions for history"]'), null, "historical rows have no actions");
@@ -147,7 +147,7 @@ test("coverage intent distinguishes bulk, explicit and flagged choices across re
 
 const limitRows = (count: number, flagged = false) => Array.from({ length: count }, (_, i) => row(`node-${i}`, {}, { flagged }));
 function assertLimitWarning(picker: CoveragePicker) {
-  assert.match(picker.root.textContent!, /That would select 1001 ideas\. The limit is 1000\. Narrow the search first\./);
+  assert.match(picker.root.textContent!, /Limit is 1000 ideas\. Narrow the search\./);
 }
 
 test("coverage picker enforces 1000/1001 for manual, bulk and programmatic selections without truncation", async () => {

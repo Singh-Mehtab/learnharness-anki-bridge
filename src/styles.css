@@ -44,6 +44,11 @@
 
 /* Page and steps */
 .anki-bridge.ab-page { max-width: 1100px; margin: 0 auto; padding: 16px 16px 64px; }
+.anki-bridge .ab-tabs { display: inline-flex; gap: 2px; padding: 3px; margin-bottom: 24px; border: 1px solid var(--ab-border); border-radius: 8px; background: var(--muted, #8882); }
+.anki-bridge .ab-tab { border: 0; border-radius: 5px; padding: 7px 12px; background: transparent; color: var(--ab-muted); font: inherit; cursor: pointer; }
+.anki-bridge .ab-tab[aria-selected="true"] { background: var(--background, #222); color: var(--foreground, inherit); box-shadow: 0 1px 3px #0003; }
+.anki-bridge .ab-tab:focus-visible { outline: 2px solid var(--ring, #888); outline-offset: 2px; }
+.anki-bridge [role="tabpanel"] > .ab-actions { margin-bottom: 14px; }
 .anki-bridge .ab-intro { color: var(--ab-muted); font-size: 13px; margin: 4px 0 24px; max-width: 70ch; }
 .anki-bridge .ab-step { margin-bottom: 36px; }
 .anki-bridge .ab-step-head { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }

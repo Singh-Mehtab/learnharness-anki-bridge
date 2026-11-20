@@ -83,9 +83,9 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
       if (deck) text.append(el("p", `Deck ${deck}`, "ab-sent-detail"));
       if (tags.length) text.append(el("p", `Tags ${tags.join(" ")}`, "ab-sent-detail"));
     }
-    if (found.length) text.append(el("p", `Found ${plural(found.length, "existing note")} in Anki. No deck or tag changes were made to those notes.`, added.length ? "ab-sent-detail" : "ab-sent-title"));
-    if (skipped.length) text.append(el("p", `Skipped ${plural(skipped.length, "card")} already recorded as sent.`, ids.length ? "ab-sent-detail" : "ab-sent-title"));
-    if (failed.length) text.append(el("p", `${plural(failed.length, "card")} failed. Check the cards marked Send failed.`, "ab-sent-detail ab-warning"));
+    if (found.length) text.append(el("p", `Found ${plural(found.length, "existing note")} in Anki. Left unchanged.`, added.length ? "ab-sent-detail" : "ab-sent-title"));
+    if (skipped.length) text.append(el("p", `Skipped ${plural(skipped.length, "card")} already sent.`, ids.length ? "ab-sent-detail" : "ab-sent-title"));
+    if (failed.length) text.append(el("p", `${plural(failed.length, "card")} failed.`, "ab-sent-detail ab-warning"));
     const actionsBox = el("div", undefined, "ab-actions");
     if (ids.length && state?.destination) button(ctx, actionsBox, s, { label: "Show in Anki", onClick: async () => {
       // Not run(): that would clear this confirmation.
@@ -108,11 +108,11 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
     const icon = el("span", undefined, "ab-sent-icon"); icon.setAttribute("aria-hidden", "true");
     icon.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11m-5-5 5 5 5-5M5 20h14"/></svg>';
     const text = el("div", undefined, "ab-sent-text");
-    text.append(el("p", `Download of ${plural(result.ids.length, "card")} requested as ${result.fileName}`, "ab-sent-title"), el("p", `Deck ${result.deck}`, "ab-sent-detail"));
+    text.append(el("p", `Download requested: ${result.fileName}, ${plural(result.ids.length, "card")}`, "ab-sent-title"), el("p", `Deck ${result.deck}`, "ab-sent-detail"));
     if (result.tags.length) text.append(el("p", `Tags ${result.tags.join(" ")}`, "ab-sent-detail"));
     text.append(
-      el("p", "Not sent. These cards stay approved and don't count as in Anki. Open the file with Anki, or use File > Import, to add them.", "ab-sent-detail"),
-      el("p", "Importing can add duplicates of cards already in Anki, or update notes from an earlier package. Anki decides how to match notes; Anki Bridge can't check what it will do.", "ab-sent-detail ab-warning"));
+      el("p", "Saved, not sent. Open the file in Anki to import it.", "ab-sent-detail"),
+      el("p", "Importing may duplicate cards already in Anki or update notes from an earlier package.", "ab-sent-detail ab-warning"));
     const actionsBox = el("div", undefined, "ab-actions");
     // The same file again, byte for byte, without asking the backend.
     button(ctx, actionsBox, s, { label: "Download again", onClick: () => saveFile(result.fileName, bytes) });
@@ -175,7 +175,7 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
       if (lookupKey() !== lookupBefore) void loadDecks();
     } catch (error) {
       refreshPending = true;
-      if (alive()) feedback.show(`Couldn't refresh the cards: ${message(error)}`, "error");
+      if (alive()) feedback.show(`Refresh failed: ${message(error)}`, "error");
     }
   }
   function refreshFromPeer(): void { void backgroundRefresh(); }
@@ -223,14 +223,14 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
   function tagList(): string[] { return tags.value.split(/\s+/u).filter(Boolean); }
   function syncDeck(): void {
     const name = deckName();
-    if (!name) deckHint.textContent = "Type a deck name, or pick one of your decks.";
-    else if (state?.destination && !lookupKey()) deckHint.textContent = "Choose the profile again in settings to check this deck name at the new address.";
+    if (!name) deckHint.textContent = "";
+    else if (state?.destination && !lookupKey()) deckHint.textContent = "Address changed. Choose the profile again in settings.";
     else if (!connection) deckHint.textContent = connectionError ? "Open Anki to check this deck name." : "";
     else if (!knownDecks()) deckHint.textContent = `Open the ${state?.destination?.profile ?? "chosen"} profile in Anki to check this deck name.`;
     else if (knownDecks()!.includes(name)) deckHint.textContent = "Existing deck.";
     else {
       const close = knownDecks()!.find(d => d.toLocaleLowerCase() === name.toLocaleLowerCase());
-      deckHint.textContent = close ? `New deck. Did you mean ${close}?` : "New deck. Anki Bridge creates it when you send.";
+      deckHint.textContent = close ? `New deck. Did you mean ${close}?` : "New deck.";
     }
     // A template that uses {deck} waits for a deck name rather than inventing one.
     const waitsForDeck = !name && !!state?.settings.tagTemplate.includes("{deck}");
@@ -238,9 +238,8 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
     syncTagSuggestions();
     let tagProblem = "";
     try { validateTags(tagList()); } catch (error) { tagProblem = message(error); }
-    const extra = state?.settings.systemTags ? " The learnharness tags are added too." : "";
-    const suggested = knownTags().length ? " Your Anki tags are suggested as you type." : "";
-    tagHint.textContent = tagProblem || (tagList().length ? `Separate tags with spaces.${suggested}${extra}` : waitsForDeck && !tagsTouched ? `Tags fill in from your template once you choose a deck.${extra}` : `No tags yet. Set a default in settings.${suggested}${extra}`);
+    const extra = state?.settings.systemTags ? " Plus learnharness tags." : "";
+    tagHint.textContent = tagProblem || (tagList().length ? `Separate tags with spaces.${extra}` : waitsForDeck && !tagsTouched ? `Tags fill in after you choose a deck.${extra}` : `No tags.${extra}`);
     tagHint.dataset.tone = tagProblem ? "error" : "";
     syncBar();
   }
@@ -248,7 +247,7 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
   tags.oninput = () => { tagsTouched = true; syncDeck(); };
 
   function sendBlocker(): string | undefined {
-    if (!state?.destination) return "Choose an Anki profile in settings first.";
+    if (!state?.destination) return "Choose a profile in settings.";
     if (!deckName()) return "Choose a deck first.";
     try { validateTags(tagList()); } catch (error) { return message(error); }
     if ([...editing].some(id => approvedCards().some(c => c.id === id))) return "Save or cancel your edits first.";
@@ -266,7 +265,7 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
     const ids = approvedCards().map(c => c.id), drafts = draftCards().length;
     approveAll.update({ label: drafts ? `Approve all drafts (${drafts})` : "Approve all drafts", disabled: busy || !drafts });
     const sendProps = { disabled: busy || !ids.length, title: sendBlocker() ?? "" };
-    const downloadProps = { disabled: busy || !ids.length, title: downloadBlocker() ?? "Save the approved cards as an Anki package file. Works with Anki closed. Nothing is sent." };
+    const downloadProps = { disabled: busy || !ids.length, title: downloadBlocker() ?? "Works with Anki closed." };
     const targetKey = JSON.stringify(ids);
     if (bulkTargetKey !== targetKey) {
       bulkTargetKey = targetKey;
@@ -312,7 +311,7 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
     // Tags typed for this send apply to this send only.
     if (!result.delivery.failed.length && tags.value === sentTags) tagsTouched = false;
     void loadDecks();
-    if (result.delivery.failed.length === ids.length) return "No cards sent. Check the cards marked Send failed.";
+    if (result.delivery.failed.length === ids.length) return "No cards sent.";
     showSent(result.delivery);
     return "";
   }
@@ -323,9 +322,9 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
     approveAll = button(ctx, sendActions, s, { label: "Approve all drafts", onClick: () => run(async () => {
       const drafts = draftCards();
       if (!drafts.length) return;
-      if ([...editing].some(id => drafts.some(c => c.id === id))) throw new Error("Save or cancel your edits before approving.");
+      if ([...editing].some(id => drafts.some(c => c.id === id))) throw new Error("Save or cancel your edits first.");
       const ok = await confirmDialog(ctx, signal, { title: "Approve all drafts", confirm: "Approve",
-        body: `Approve ${plural(drafts.length, "draft")}? Check each answer is correct first. Approving does not send anything.` });
+        body: `Approve ${plural(drafts.length, "draft")}?` });
       if (!ok || !alive()) return;
       await call("approve", { ids: drafts.map(c => c.id) });
       return `Approved ${plural(drafts.length, "card")}.`;
@@ -349,13 +348,11 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
           const ids = sentCardsHere().map(c => c.id);
           if (ids.length) await ctx.call("show", { ids });
         }) },
-        // Opens the page only. Reading reviews waits for Check Anki reviews there.
-        { key: "topics", label: "Topics to revisit", disabled: !hasSent, onSelect: () => { if (sentCardsHere().length) ctx.app.openView("topics"); } },
         { key: "drop", label: `Drop all unsent cards (${unsentCount})`, disabled: !unsentCount, onSelect: () => run(async () => {
           const ids = unsentCards().map(c => c.id);
           if (!ids.length) return;
           const ok = await confirmDialog(ctx, signal, { title: "Drop all unsent cards", confirm: "Drop cards", destructive: true,
-            body: `Drop ${plural(ids.length, "card")} that you have not sent? Their ideas become available to write again. Sent cards are not affected.` });
+            body: `Drop ${plural(ids.length, "unsent card")}?` });
           if (!ok || !alive()) return;
           await call("drop", { ids });
           for (const id of ids) { edits.delete(id); editing.delete(id); }
@@ -378,18 +375,18 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
     for (const k of CORE_KINDS) { const o = el("option", KIND_NAMES[k]); o.value = k; kind.append(o); }
     const err = status();
     const actionsRow = el("div", undefined, "ab-actions ab-dialog-actions");
-    content.append(el("h3", "Write a card", "ab-dialog-heading"), field("Front", front), field("Back", back), field("Extra, optional", extra, "One line with the reason or a hint."), field("Card type", kind), err, actionsRow);
+    content.append(el("h3", "Write a card", "ab-dialog-heading"), field("Front", front), field("Back", back), field("Extra, optional", extra, "Reason or hint."), field("Card type", kind), err, actionsRow);
     let handle: ReturnType<PluginFrontendContext["ui"]["openDialog"]> | undefined;
     const close = () => { dialogScope.abort(); handle?.dispose(); };
     button(ctx, actionsRow, dialogScope.signal, { label: "Cancel", variant: "ghost", onClick: close });
     button(ctx, actionsRow, dialogScope.signal, { label: "Add card", variant: "default", onClick: async () => {
-      if (busy) { err.show("Wait for the current action to finish, then add the card.", "error"); return; }
+      if (busy) { err.show("Wait for the current action to finish.", "error"); return; }
       // Counted like other actions, so an older background read can't hide the new card.
       busy = true; actions++; syncBar();
       hideSent();
       try {
         await call("draft", { front: front.value, back: back.value, extra: extra.value, kind: kind.value });
-        close(); render(); feedback.show("Card added for review.", "success");
+        close(); render(); feedback.show("Card added.", "success");
       } catch (error) { err.show(message(error), "error"); }
       finally { busy = false; if (alive()) syncBar(); if (refreshPending && alive()) void backgroundRefresh(); }
     } });
@@ -403,10 +400,10 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
     const note = (text: string, tone: "warn" | "bad" = "warn", action?: Action) => { notes.push({ text, tone, action }); };
     if (state.recoveryError) note(`An earlier send needs checking: ${state.recoveryError}`, "bad");
     if (state.generationRecoveryError) note(`Card generation needs checking: ${state.generationRecoveryError}`, "bad");
-    if (!state.destination) note("Choose an Anki profile in settings before sending. Download .apkg works without one.", "warn", { label: "Open settings", run: () => ctx.app.openSettings() });
-    else if (state.destination.url !== state.settings.url) note("The Anki address changed since you chose a profile. Choose the profile again in settings.", "warn", { label: "Open settings", run: () => ctx.app.openSettings() });
-    else if (connectionError) note("Anki isn't reachable. Open Anki to send cards and see your decks.", "warn", { label: "Try again", run: () => { void loadDecks(); } });
-    else if (connection && connection.profile !== state.destination.profile) note(`Anki has profile ${connection.profile ?? "none"} open. Cards go to ${state.destination.profile}, so open that profile to send.`, "warn");
+    if (!state.destination) note("Choose an Anki profile to send. Download .apkg works without one.", "warn", { label: "Open settings", run: () => ctx.app.openSettings() });
+    else if (state.destination.url !== state.settings.url) note("Anki address changed. Choose the profile again.", "warn", { label: "Open settings", run: () => ctx.app.openSettings() });
+    else if (connectionError) note("Anki isn't reachable. Open Anki.", "warn", { label: "Try again", run: () => { void loadDecks(); } });
+    else if (connection && connection.profile !== state.destination.profile) note(`Anki has ${connection.profile ?? "no profile"} open. Open ${state.destination.profile} to send.`, "warn");
     const key = JSON.stringify(notes);
     if (key === bannerKey) return;
     bannerKey = key;
@@ -443,10 +440,10 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
 
     const notices: string[] = [];
     if (card.lastError) notices.push(card.lastError);
-    if (card.sourceMissing) notices.push("The idea this card came from is no longer in the graph. Check the card before approving.");
-    else if (card.sourceChanged) notices.push("The idea has changed since this card was written. Compare the card with the current idea in step 1.");
-    else if (card.sourceUnavailable) notices.push("Couldn't check whether the idea has changed. Refresh the cards to try again.");
-    if (card.status === "sending") notices.push("Anki Bridge isn't sure this card reached Anki. Use Check unconfirmed sends in the menu.");
+    if (card.sourceMissing) notices.push("Source idea wasn't found in this graph snapshot. Check the card before approving.");
+    else if (card.sourceChanged) notices.push("Idea changed since this card was written.");
+    else if (card.sourceUnavailable) notices.push("Couldn't check for idea changes. Refresh to retry.");
+    if (card.status === "sending") notices.push("May not have reached Anki. Use Check unconfirmed sends in the menu.");
     for (const text of notices) article.append(el("p", text, card.lastError === text || card.status === "sending" ? "ab-card-error" : "ab-card-warning"));
 
     const grid = el("div", undefined, "ab-card-fields");
@@ -455,7 +452,7 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
     const handles: Array<ReturnType<PluginFrontendContext["ui"]["mountMarkdown"]>> = [];
     const showLength = () => {
       const f = words(inputs.front?.value ?? values.front), b = words(inputs.back?.value ?? values.back);
-      length.textContent = f > 30 || b > 15 ? `Long card: ${f} words on the front and ${b} on the back. Aim for about 30 and 15.` : "";
+      length.textContent = [f > 30 ? `Long front: ${f} words. Aim for about 30.` : "", b > 15 ? `Long back: ${b} words. Aim for about 15.` : ""].filter(Boolean).join(" ");
     };
     for (const key of ["front", "back", "extra"] as const) {
       if (key === "extra" && !isEditing && !values.extra.trim()) continue;
@@ -513,7 +510,7 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
             const now = edits.get(card.id) ?? card, changed = !saved();
             if (changed) await call("edit", { id: card.id, front: now.front, back: now.back, extra: now.extra });
             edits.delete(card.id); editing.delete(card.id);
-            return card.status === "draft" || !changed ? "" : "Saved. Edited cards go back to draft, so approve it again.";
+            return card.status === "draft" || !changed ? "" : "Saved as draft. Approve again.";
           } finally {
             saving.delete(card.id);
             for (const area of Object.values(inputs)) if (area) area.readOnly = false;
@@ -634,8 +631,7 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
     if (!waiting.length) {
       const empty = el("div", undefined, "ab-empty-card");
       const anySent = state.cards.some(c => c.status === "sent");
-      empty.append(el("p", anySent ? "Nothing left to review." : "No cards to review.", "ab-empty-title"),
-        el("p", anySent ? "Your sent cards are listed below. Write more in step 2, or write one by hand from the menu." : "Cards you write in step 2 appear here. You can also write one by hand from the menu.", "ab-muted"));
+      empty.append(el("p", anySent ? "Nothing left to review." : "No cards yet.", "ab-empty-title"));
       list.append(empty);
     }
     const sent = state.cards.filter(c => c.status === "sent");
@@ -667,7 +663,7 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
       };
       if (!alive() || focus()) return;
       await backgroundRefresh();
-      if (alive() && !focus()) feedback.show("No cards for this idea are waiting for review.");
+      if (alive() && !focus()) feedback.show("No cards waiting for this idea.");
     },
     dispose: () => { disposed = true; options.peers.delete(refreshFromPeer); unsubscribe(); for (const row of rows.values()) row.scope.dispose(); historyScope.dispose(); barScope.dispose(); bannerScope.dispose(); sentScope.dispose(); },
   };

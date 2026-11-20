@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import type { PluginBackendContext } from '../../sdk/index.d.ts';
 import type { State, StateStore } from '../anki/state.ts';
 import type { DeliveryService } from '../anki/delivery.ts';
-import { projectCoverage } from './flow.ts';
+import { isUnsentRecord, projectCoverage } from './flow.ts';
 import type { CoverageContext } from './flow.ts';
 
 export const COVERAGE_OPERATIONS = ['coverageContext', 'dismissNode', 'restoreNode'] as const;
@@ -37,18 +37,29 @@ export class CoverageService {
     if (typeof value.nodeId !== 'string' || !value.nodeId || value.nodeId.length > 500 || value.nodeId.includes('\0') || typeof value.statementHash !== 'string' || !/^[a-f0-9]{64}$/.test(value.statementHash)) throw new Error('Choose a current source node.');
     return this.delivery.exclusive(async () => {
       const graph = this.readGraph();
-      const node = graphCoverage(graph, this.store.snapshot()).nodes.find(n => n.id === value.nodeId);
-      if (!node) throw new Error('Source node is missing from the returned snapshot. The host may have returned incomplete data. Refresh the graph.');
-      if (node.statementHash !== value.statementHash) throw new Error('Source changed. Refresh before changing its dismissal.');
+      const state = this.store.snapshot();
+      const node = graphCoverage(graph, state).nodes.find(n => n.id === value.nodeId);
+      if (!node) throw new Error('Source idea is missing. Refresh the graph.');
+      if (node.statementHash !== value.statementHash) throw new Error('Idea changed. Refresh first.');
       if (name === 'dismissNode') {
-        if (!node.coverage.canDismiss) throw new Error('Review or drop waiting cards, settle generation or delivery, or restore the existing dismissal first. Current sent coverage cannot be dismissed.');
+        if (!node.coverage.canDismiss) {
+          if (node.coverage.dismissed) throw new Error('Idea is already dismissed. Refresh the graph.');
+          if (node.coverage.generating) {
+            const hasPendingResult = state.generations.some(g => g.tasks.some(t => t.resultPending && t.input.targets.some(target => target.nodeId === node.id)));
+            if (hasPendingResult) throw new Error('Use Retry saving before dismissing this idea. If the result is unavailable, use Abandon unavailable result.');
+            throw new Error('Wait for card writing to finish before dismissing this idea.');
+          }
+          if (node.coverage.unresolved) throw new Error('Use Check unconfirmed sends before dismissing this idea.');
+          if (state.cards.some(c => c.nodeId === node.id && isUnsentRecord(c))) throw new Error('Review or drop waiting cards before dismissing this idea.');
+          throw new Error('This destination has sent cards for this idea version, or sent cards with no saved version.');
+        }
         this.onChanged?.();
         await this.delivery.save(state => {
           state.dismissals = state.dismissals.filter(d => d.nodeId !== node.id);
           state.dismissals.push({ nodeId: node.id, statementHash: node.statementHash, dismissedAt: new Date().toISOString() });
         });
       } else {
-        if (!node.coverage.dismissed) throw new Error('This statement has no current dismissal. Refresh the graph.');
+        if (!node.coverage.dismissed) throw new Error('Idea is not dismissed. Refresh the graph.');
         this.onChanged?.();
         await this.delivery.save(state => { state.dismissals = state.dismissals.filter(d => d.nodeId !== node.id); });
       }
