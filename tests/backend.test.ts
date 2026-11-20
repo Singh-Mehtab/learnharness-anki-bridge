@@ -17,7 +17,8 @@ test('backend activation registers public operations without graph, model or net
   const directory = await mkdtemp(path.join(os.tmpdir(), 'anki-backend-'));
   const c = context(directory); const close = await activate(c.ctx);
   try {
-    assert.equal(c.handlers.size, 33);
+    assert.equal(c.handlers.size, 34);
+    assert.ok(c.handlers.has('abandonGenerationResult'));
     const added = await c.call('draft', { front: 'Prompt', back: 'Answer' });
     assert.equal(added.cards[0].status, 'draft');
     await c.call('approve', { ids: [added.cards[0].id] });
@@ -101,4 +102,57 @@ test('S4: changing the address or API key forgets the review result, even when c
     await assert.rejects(c.call('pair', { confirmed: true, expectedDestination: destination }));
     assert.ok(await last(), 'a failed pairing keeps the result');
   } finally { await close(); await anki.close(); await rm(directory, { recursive: true, force: true }); }
+});
+
+test('re-enable retries an owned cleanup failure without reopening the old backend', async t => {
+  const fs = (await import('node:fs/promises')).default;
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'anki-backend-'));
+  const lock = path.join(directory, 'state.lock');
+  const unlink = fs.unlink;
+  let fail = true;
+  t.mock.method(fs, 'unlink', async (file: Parameters<typeof unlink>[0]) => {
+    if (path.basename(String(file)) === 'state.lock' && fail) throw Object.assign(new Error('Synthetic sharing failure'), { code: 'EPERM' });
+    await unlink(file);
+  });
+  const first = context(directory), close = await activate(first.ctx);
+  try {
+    await assert.rejects(activate(context(directory).ctx), /owns this data directory/, 'a live owner is not displaced');
+    const owner = await readFile(lock, 'utf8');
+    const lateDraft = first.handlers.get('draft')!;
+    await assert.rejects(close(), /Synthetic sharing failure/);
+    assert.equal(await readFile(lock, 'utf8'), owner);
+    assert.equal(first.handlers.size, 0);
+    await assert.rejects(Promise.resolve().then(() => lateDraft({ front: 'Late', back: 'No' })), /disabled/);
+    await assert.rejects(activate(context(directory).ctx), /Synthetic sharing failure/);
+    fail = false;
+    const closeNext = await activate(context(directory).ctx);
+    try {
+      const nextOwner = await readFile(lock, 'utf8');
+      assert.notEqual(nextOwner, owner);
+      await close();
+      assert.equal(await readFile(lock, 'utf8'), nextOwner, 'the old cleanup cannot remove the new lock');
+    } finally { await closeNext(); }
+  } finally { fail = false; await close(); await rm(directory, { recursive: true, force: true }); }
+});
+
+test('activation preserves its original failure when lock cleanup also fails', async t => {
+  const fs = (await import('node:fs/promises')).default;
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'anki-backend-'));
+  const lock = path.join(directory, 'state.lock'), state = path.join(directory, 'state.json');
+  const unlink = fs.unlink;
+  let fail = true;
+  t.mock.method(fs, 'unlink', async (file: Parameters<typeof unlink>[0]) => {
+    if (path.basename(String(file)) === 'state.lock' && fail) throw Object.assign(new Error('Synthetic sharing failure'), { code: 'EPERM' });
+    await unlink(file);
+  });
+  try {
+    await writeFile(state, '{"schemaVersion":900}');
+    await assert.rejects(activate(context(directory).ctx), /Unsupported state format/);
+    assert.equal(await readFile(state, 'utf8'), '{"schemaVersion":900}');
+    assert.equal(JSON.parse(await readFile(lock, 'utf8')).pid, process.pid);
+    fail = false;
+    await unlink(state);
+    const close = await activate(context(directory).ctx);
+    await close();
+  } finally { await rm(directory, { recursive: true, force: true }); }
 });

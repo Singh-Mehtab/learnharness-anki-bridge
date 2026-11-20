@@ -1,14 +1,17 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, readFileSync, readdirSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync, writeFileSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, delimiter } from "node:path";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { LENGTH_TARGETS, writerInstructions } from "../src/writer/index.ts";
 
 const runner = fileURLToPath(new URL("../bench/run.ts", import.meta.url));
 const summariser = fileURLToPath(new URL("../bench/summarise.ts", import.meta.url));
+// The runner resolves `claude` from PATH. Never inherit a PATH that could
+// fall through to an authenticated CLI. These shebang fixtures are POSIX-only.
+const posixCli = { skip: process.platform === "win32" ? "POSIX fake CLI fixture" : false };
 const scratch = (t: { after: (fn: () => void) => void }) => {
   const dir = mkdtempSync(join(tmpdir(), "anki-bench-test-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
@@ -31,10 +34,11 @@ test("writer guidance covers the observed factual, assumption and semantic-leak 
   assert.ok(html.includes(`setFocus(el, !ev.target.closest("input, textarea, label"))`));
 });
 
-test("runner caps concurrent CLI launches, including failed/budget-limited jobs, without real model calls", (t) => {
+test("runner caps concurrent CLI launches, including failed/budget-limited jobs, without real model calls", posixCli, (t) => {
   const dir = scratch(t);
   const bin = join(dir, "bin");
   mkdirSync(bin);
+  symlinkSync(process.execPath, join(bin, "node"));
   const log = join(dir, "calls.log");
   writeFileSync(join(bin, "claude"), `#!/usr/bin/env node
 const fs = require('node:fs');
@@ -46,7 +50,7 @@ process.stdout.write(JSON.stringify({session_id:'fake',structured_output:{target
   mkdirSync(join(dir, "bench/fixtures"));
   const nodes = Array.from({ length: 4 }, (_, i) => ({ id: `n${i}`, name: `Topic ${i}`, statement: "Supported fact. ".repeat(800) }));
   writeFileSync(join(dir, "bench/private/fake.json"), JSON.stringify({ name: "fake", subject: "test", origin: "hand-written", graph: { propositions: nodes, chains: [] }, chats: {}, targets: nodes.map(n => n.id) }));
-  const env = { ...process.env, PATH: `${bin}${delimiter}${process.env.PATH}`, FAKE_CALL_LOG: log };
+  const env = { PATH: bin, FAKE_CALL_LOG: log };
   const r = spawnSync(process.execPath, [runner, "--sets", "fake", "--max-calls", "2", "--concurrency", "3", "--retries", "0"], { cwd: dir, env, encoding: "utf8" });
   assert.equal(r.status, 0, r.stderr);
   const run = JSON.parse(readFileSync(join(dir, "bench-output", readdirSync(join(dir, "bench-output"))[0], "run.json"), "utf8"));
@@ -64,9 +68,10 @@ process.stdout.write(JSON.stringify({session_id:'fake',structured_output:{target
   assert.match(correction.stdout, /FAILED after 3 attempt/);
 });
 
-test("bench dedupe keeps separate fixtures, same-request cards and failed-validation cards", (t) => {
+test("bench dedupe keeps separate fixtures, same-request cards and failed-validation cards", posixCli, (t) => {
   const dir = scratch(t), bin = join(dir, "bin");
   mkdirSync(bin);
+  symlinkSync(process.execPath, join(bin, "node"));
   mkdirSync(join(dir, "bench/private"), { recursive: true });
   mkdirSync(join(dir, "bench/fixtures"));
   writeFileSync(join(bin, "claude"), `#!/usr/bin/env node
@@ -79,7 +84,7 @@ process.stdout.write(JSON.stringify({session_id:'fake',structured_output:{target
     const nodes = ids.map(id => ({ id, name: `Topic ${id}`, statement: "Supported fact. ".repeat(id === 'first' || id === 'same' ? 5 : 1100) }));
     writeFileSync(join(dir, `bench/private/${name}.json`), JSON.stringify({ name, subject: "test", origin: "hand-written", graph: { propositions: nodes, chains: [] }, chats: {}, targets: nodes.map(n => n.id) }));
   }
-  const env = { ...process.env, PATH: `${bin}${delimiter}${process.env.PATH}` };
+  const env = { PATH: bin };
   const r = spawnSync(process.execPath, [runner, "--sets", "a,b", "--max-calls", "10", "--retries", "0"], { cwd: dir, env, encoding: "utf8" });
   assert.equal(r.status, 0, r.stderr);
   const run = JSON.parse(readFileSync(join(dir, "bench-output", readdirSync(join(dir, "bench-output"))[0], "run.json"), "utf8"));

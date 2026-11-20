@@ -65,7 +65,7 @@ export function projectCoverage(sources: readonly CoverageSource[], state: Pick<
   for (const generation of state.generations) {
     for (const skip of generation.skipped) skips.set(skip.nodeId, skip.reason);
     for (const task of generation.tasks) {
-      if (generation.status === 'running' && ['pending', 'running'].includes(task.status)) for (const target of task.input.targets) active.add(target.nodeId);
+      if (task.resultPending || (generation.status === 'running' && ['pending', 'running'].includes(task.status))) for (const target of task.input.targets) active.add(target.nodeId);
       for (const target of task.result?.targets ?? []) {
         if (target.skipReason) skips.set(target.nodeId, target.skipReason);
         else if (target.cards.length) skips.delete(target.nodeId);

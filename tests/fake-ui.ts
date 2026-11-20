@@ -1,6 +1,8 @@
 // Minimal stand-in for the host UI kit in DOM tests. Host buttons become plain
 // <button> elements with the label as text; menus record their items so a test
 // can choose one by label.
+import type { PluginFrontendContext } from "../sdk/index.d.ts";
+
 type Handle = { update(props: Record<string, unknown>): void; dispose(): void };
 export interface FakeMenu { label?: string; items: Array<{ key: string; label: string; disabled?: boolean; onSelect: () => void | Promise<void> }> }
 
@@ -19,6 +21,29 @@ export async function chooseMenu(label: string | RegExp): Promise<void> {
 function scoped(signal: AbortSignal | undefined, dispose: () => void): void {
   if (signal?.aborted) dispose();
   else signal?.addEventListener("abort", dispose, { once: true });
+}
+
+/** Dispatches to the latest host callback while DOM props wait for React. */
+export function delayedButtons() {
+  const pending = new Set<() => void>();
+  const mountButton: PluginFrontendContext["ui"]["mountButton"] = (container, initial, { signal }) => {
+    const target = container.ownerDocument.createElement("div");
+    const node = container.ownerDocument.createElement("button");
+    node.type = "button";
+    let current = initial, disposed = false;
+    node.onclick = () => { if (!disposed && !node.disabled) void current.onClick(); };
+    const commit = () => {
+      node.textContent = current.label;
+      node.disabled = !!current.disabled;
+      if (!node.isConnected) target.append(node);
+    };
+    const dispose = () => { disposed = true; pending.delete(commit); target.remove(); };
+    container.append(target);
+    pending.add(commit);
+    signal.addEventListener("abort", dispose, { once: true });
+    return { update: props => { if (!disposed) { current = { ...current, ...props }; pending.add(commit); } }, dispose };
+  };
+  return { mountButton, commitButtons: () => { for (const commit of pending) commit(); pending.clear(); } };
 }
 
 export function fakeUi(overrides: Record<string, unknown> = {}): Record<string, unknown> {

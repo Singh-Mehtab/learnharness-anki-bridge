@@ -4,7 +4,7 @@ import { Window } from "happy-dom";
 import type { PluginFrontendContext } from "../sdk/index.d.ts";
 import { mountDrafting } from "../src/drafting-ui.ts";
 import { FLAG_SHORTCUT, mountSources, registerSessionActions, SessionRequests } from "../src/session-ui.ts";
-import { fakeUi } from "./fake-ui.ts";
+import { delayedButtons, fakeUi } from "./fake-ui.ts";
 
 const tick = (ms = 0) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 const messages = [
@@ -18,7 +18,7 @@ function sessionContext(over: Record<string, unknown> = {}, view: Record<string,
 const none = { waiting: 0, sent: 0, sentElsewhere: 0 };
 const flagView = (over: Record<string, unknown> = {}) => ({ id: "f1", sessionId: "s1", sessionTitle: "Spin", messageIds: ["a1"], note: "", flaggedAt: "2026-11-18T10:00:00.000Z", status: "waiting", nodeIds: [], ...over });
 
-function setup(handler: (name: string, input: unknown) => unknown) {
+function setup(handler: (name: string, input: unknown) => unknown, ui: Partial<PluginFrontendContext["ui"]> = {}) {
   const window = new Window();
   Object.assign(globalThis, { document: window.document });
   const activation = new AbortController();
@@ -44,7 +44,7 @@ function setup(handler: (name: string, input: unknown) => unknown) {
       options.signal.addEventListener("abort", dispose, { once: true });
       dialog = { content, dispose };
       return { dispose, update: () => {} };
-    } }),
+    }, ...ui }),
   } as unknown as PluginFrontendContext;
   const buttonIn = (parent: ParentNode, label: string | RegExp) => {
     const found = Array.from(parent.querySelectorAll("button")).find((b) => typeof label === "string" ? b.textContent === label : label.test(b.textContent ?? ""));
@@ -103,6 +103,50 @@ test("a shortcut on an already flagged reply never offers to undo the earlier fl
     assert.match(content.textContent!, /Already flagged for Anki/);
     assert.equal(content.querySelector("input")!.value, "earlier note");
     assert.equal(Array.from(content.querySelectorAll("button")).some((b) => b.textContent === "Undo flag"), false);
+  } finally { await f.close(); }
+});
+
+test("a stale Flag button cannot clear an existing note before Save note commits", async () => {
+  const { mountButton, commitButtons } = delayedButtons();
+  const f = setup((_name, input) => flagView({ created: false, note: (input as { note?: string }).note ?? "existing note" }), { mountButton });
+  try {
+    registerSessionActions(f.ctx, new SessionRequests());
+    await f.actions.get("flag-for-anki")!.run(sessionContext());
+    commitButtons();
+    const content = f.dialog()!.content;
+    const flag = f.buttonIn(content, "Flag");
+    const note = content.querySelector("input")!;
+    flag.click(); await tick();
+    assert.equal(note.value, "existing note");
+    note.value = "";
+    flag.click(); await tick();
+    assert.equal(flag.isConnected, false);
+    assert.deepEqual(f.calls.map(c => c.input), [{ sessionId: "s1", messageIds: ["a1"] }]);
+    commitButtons();
+    f.buttonIn(content, "Save note").click(); await tick();
+    assert.deepEqual(f.calls.at(-1)!.input, { sessionId: "s1", messageIds: ["a1"], note: "" });
+  } finally { await f.close(); }
+});
+
+test("Undo flag cannot remove a flag after Save note while the host still shows Undo enabled", async () => {
+  const { mountButton, commitButtons } = delayedButtons();
+  const f = setup((_name, input) => flagView({ created: true, note: (input as { note?: string }).note ?? "" }), { mountButton });
+  try {
+    registerSessionActions(f.ctx, new SessionRequests());
+    await f.actions.get("flag-for-anki")!.run(sessionContext({ placement: "keyboard" }));
+    commitButtons();
+    const content = f.dialog()!.content;
+    const undo = f.buttonIn(content, "Undo flag");
+    content.querySelector("input")!.value = "a new note";
+    f.buttonIn(content, "Save note").click(); await tick();
+    assert.match(content.textContent!, /Note saved\./);
+    assert.equal(undo.disabled, false, "the host still shows Undo as enabled");
+    undo.click(); await tick();
+    assert.deepEqual(f.calls.map(c => c.name), ["flag", "flag"]);
+    commitButtons();
+    assert.equal(undo.disabled, true);
+    f.buttonIn(content, "Close").click();
+    assert.equal(f.dialog(), undefined);
   } finally { await f.close(); }
 });
 
@@ -360,5 +404,26 @@ test("a failed session read shows the error", async () => {
   try {
     const s = sources(f); await tick(); await tick();
     assert.match(s.container.textContent!, /Sessions unavailable/);
+  } finally { await f.close(); }
+});
+
+test("Enter used by the IME does not submit the flag note or cancel composition", async () => {
+  const f = setup(() => flagView({ note: "日本語" }));
+  try {
+    registerSessionActions(f.ctx, new SessionRequests());
+    await f.actions.get("flag-for-anki")!.run(sessionContext());
+    const note = f.dialog()!.content.querySelector("input")!;
+    note.value = "日本語";
+    const enter = (init: { isComposing?: boolean; keyCode?: number }) => {
+      const e = new f.window.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true, ...init });
+      note.dispatchEvent(e as never);
+      return e.defaultPrevented;
+    };
+    assert.equal(enter({ isComposing: true }), false);
+    assert.equal(enter({ keyCode: 229 }), false);
+    assert.equal(f.calls.length, 0);
+    assert.equal(enter({}), true);
+    assert.deepEqual(f.calls, [{ name: "flag", input: { sessionId: "s1", messageIds: ["a1"], note: "日本語" } }]);
+    await tick();
   } finally { await f.close(); }
 });

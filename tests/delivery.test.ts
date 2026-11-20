@@ -6,9 +6,11 @@ import { mkdtemp, readFile, writeFile, rm, stat } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
+import { once } from 'node:events';
 import { StateStore } from '../src/anki/state.ts';
+import type { State } from '../src/anki/state.ts';
 import { DeliveryService } from '../src/anki/delivery.ts';
-import type { PublicSnapshot } from '../src/anki/delivery.ts';
+import type { PublicSnapshot, SendResult } from '../src/anki/delivery.ts';
 
 interface Note { noteId: number; fields: Record<string, string>; deckName: string; modelName: string; tags: string[] }
 async function fixture() {
@@ -59,7 +61,7 @@ async function fixture() {
         if (switchAfterAdd) profile = 'Different';
         if (dropAfterAdd) { dropAfterAdd = false; res.destroy(); return; }
       } else if (action === 'notesInfo') result = notes.filter(n => params.notes.includes(n.noteId)).map(n => ({ noteId: n.noteId, fields: n.fields, tags: n.tags, modelName: n.modelName, cards: [n.noteId + 1000] }));
-      else if (action === 'guiBrowse') result = [];
+      else if (action === 'guiBrowse') result = notes.filter(n => params.query.includes(`"LH_ID:${n.fields.LH_ID}"`)).map(n => n.noteId + 1000);
       else if (['updateModelStyling', 'updateModelTemplates'].includes(action)) result = null;
       else throw new Error('Unexpected API action: ' + action);
       if (errors.has(action)) { result = null; error = errors.get(action)!; }
@@ -78,7 +80,7 @@ async function fixture() {
   };
   const pair = () => service.command('pair', { confirmed: true });
   const approve = (ids: string[]) => service.command('approve', { ids });
-  const send = (ids: string[], deck = 'Scratch::New') => service.command('send', { ids, deck, expectedDestination: service.snapshot().destination });
+  const send = (ids: string[], deck = 'Scratch::New', tags?: string[]) => service.command('send', { ids, deck, tags, expectedDestination: service.snapshot().destination }) as Promise<SendResult>;
   const reopen = async () => { await service.close(); store = await StateStore.open(directory); service = new DeliveryService(store); await service.activate(); };
   const close = async () => { await service.close(); server.closeAllConnections(); await new Promise<void>((resolve, reject) => server.close(e => e ? reject(e) : resolve())); await rm(directory, { recursive: true, force: true }); };
   return { directory, url, calls, notes, errors, snap, draft, pair, approve, send, reopen, close, addEntered, addCompleted, get service() { return service; }, get store() { return store; },
@@ -111,7 +113,7 @@ test('hand-written cards require explicit pairing and durable approval, then add
     assert.equal(add.params.note.options.allowDuplicate, false);
     assert.equal(add.params.note.options.duplicateScope, 'deck');
     assert.equal(add.params.note.options.duplicateScopeOptions.checkAllModels, false);
-    await f.send([id]);
+    assert.deepEqual((await f.send([id])).delivery.skipped, [id]);
     assert.equal(f.notes.length, 1);
     assert(!f.calls.some(c => /delete|updateNote|suspend|due/i.test(c.action)));
   } finally { await f.close(); }
@@ -202,9 +204,10 @@ test('deleted Anki notes stay sent/deleted, and Show in Anki uses UUIDs', async 
   try {
     await f.pair(); const id = await f.draft(); await f.approve([id]); await f.send([id]);
     await f.service.command('presence'); assert.equal(f.snap().cards[0].presence, 'present');
-    await f.service.command('show', { ids: [id] }); assert.equal(f.calls.at(-1)!.params.query, `"LH_ID:${id}"`);
+    await f.service.command('show', { ids: [id] }); assert.equal(f.calls.findLast(c => c.action === 'guiBrowse')!.params.query, `"LH_ID:${id}"`);
     f.notes.splice(0); await f.service.command('presence');
     assert.equal(f.snap().cards[0].presence, 'deleted'); assert.equal(f.snap().cards[0].status, 'sent');
+    await assert.rejects(f.service.command('show', { ids: [id] }), /No matching cards found in the paired Anki profile/);
     await f.send([id]); assert.equal(f.notes.length, 0);
     await assert.rejects(f.service.command('edit', { id, front: 'overwrite', back: 'bad' }), /cannot be edited/);
   } finally { await f.close(); }
@@ -229,7 +232,7 @@ test('editing invalidates approval and API key is not exposed in snapshots', asy
     await f.pair(); const id = await f.draft(); await f.approve([id]);
     await f.service.command('edit', { id, front: 'Changed', back: 'answer' });
     assert.equal(f.snap().cards[0].status, 'draft'); await assert.rejects(f.send([id]), /Approve/);
-    const mode = (await stat(path.join(f.directory, 'state.json'))).mode & 0o777; assert.equal(mode, 0o600);
+    if (process.platform !== 'win32') assert.equal((await stat(path.join(f.directory, 'state.json'))).mode & 0o777, 0o600);
   } finally { await f.close(); }
 });
 
@@ -387,6 +390,55 @@ test('a stale lock from a dead backend is replaced by exactly one of two concurr
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
 
+test('a second child cannot replace a live child’s state lock', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'anki-child-lock-'));
+  const lock = path.join(directory, 'state.lock');
+  const childSource = `
+    import { readFile } from 'node:fs/promises';
+    import { StateStore } from ${JSON.stringify(new URL('../src/anki/state.ts', import.meta.url).href)};
+    let store;
+    try { store = await StateStore.open(${JSON.stringify(directory)}); }
+    catch (error) {
+      if (!process.send && /Another Anki Bridge backend owns/.test(error.message)) process.exit(23);
+      throw error;
+    }
+    if (process.send) {
+      const release = new Promise(resolve => process.once('message', resolve));
+      process.send(await readFile(${JSON.stringify(lock)}, 'utf8'));
+      await release;
+      await store.close();
+      process.disconnect();
+    } else await store.close();
+  `;
+  const args = ['--input-type=module', '-e', childSource];
+  const winner = spawn(process.execPath, args, { stdio: ['ignore', 'ignore', 'inherit', 'ipc'] });
+  const winnerExit = once(winner, 'close');
+  const timeout = AbortSignal.timeout(5_000);
+  let loser: ReturnType<typeof spawn> | undefined;
+  let loserExit: Promise<unknown[]> | undefined;
+  try {
+    const [owned] = await once(winner, 'message', { signal: timeout });
+    assert.equal(typeof owned, 'string');
+    assert.equal(JSON.parse(owned).pid, winner.pid);
+    assert.ok(JSON.parse(owned).token);
+    assert.equal(await readFile(lock, 'utf8'), owned);
+    loser = spawn(process.execPath, args, { stdio: ['ignore', 'ignore', 'inherit'] });
+    loserExit = once(loser, 'close');
+    assert.deepEqual(await once(loser, 'close', { signal: timeout }), [23, null]);
+    assert.equal(winner.exitCode, null, 'the first child is still holding the lock');
+    assert.equal(await readFile(lock, 'utf8'), owned, 'the losing child did not replace the owner token');
+    winner.send('release');
+    assert.deepEqual(await once(winner, 'close', { signal: timeout }), [0, null]);
+    await assert.rejects(readFile(lock), { code: 'ENOENT' });
+    const reopened = await StateStore.open(directory); await reopened.close();
+  } finally {
+    if (loser?.exitCode === null && loser.signalCode === null) loser.kill();
+    if (winner.exitCode === null && winner.signalCode === null) winner.kill();
+    await Promise.allSettled([winnerExit, loserExit]);
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('state store refuses corrupt/newer snapshots and another active writer', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'anki-state-'));
   try {
@@ -406,23 +458,41 @@ test('actual process death after addNote and before state write reconciles on re
   try {
     await f.pair(); const id = await f.draft(); await f.approve([id]);
     await f.service.close();
-    // Run the real service in another process. Kill at the exact durable-write boundary
-    // after Anki accepted addNote, without changing production delivery code.
+    // Exit without service/store cleanup at the exact durable-write boundary
+    // after the Anki stub accepted addNote. An exit code is portable to Windows.
+    const crashCode = 79;
     const child = spawn(process.execPath, ['--input-type=module', '-e', `
       import { StateStore } from ${JSON.stringify(new URL('../src/anki/state.ts', import.meta.url).href)};
       import { DeliveryService } from ${JSON.stringify(new URL('../src/anki/delivery.ts', import.meta.url).href)};
       const store = await StateStore.open(${JSON.stringify(f.directory)});
       const replace = store.replace.bind(store);
-      store.replace = async state => { if (state.cards.some(c => c.status === 'sent')) process.kill(process.pid, 'SIGKILL'); return replace(state); };
+      store.replace = async state => { if (state.cards.some(c => c.status === 'sent')) process.exit(${crashCode}); return replace(state); };
       const service = new DeliveryService(store);
       await service.command('send', {ids:[${JSON.stringify(id)}],deck:'Crash deck',expectedDestination:service.snapshot().destination});
       throw Error('Crash injection was not reached');
-    `], { stdio: ['ignore', 'pipe', 'pipe'] });
-    const exit = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => { child.on('error', reject); child.on('exit', (code, signal) => resolve({ code, signal })); });
-    assert.equal(exit.signal, 'SIGKILL'); assert.equal(f.notes.length, 1);
+    `], { stdio: ['ignore', 'ignore', 'inherit'] });
+    assert.deepEqual(await once(child, 'close'), [crashCode, null]);
+    assert.equal(f.notes.length, 1);
     assert.equal(JSON.parse(await readFile(path.join(f.directory, 'state.json'), 'utf8')).cards[0].status, 'sending');
     await f.reopen(); assert.equal(f.snap().cards[0].status, 'sent');
     await f.send([id]); assert.equal(f.notes.length, 1);
+    assert.equal(f.calls.filter(c => c.action === 'addNote').length, 1, 'no second add was attempted');
+  } finally { await f.close(); }
+});
+
+test('Anki send reconciliation clears only the send warning, not the generation warning', async () => {
+  const f = await fixture();
+  try {
+    await f.pair(); const id = await f.draft(); await f.approve([id]);
+    f.service.reportGenerationRecoveryError('Generation result save warning');
+    f.dropAfterAdd();
+    await assert.rejects(f.send([id]));
+    assert.ok(f.snap().recoveryError);
+    assert.equal(f.snap().generationRecoveryError, 'Generation result save warning');
+    await f.service.command('reconcile');
+    assert.equal(f.snap().cards[0].status, 'sent');
+    assert.equal(f.snap().recoveryError, undefined);
+    assert.equal(f.snap().generationRecoveryError, 'Generation result save warning');
   } finally { await f.close(); }
 });
 
@@ -463,4 +533,86 @@ test('a slow connection check does not hold the writer fence, so approval still 
     release();
     assert.deepEqual((await checking as { decks: string[] }).decks, ['Default']);
   } finally { release?.(); await f.close(); }
+});
+
+// The version and sent/sending deck checks from v0.8.0's state validator.
+// Keep these independent of the current validator to catch accidental v6 writes.
+function validateV080DeliveryContract(state: { schemaVersion: number; cards: State['cards'] }): void {
+  if (state.schemaVersion !== 6) throw new Error('Unsupported state format.');
+  for (const card of state.cards) {
+    if ((card.status === 'sent' || card.status === 'sending') && (!card.destination?.url || !card.destination.profile || typeof card.deck !== 'string' || !card.deck)) {
+      throw new Error('Missing delivery destination or deck.');
+    }
+  }
+}
+
+test('schema 7 records an existing note with unknown deck and preserves a 0.8.0 rollback snapshot', async () => {
+  const f = await fixture();
+  try {
+    await f.pair();
+    const sent = await f.draft('Delivered before upgrade');
+    const imported = await f.draft('Imported before upgrade');
+    await f.approve([sent, imported]);
+    await f.send([sent], 'Known Deck');
+    const original = JSON.stringify({ ...f.store.snapshot(), schemaVersion: 6 }, null, 2) + '\n';
+    const legacy = JSON.parse(original) as Omit<State, 'schemaVersion'> & { schemaVersion: 6 };
+    const stateFile = path.join(f.directory, 'state.json');
+    const backup = path.join(f.directory, 'state.v6.bak');
+    await f.service.close();
+    await writeFile(stateFile, original);
+    await f.reopen();
+    assert.deepEqual(f.store.snapshot(), { ...legacy, schemaVersion: 7 });
+    assert.equal(await readFile(backup, 'utf8'), original);
+
+    f.notes.push({ noteId: 500, fields: { LH_ID: imported }, deckName: 'Imported Deck', modelName: 'Imported Type', tags: [] });
+    const result = await f.send([imported], 'Requested Deck');
+    assert.deepEqual(result.delivery.found, [imported]);
+    const persisted = JSON.parse(await readFile(stateFile, 'utf8')) as State;
+    assert.equal(persisted.schemaVersion, 7);
+    assert.deepEqual(persisted.cards[1], { ...legacy.cards[1], status: 'sent', noteId: 500, existingNote: true, presence: 'present', destination: legacy.destination });
+    assert.throws(() => validateV080DeliveryContract(persisted), /Unsupported state format/);
+    assert.throws(() => validateV080DeliveryContract({ ...persisted, schemaVersion: 6 }), /Missing delivery destination or deck/);
+    assert.equal(f.calls.filter(c => c.action === 'addNote').length, 1, 'no Anki write for the imported note');
+
+    await f.service.close();
+    const mislabeled = JSON.stringify({ ...persisted, schemaVersion: 6 });
+    await writeFile(stateFile, mislabeled);
+    await assert.rejects(StateStore.open(f.directory), /Missing delivery destination or deck/);
+    assert.equal(await readFile(stateFile, 'utf8'), mislabeled, 'invalid input is left intact');
+    const restored = await readFile(backup, 'utf8');
+    await writeFile(stateFile, restored);
+    assert.equal(restored, original);
+    const rollbackState = JSON.parse(await readFile(stateFile, 'utf8'));
+    validateV080DeliveryContract(rollbackState);
+    assert.equal(rollbackState.cards[0].deck, 'Known Deck');
+    assert.equal(rollbackState.cards[1].status, 'approved');
+  } finally { await f.close(); }
+});
+
+test('delivery receipt separates a matching imported note, a new add and a definite failure', async () => {
+  const f = await fixture();
+  try {
+    await f.pair();
+    const imported = await f.draft('Apparently imported');
+    const added = await f.draft('Fresh prompt');
+    const failed = await f.draft('Duplicate prompt');
+    await f.approve([imported, added, failed]);
+    // Model the Anki-side result of importing an .apkg that carried this draft's LH_ID.
+    const existing = { noteId: 500, fields: { LH_ID: imported, Front: 'Edited in Anki' }, deckName: 'Imported Deck', modelName: 'Imported Type', tags: ['original'] };
+    f.notes.push(structuredClone(existing));
+    const before = f.calls.length;
+    const foundOnly = await f.send([imported], 'Not the actual deck', ['not-applied']);
+    assert.deepEqual(foundOnly.delivery, { added: [], found: [imported], skipped: [], failed: [], deck: null, tags: [] });
+    assert.ok(f.calls.slice(before).every(c => ['getActiveProfile', 'findNotes'].includes(c.action)));
+    assert.equal(foundOnly.cards[0].deck, undefined);
+    assert.equal(foundOnly.cards[0].existingNote, true);
+    assert.equal(foundOnly.settings.lastDeck, '');
+    f.failFront((await import('../src/anki/render.ts')).renderMarkdown('Duplicate prompt'));
+    const mixed = await f.send([imported, added, failed], 'New Deck', ['explicit']);
+    assert.deepEqual(mixed.delivery, { added: [added], found: [], skipped: [imported], failed: [failed], deck: 'New Deck', tags: ['explicit', 'learnharness', 'learnharness::kind::fact'] });
+    assert.deepEqual(f.notes[0], existing);
+    await f.reopen();
+    assert.equal(f.snap().cards[0].existingNote, true);
+    await f.service.command('show', { ids: [imported] });
+  } finally { await f.close(); }
 });

@@ -121,23 +121,23 @@ Each topic shows its cards with their lapses, reviews, recent Again dates and de
 ## Install
 
 > [!NOTE]
-> Anki Bridge has no public release yet. Version 0.8.0 is the current build for personal use. Until a release is published, build the install zip from source as described below.
+> Anki Bridge has no public release yet. Version 0.8.1 is the current build for personal use. Use the `anki-bridge-v0.8.1.zip` install archive if you have it, or build it from source using the [install guide](docs/install.md#build-the-zip-from-source). GitHub's automatically generated source zip is not the install archive.
 
 ### What you need
 
 - [LearnHarness](https://github.com/amosblomqvist/learnharness) with community plugins (plugin API v1). Tested on 0.6.1 on macOS. The plugin allows later versions but has not been tested on them.
 - A model set up in LearnHarness, for writing cards. Choosing ideas, estimating cost and sending make no model calls. Writing cards uses your provider's quota.
 - For sending and Topics to revisit, Anki Desktop 26.08 or later with the [AnkiConnect](https://git.sr.ht/~foosoft/anki-connect) add-on, running while you use them. Tested with AnkiConnect 26.10.11.0 and 26.11.15.0. Builds without `getActiveProfile` are refused, because the plugin uses it to check it is writing to the right profile. **Download .apkg** works without AnkiConnect.
-- To build the zip, Node.js 23.6 or later, npm and the `zip` command.
+- To build the zip yourself, Node.js 23.6 or later, npm and the `zip` command. You don't need these to install a prebuilt zip.
 
 ### Steps
 
-1. Build the zip. In a clone of this repository, run `npm ci` and then `npm run package:plugin`. This writes `anki-bridge-v0.8.0.zip` at the repository root.
-2. In LearnHarness, open **Settings → Community plugins** and copy the plugins folder path. Quit LearnHarness.
-3. Unzip the archive and move the `anki-bridge` folder into the plugins folder, so the manifest ends up at `anki-bridge/dist/manifest.json`.
+1. In LearnHarness, open **Settings → Community plugins** and copy the plugins folder path. Quit LearnHarness completely. On Mac, use **Quit** or ⌘Q; closing the window is not enough.
+2. If the plugins folder already contains `anki-bridge`, stop and follow the upgrade steps below. Otherwise, extract the install zip outside the plugins folder.
+3. Open any folder created by your extractor. Move the inner `anki-bridge` folder into the plugins folder. Check that the manifest is at `<plugins folder>/anki-bridge/dist/manifest.json`, with no version-named folder above `anki-bridge`.
 4. Start LearnHarness, enable **Anki Bridge** under Community plugins, and open it from the sidebar.
 
-To upgrade later, quit LearnHarness, back up `anki-bridge/data/`, then replace only `anki-bridge/dist/`. The `data/` folder holds your drafts, flags and send history. The [install guide](docs/install.md) has the full upgrade, rollback and troubleshooting steps.
+To upgrade, quit LearnHarness, privately back up `anki-bridge/data/`, then replace only `anki-bridge/dist/`. Do not merge folders or replace the whole `anki-bridge` folder. The `data/` folder holds your drafts, flags, send history and any saved API key. The [install guide](docs/install.md) has the full upgrade, rollback and troubleshooting steps.
 
 > [!WARNING]
 > Community plugins run local code with the same access as LearnHarness. Only install a build you trust.
@@ -175,7 +175,7 @@ If you set an API key, it goes with every AnkiConnect request. By default each n
 - Cards are Basic front-and-back notes. Cloze, reversed and type-in cards are not supported.
 - Images and Mermaid diagrams cannot go in cards.
 - Card quality depends on your model, so check every draft. The writer was tuned on one lecture and has not been benchmarked on new subjects.
-- The 0.8.0 interface was checked with synthetic data in a scratch LearnHarness. The 0.8.0 writer has not yet been tested end to end with a live model and a real Anki profile.
+- The 0.8.0 interface was checked with synthetic data in a scratch LearnHarness. Native Windows testing of 0.8.1 remains open, as does an end-to-end test of the 0.8.0 writer with a live model and a real Anki profile.
 - Downloaded packages have been checked with SQLite and zip readers but not yet imported into Anki.
 - Sending and Topics to revisit need Anki Desktop open with AnkiConnect. Don't switch Anki profiles during a send, because AnkiConnect cannot check the profile and write in a single step.
 - An optional AnkiConnect API key is stored in plain text in the plugin's data folder.

@@ -1,7 +1,8 @@
 // Step 3: check each card, approve it and send approved cards to a deck, or download them as an .apkg file.
 import type { PluginFrontendContext } from "../sdk/index.d.ts";
+import type { SendResult } from "./anki/delivery.ts";
 import type { PackageResult } from "./anki/apkg.ts";
-import { expandTagTemplate, matchTagCase, systemTags, tagSuggestions, validateTags } from "./anki/tags.ts";
+import { expandTagTemplate, matchTagCase, tagSuggestions, validateTags } from "./anki/tags.ts";
 import { isWaitingCard } from "./coverage/flow.ts";
 import { KIND_NAMES } from "./kinds-ui.ts";
 import { CORE_KINDS, isStoredKind } from "./writer/types.ts";
@@ -13,11 +14,11 @@ interface Card {
   id: string; nodeId: string; statementHash: string; sessionId: string; nodeName: string; sessionName: string;
   kind: string; front: string; back: string; extra: string;
   status: "draft" | "approved" | "sending" | "sent" | "failed" | "dropped";
-  deck?: string; noteId?: number; destination?: Destination; lastError?: string;
+  deck?: string; noteId?: number; existingNote?: true; destination?: Destination; lastError?: string;
   presence?: "present" | "deleted" | "unknown";
   sourceStatement?: string; sourceChanged?: boolean; sourceMissing?: boolean; sourceUnavailable?: boolean;
 }
-export interface Snapshot { settings: Settings; destination: Destination | null; cards: Card[]; recoveryError?: string }
+export interface Snapshot { settings: Settings; destination: Destination | null; cards: Card[]; recoveryError?: string; generationRecoveryError?: string }
 type Fields = { front: string; back: string; extra: string };
 const message = (error: unknown) => error instanceof Error ? error.message : String(error);
 const words = (text: string) => text.trim().split(/\s+/u).filter(Boolean).length;
@@ -43,6 +44,9 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
   const deckField = field("Deck", deck); deckField.append(deckHint);
   const tagField = field("Tags", tags); tagField.append(tagHint);
   const sendActions = el("div", undefined, "ab-actions ab-send-actions");
+  sendActions.tabIndex = -1;
+  sendActions.setAttribute("role", "group");
+  sendActions.setAttribute("aria-label", "Bulk review actions");
   sendBar.append(deckField, decks, tagField, tagOptions, sendActions);
   const feedback = status();
   /** A clear confirmation after a send, kept until the next action or dismissed (#32). */
@@ -61,22 +65,29 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
   /** Cards whose save is in flight. Their editors stay read-only across re-renders. */
   const saving = new Set<string>();
   const alive = () => !disposed && !signal.aborted && !ctx.signal.aborted;
-  const scope = new RenderScope(signal), barScope = new RenderScope(signal), bannerScope = new RenderScope(signal);
+  const historyScope = new RenderScope(signal), barScope = new RenderScope(signal), bannerScope = new RenderScope(signal);
+  const rows = new Map<string, { key: string; scope: RenderScope; view: ReturnType<typeof renderCard> }>();
+  let bannerKey = "", historyKey = "";
   let approveAll: ButtonHandle | undefined, sendAll: ButtonHandle | undefined, downloadAll: ButtonHandle | undefined;
+  let bulkTargetKey: string | undefined;
   const sentScope = new RenderScope(signal);
   function hideSent(): void { sentScope.reset(); sentPanel.replaceChildren(); sentPanel.hidden = true; delete sentPanel.dataset.kind; }
-  function showSent(ids: string[], deckSent: string, tagsSent: string[]): void {
+  function showSent({ added, found, skipped, failed, deck, tags }: SendResult["delivery"]): void {
+    const ids = [...added, ...found];
     const s = sentScope.reset();
     const icon = el("span", undefined, "ab-sent-icon"); icon.setAttribute("aria-hidden", "true");
     icon.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>';
     const text = el("div", undefined, "ab-sent-text");
-    text.append(el("p", `${plural(ids.length, "card")} sent to Anki`, "ab-sent-title"), el("p", `Deck ${deckSent}`, "ab-sent-detail"));
-    // Show every tag the send added, including the automatic ones (delivery.ts adds them per card).
-    const auto = state?.settings.systemTags === false ? [] : ids.flatMap(id => { const c = state?.cards.find(card => card.id === id); return c ? systemTags(c.kind) : []; });
-    const allTags = [...new Set([...tagsSent, ...auto])];
-    if (allTags.length) text.append(el("p", `Tags ${allTags.join(" ")}`, "ab-sent-detail"));
+    if (added.length) {
+      text.append(el("p", `${plural(added.length, "card")} sent to Anki`, "ab-sent-title"));
+      if (deck) text.append(el("p", `Deck ${deck}`, "ab-sent-detail"));
+      if (tags.length) text.append(el("p", `Tags ${tags.join(" ")}`, "ab-sent-detail"));
+    }
+    if (found.length) text.append(el("p", `Found ${plural(found.length, "existing note")} in Anki. No deck or tag changes were made to those notes.`, added.length ? "ab-sent-detail" : "ab-sent-title"));
+    if (skipped.length) text.append(el("p", `Skipped ${plural(skipped.length, "card")} already recorded as sent.`, ids.length ? "ab-sent-detail" : "ab-sent-title"));
+    if (failed.length) text.append(el("p", `${plural(failed.length, "card")} failed. Check the cards marked Send failed.`, "ab-sent-detail ab-warning"));
     const actionsBox = el("div", undefined, "ab-actions");
-    if (state?.destination) button(ctx, actionsBox, s, { label: "Show in Anki", onClick: async () => {
+    if (ids.length && state?.destination) button(ctx, actionsBox, s, { label: "Show in Anki", onClick: async () => {
       // Not run(): that would clear this confirmation.
       try { await ctx.call("show", { ids }); } catch (error) { if (alive()) feedback.show(message(error), "error"); }
     } });
@@ -109,20 +120,24 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
     revealPanel(icon, text, actionsBox);
   }
 
-  async function run(action: () => Promise<string | void>): Promise<void> {
+  async function run(action: () => Promise<string | void>, keepPosition = false): Promise<void> {
     if (!alive() || busy) return;
-    busy = true; actions++; syncBar();
-    hideSent();
-    feedback.show("Working…");
-    try { const done = await action(); if (alive()) { render(); feedback.show(done ?? "", "success"); } }
-    catch (error) { if (alive()) { render(); feedback.show(message(error), "error"); } }
+    const start = () => {
+      busy = true; actions++; syncBar();
+      hideSent();
+      feedback.show("Working…");
+    };
+    if (keepPosition) preserveCardPosition(start); else start();
+    try { const done = await action(); if (alive()) render(() => feedback.show(done ?? "", "success")); }
+    catch (error) { if (alive()) render(() => feedback.show(message(error), "error")); }
     finally { busy = false; if (alive()) syncBar(); if (refreshPending && alive()) void backgroundRefresh(); }
   }
-  async function call(name: string, input?: unknown): Promise<void> {
+  async function call<T extends Snapshot = Snapshot>(name: string, input?: unknown): Promise<T> {
     try {
-      const next = await ctx.call<Snapshot>(name, input);
+      const next = await ctx.call<T>(name, input);
       if (name === "pair" || name === "settings") for (const peer of options.peers) if (peer !== refreshFromPeer) peer();
       if (alive()) { state = next; await options.onChanged(); }
+      return next;
     } catch (error) {
       if (name === "send" && alive()) {
         // A failed send may still have saved per-card results.
@@ -247,11 +262,31 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
     return undefined;
   }
   function syncBar(): void {
-    const approved = approvedCards().length, drafts = draftCards().length;
-    approveAll?.update({ label: drafts ? `Approve all drafts (${drafts})` : "Approve all drafts", disabled: busy || !drafts });
-    const blocked = sendBlocker();
-    sendAll?.update({ label: approved ? `Send ${plural(approved, "card")} to Anki` : "Send to Anki", disabled: busy || !approved, title: blocked ?? "" });
-    downloadAll?.update({ disabled: busy || !approved, title: downloadBlocker() ?? "Save the approved cards as an Anki package file. Works with Anki closed. Nothing is sent." });
+    if (!approveAll) return;
+    const ids = approvedCards().map(c => c.id), drafts = draftCards().length;
+    approveAll.update({ label: drafts ? `Approve all drafts (${drafts})` : "Approve all drafts", disabled: busy || !drafts });
+    const sendProps = { disabled: busy || !ids.length, title: sendBlocker() ?? "" };
+    const downloadProps = { disabled: busy || !ids.length, title: downloadBlocker() ?? "Save the approved cards as an Anki package file. Works with Anki closed. Nothing is sent." };
+    const targetKey = JSON.stringify(ids);
+    if (bulkTargetKey !== targetKey) {
+      bulkTargetKey = targetKey;
+      // Hold the toolbar's height while replacement portals are empty. Even
+      // a briefly collapsed flex row can shift the anchored review cards.
+      sendActions.style.setProperty("--ab-send-actions-height", `${sendActions.getBoundingClientRect().height}px`);
+      // The host commits button labels later. Retire controls whose action
+      // would otherwise send or export a different set than the one shown.
+      for (const control of [downloadAll, sendAll]) {
+        if (!control) continue;
+        if (control.root.contains(host.ownerDocument.activeElement)) sendActions.focus({ preventScroll: true });
+        control.dispose(); control.root.remove();
+      }
+      downloadAll = button(ctx, sendActions, barScope.signal, { ...downloadProps, label: "Download .apkg", onClick: () => run(() => download(ids)) });
+      sendAll = button(ctx, sendActions, barScope.signal, { ...sendProps, label: ids.length ? `Send ${plural(ids.length, "card")} to Anki` : "Send to Anki", variant: "default", onClick: () => run(() => send(ids)) });
+      sendAll.root.classList.add("ab-bulk-send");
+    } else {
+      downloadAll?.update(downloadProps);
+      sendAll?.update(sendProps);
+    }
   }
   async function download(ids: string[]): Promise<string> {
     const blocked = downloadBlocker();
@@ -269,57 +304,71 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
     const name = deckName(), sentTags = tags.value, sentTagList = validateTags(tagList());
     // The send uses these values, so they can't change underneath it.
     deck.readOnly = true; tags.readOnly = true;
-    try { await call("send", { ids, deck: name, tags: sentTagList, expectedDestination: state?.destination }); }
+    let result: SendResult;
+    try { result = await call<SendResult>("send", { ids, deck: name, tags: sentTagList, expectedDestination: state?.destination }); }
     finally { deck.readOnly = false; tags.readOnly = false; }
-    if (deckName() === name) deckTouched = false;
-    const sent = ids.filter(id => state?.cards.find(c => c.id === id)?.status === "sent").length;
+    if (!alive()) return "";
+    if (deckName() === name && result.delivery.added.length) deckTouched = false;
     // Tags typed for this send apply to this send only.
-    if (sent === ids.length && tags.value === sentTags) tagsTouched = false;
+    if (!result.delivery.failed.length && tags.value === sentTags) tagsTouched = false;
     void loadDecks();
-    if (sent === ids.length) { showSent(ids, name, sentTagList); return ""; }
-    return `Sent ${sent} of ${plural(ids.length, "card")}. Check the cards marked Send failed.`;
+    if (result.delivery.failed.length === ids.length) return "No cards sent. Check the cards marked Send failed.";
+    showSent(result.delivery);
+    return "";
   }
 
   function renderBar(): void {
-    const s = barScope.reset();
-    sendActions.replaceChildren();
+    if (approveAll) return; // Keep Approve and More mounted when the bulk targets change.
+    const s = barScope.signal;
     approveAll = button(ctx, sendActions, s, { label: "Approve all drafts", onClick: () => run(async () => {
       const drafts = draftCards();
+      if (!drafts.length) return;
       if ([...editing].some(id => drafts.some(c => c.id === id))) throw new Error("Save or cancel your edits before approving.");
       const ok = await confirmDialog(ctx, signal, { title: "Approve all drafts", confirm: "Approve",
         body: `Approve ${plural(drafts.length, "draft")}? Check each answer is correct first. Approving does not send anything.` });
       if (!ok || !alive()) return;
       await call("approve", { ids: drafts.map(c => c.id) });
       return `Approved ${plural(drafts.length, "card")}.`;
-    }) });
-    downloadAll = button(ctx, sendActions, s, { label: "Download .apkg", onClick: () => run(() => download(approvedCards().map(c => c.id))) });
-    sendAll = button(ctx, sendActions, s, { label: "Send to Anki", variant: "default", onClick: () => run(() => send(approvedCards().map(c => c.id))) });
+    }, true) });
     menuSlot.replaceChildren();
     moreMenu(ctx, menuSlot, s, "More", () => {
-      const sent = (state?.cards ?? []).filter(c => c.status === "sent" && atShown(c));
-      const drafts = (state?.cards ?? []).filter(c => ["draft", "approved", "failed"].includes(c.status) && c.noteId === undefined);
+      const hasSent = sentCardsHere().length > 0, unsentCount = unsentCards().length;
+      // A resync can happen with the menu open. Resolve selections against current state.
       return [
         { key: "write", label: "Write a card by hand", onSelect: () => openManual() },
-        { key: "refresh", label: "Refresh cards", onSelect: () => run(async () => { await call("snapshot"); void loadDecks(); }) },
-        { key: "reconcile", label: "Check unconfirmed sends", disabled: !(state?.cards ?? []).some(c => c.status === "sending"), onSelect: () => run(async () => { await call("reconcile"); return "Checked unconfirmed sends."; }) },
-        { key: "presence", label: "Check which sent cards are still in Anki", disabled: !sent.length, onSelect: () => run(async () => { await call("presence"); return "Checked sent cards."; }) },
-        { key: "show", label: "Show sent cards in Anki", disabled: !sent.length, onSelect: () => run(async () => { await ctx.call("show", { ids: sent.map(c => c.id) }); }) },
+        { key: "refresh", label: "Refresh cards", onSelect: () => run(async () => { await call("snapshot"); void loadDecks(); }, true) },
+        { key: "reconcile", label: "Check unconfirmed sends", disabled: !hasUnconfirmedSends(), onSelect: () => run(async () => {
+          if (!hasUnconfirmedSends()) return;
+          await call("reconcile"); return "Checked unconfirmed sends.";
+        }) },
+        { key: "presence", label: "Check which sent cards are still in Anki", disabled: !hasSent, onSelect: () => run(async () => {
+          if (!sentCardsHere().length) return;
+          await call("presence"); return "Checked sent cards.";
+        }) },
+        { key: "show", label: "Show sent cards in Anki", disabled: !hasSent, onSelect: () => run(async () => {
+          const ids = sentCardsHere().map(c => c.id);
+          if (ids.length) await ctx.call("show", { ids });
+        }) },
         // Opens the page only. Reading reviews waits for Check Anki reviews there.
-        { key: "topics", label: "Topics to revisit", disabled: !sent.length, onSelect: () => ctx.app.openView("topics") },
-        { key: "drop", label: `Drop all unsent cards (${drafts.length})`, disabled: !drafts.length, onSelect: () => run(async () => {
+        { key: "topics", label: "Topics to revisit", disabled: !hasSent, onSelect: () => { if (sentCardsHere().length) ctx.app.openView("topics"); } },
+        { key: "drop", label: `Drop all unsent cards (${unsentCount})`, disabled: !unsentCount, onSelect: () => run(async () => {
+          const ids = unsentCards().map(c => c.id);
+          if (!ids.length) return;
           const ok = await confirmDialog(ctx, signal, { title: "Drop all unsent cards", confirm: "Drop cards", destructive: true,
-            body: `Drop ${plural(drafts.length, "card")} that you have not sent? Their ideas become available to write again. Sent cards are not affected.` });
+            body: `Drop ${plural(ids.length, "card")} that you have not sent? Their ideas become available to write again. Sent cards are not affected.` });
           if (!ok || !alive()) return;
-          await call("drop", { ids: drafts.map(c => c.id) });
-          for (const c of drafts) { edits.delete(c.id); editing.delete(c.id); }
-          return `Dropped ${plural(drafts.length, "card")}.`;
+          await call("drop", { ids });
+          for (const id of ids) { edits.delete(id); editing.delete(id); }
+          return `Dropped ${plural(ids.length, "card")}.`;
         }) },
       ];
     });
-    syncBar();
   }
 
   const atShown = (card: Card) => !!state?.destination && card.destination?.url === state.destination.url && card.destination.profile === state.destination.profile;
+  const sentCardsHere = () => (state?.cards ?? []).filter(c => c.status === "sent" && atShown(c));
+  const unsentCards = () => (state?.cards ?? []).filter(c => ["draft", "approved", "failed"].includes(c.status) && c.noteId === undefined);
+  const hasUnconfirmedSends = () => (state?.cards ?? []).some(c => c.status === "sending");
 
   function openManual(): void {
     const dialogScope = new AbortController();
@@ -348,26 +397,37 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
   }
 
   function renderBanner(): void {
-    const bs = bannerScope.reset();
-    banner.replaceChildren();
     if (!state) return;
-    const note = (text: string, tone: "warn" | "bad" = "warn", action?: { label: string; run: () => void }) => {
-      const box = el("div", undefined, "ab-banner"); box.dataset.tone = tone;
-      box.append(el("span", text));
-      if (action) button(ctx, box, bs, { label: action.label, size: "xs", onClick: action.run });
-      banner.append(box);
-    };
+    type Action = { label: string; run: () => void };
+    const notes: { text: string; tone: "warn" | "bad"; action?: Action }[] = [];
+    const note = (text: string, tone: "warn" | "bad" = "warn", action?: Action) => { notes.push({ text, tone, action }); };
     if (state.recoveryError) note(`An earlier send needs checking: ${state.recoveryError}`, "bad");
+    if (state.generationRecoveryError) note(`Card generation needs checking: ${state.generationRecoveryError}`, "bad");
     if (!state.destination) note("Choose an Anki profile in settings before sending. Download .apkg works without one.", "warn", { label: "Open settings", run: () => ctx.app.openSettings() });
     else if (state.destination.url !== state.settings.url) note("The Anki address changed since you chose a profile. Choose the profile again in settings.", "warn", { label: "Open settings", run: () => ctx.app.openSettings() });
     else if (connectionError) note("Anki isn't reachable. Open Anki to send cards and see your decks.", "warn", { label: "Try again", run: () => { void loadDecks(); } });
     else if (connection && connection.profile !== state.destination.profile) note(`Anki has profile ${connection.profile ?? "none"} open. Cards go to ${state.destination.profile}, so open that profile to send.`, "warn");
+    const key = JSON.stringify(notes);
+    if (key === bannerKey) return;
+    bannerKey = key;
+    const bs = bannerScope.reset();
+    banner.replaceChildren();
+    for (const { text, tone, action } of notes) {
+      const box = el("div", undefined, "ab-banner"); box.dataset.tone = tone;
+      box.append(el("span", text));
+      if (action) button(ctx, box, bs, { label: action.label, size: "xs", onClick: action.run });
+      banner.append(box);
+    }
   }
 
-  function renderCard(card: Card, parent: HTMLElement, s: AbortSignal): void {
+  function renderCard(card: Card, s: AbortSignal) {
     const article = el("article", undefined, "ab-card");
     article.dataset.status = card.status;
-    if (card.nodeId && isWaitingCard(card)) { article.dataset.waitingNode = card.nodeId; article.tabIndex = -1; }
+    article.dataset.cardId = card.id;
+    if (isWaitingCard(card)) {
+      article.tabIndex = -1;
+      if (card.nodeId) article.dataset.waitingNode = card.nodeId;
+    }
     const editable = ["draft", "approved", "failed"].includes(card.status) && card.noteId === undefined;
     if (!editable) { edits.delete(card.id); editing.delete(card.id); }
     const isEditing = editable && editing.has(card.id);
@@ -377,7 +437,8 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
     const title = el("div", undefined, "ab-card-title");
     title.append(pill(isStoredKind(card.kind) ? KIND_NAMES[card.kind] : card.kind, "info"), el("span", card.nodeName || "Card", "ab-card-idea"));
     if (card.sessionName && card.sessionName !== "Manual") title.append(el("span", card.sessionName, "ab-muted ab-card-session"));
-    head.append(title, pill(STATUS[card.status].text, STATUS[card.status].tone));
+    const badge = pill(STATUS[card.status].text, STATUS[card.status].tone);
+    head.append(title, badge);
     article.append(head);
 
     const notices: string[] = [];
@@ -437,6 +498,10 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
       const now = edits.get(card.id);
       return !now || (now.front === card.front && now.back === card.back && now.extra === card.extra);
     };
+    let primary: ButtonHandle | undefined;
+    const primaryProps = (status: Card["status"]) => status === "draft"
+      ? { label: "Approve", onClick: () => run(async () => { await call("approve", { ids: [card.id] }); }, true) }
+      : { label: status === "failed" ? "Retry send" : "Send this card", onClick: () => run(() => send([card.id])) };
     if (editable) {
       if (isEditing) {
         button(ctx, left, s, { label: "Cancel", disabled: saving.has(card.id), onClick: () => { edits.delete(card.id); editing.delete(card.id); feedback.show(""); render(); } });
@@ -449,42 +514,115 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
             if (changed) await call("edit", { id: card.id, front: now.front, back: now.back, extra: now.extra });
             edits.delete(card.id); editing.delete(card.id);
             return card.status === "draft" || !changed ? "" : "Saved. Edited cards go back to draft, so approve it again.";
-          } finally { saving.delete(card.id); }
+          } finally {
+            saving.delete(card.id);
+            for (const area of Object.values(inputs)) if (area) area.readOnly = false;
+          }
         }) });
       } else {
         button(ctx, left, s, { label: "Edit", onClick: () => { editing.add(card.id); feedback.show(""); render(); article.ownerDocument.querySelector<HTMLTextAreaElement>(`[data-keep="card-${card.id}-front"]`)?.focus(); } });
         button(ctx, left, s, { label: "Drop", onClick: () => run(async () => { await call("drop", { ids: [card.id] }); edits.delete(card.id); return "Card dropped."; }) });
-        if (card.status === "draft") button(ctx, right, s, { label: "Approve", onClick: () => run(async () => { await call("approve", { ids: [card.id] }); }) });
-        if (card.status === "approved" || card.status === "failed") button(ctx, right, s, { label: card.status === "failed" ? "Retry send" : "Send this card", onClick: () => run(() => send([card.id])) });
+        primary = button(ctx, right, s, primaryProps(card.status));
       }
     } else if (card.status === "sent") {
-      const where = [card.deck, card.presence === "deleted" ? "deleted in Anki" : ""].filter(Boolean).join(", ");
+      const where = [card.existingNote ? "Found in Anki" : card.deck, card.presence === "deleted" ? "deleted in Anki" : ""].filter(Boolean).join(", ");
       if (where) left.append(el("span", where, "ab-muted"));
       if (atShown(card)) button(ctx, right, s, { label: "Show in Anki", onClick: () => run(async () => { await ctx.call("show", { ids: [card.id] }); }) });
     }
     article.append(foot);
-    parent.append(article);
+    return { article, updateStatus: (status: Card["status"]) => {
+      if (card.status === status) return;
+      card = { ...card, status };
+      article.dataset.status = status;
+      badge.textContent = STATUS[status].text;
+      badge.dataset.tone = STATUS[status].tone;
+      if (primary) {
+        // The host updates callbacks before React commits labels. Retire this
+        // control without remounting the row or disturbing focus elsewhere.
+        if (primary.root.contains(article.ownerDocument.activeElement)) article.focus({ preventScroll: true });
+        primary.dispose(); primary.root.remove();
+        primary = button(ctx, right, s, primaryProps(status));
+      }
+    } };
   }
 
-  function render(): void {
-    if (!alive()) return;
-    // Keep the caret in a card editor across background refreshes.
-    const active = host.ownerDocument.activeElement as HTMLTextAreaElement | null;
-    const keep = active?.tagName === "TEXTAREA" && list.contains(active) ? { key: active.dataset.keep, start: active.selectionStart, end: active.selectionEnd, dir: active.selectionDirection } : undefined;
-    const s = scope.reset();
-    list.replaceChildren();
-    try { draw(s); }
-    finally {
-      if (keep?.key) {
-        const area = [...list.querySelectorAll<HTMLTextAreaElement>("textarea[data-keep]")].find(a => a.dataset.keep === keep.key);
-        if (area) { area.focus(); area.setSelectionRange?.(keep.start, keep.end, keep.dir ?? undefined); }
-      }
+  const waitingCards = () => list.querySelectorAll<HTMLElement>(":scope > article[data-card-id]");
+  const waitingCard = (id: string | undefined) => [...waitingCards()].find(article => article.dataset.cardId === id);
+  function preserveCardPosition(update: () => void): void {
+    // LearnHarness can scroll a containing pane instead of the document. Anchor to
+    // the first visible card immediately around the DOM change, not across the network wait.
+    const doc = host.ownerDocument;
+    let scroller = list.parentElement;
+    while (scroller && !scroller.scrollTop) scroller = scroller.parentElement;
+    scroller ??= doc.scrollingElement as HTMLElement | null;
+    if (!scroller?.scrollTop) { update(); return; }
+    const viewportTop = () => scroller === doc.scrollingElement ? 0 : scroller.getBoundingClientRect().top + scroller.clientTop;
+    const top = viewportTop();
+    const bottom = top + (scroller === doc.scrollingElement ? doc.documentElement.clientHeight : scroller.clientHeight);
+    let id: string | undefined, offset = 0;
+    for (const card of waitingCards()) {
+      const rect = card.getBoundingClientRect();
+      if (rect.bottom > top && rect.top < bottom) { id = card.dataset.cardId; offset = rect.top - top; break; }
+    }
+    update();
+    const anchor = id && waitingCard(id);
+    if (anchor) {
+      const delta = anchor.getBoundingClientRect().top - viewportTop() - offset;
+      if (delta) scroller.scrollTo({ top: scroller.scrollTop + delta, behavior: "instant" });
     }
   }
-  function draw(s: AbortSignal): void {
+  function render(after?: () => void): void {
+    if (!alive()) return;
+    preserveCardPosition(() => {
+      // Unchanged rows keep the actual focused control (and textarea caret).
+      // Only restore focus explicitly when a changed row replaced that node.
+      const active = host.ownerDocument.activeElement as HTMLElement | null;
+      const card = active?.closest<HTMLElement>("article[data-card-id]");
+      const keepCard = card && list.contains(card) ? card.dataset.cardId : undefined;
+      const area = keepCard && active?.tagName === "TEXTAREA" ? active as HTMLTextAreaElement : undefined;
+      const keep = area && { key: area.dataset.keep, start: area.selectionStart, end: area.selectionEnd, dir: area.selectionDirection };
+      draw(); after?.();
+      if (keepCard && !active?.isConnected) {
+        const row = waitingCard(keepCard);
+        const next = keep && [...(row?.querySelectorAll<HTMLTextAreaElement>("textarea[data-keep]") ?? [])].find(a => a.dataset.keep === keep.key);
+        (next || row)?.focus({ preventScroll: true });
+        if (next && keep) next.setSelectionRange(keep.start, keep.end, keep.dir);
+      }
+    });
+  }
+  function reconcileWaiting(cards: Card[]): void {
+    // LearnHarness adds empty portal targets synchronously and commits their
+    // contents later. Keep existing rows in place rather than measuring a
+    // collapsed list, or scheduling a scroll that could override the user.
+    const next = cards.map(card => {
+      const { status, ...rest } = card;
+      const key = JSON.stringify([rest, ["draft", "approved", "failed"].includes(status) && card.noteId === undefined ? "editable" : status,
+        editing.has(card.id), saving.has(card.id)]);
+      return { card, key };
+    });
+    const keys = new Map(next.map(({ card, key }) => [card.id, key]));
+    for (const [id, row] of rows) {
+      if (keys.get(id) === row.key) continue;
+      row.scope.dispose(); row.view.article.remove(); rows.delete(id);
+    }
+    if (list.firstElementChild?.tagName !== "ARTICLE") list.replaceChildren();
+    let cursor = list.firstElementChild;
+    for (const { card, key } of next) {
+      let row = rows.get(card.id);
+      if (!row) {
+        const scope = new RenderScope(signal);
+        row = { key, scope, view: renderCard(card, scope.signal) };
+        rows.set(card.id, row);
+      } else row.view.updateStatus(card.status);
+      if (row.view.article !== cursor) list.insertBefore(row.view.article, cursor);
+      cursor = row.view.article.nextElementSibling;
+    }
+  }
+  function draw(): void {
     renderBanner();
     if (!state) {
-      button(ctx, list, s, { label: "Try loading again", onClick: () => run(async () => { await call("snapshot"); void loadDecks(); }) });
+      if (list.firstElementChild) return;
+      button(ctx, list, historyScope.signal, { label: "Try loading again", onClick: () => run(async () => { await call("snapshot"); void loadDecks(); }) });
       return;
     }
     // Only fill the deck the learner hasn't touched. A cleared field stays clear.
@@ -492,6 +630,7 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
     renderBar();
     syncDeck();
     const waiting = state.cards.filter(c => c.status !== "sent" && c.status !== "dropped");
+    reconcileWaiting(waiting);
     if (!waiting.length) {
       const empty = el("div", undefined, "ab-empty-card");
       const anySent = state.cards.some(c => c.status === "sent");
@@ -499,15 +638,17 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
         el("p", anySent ? "Your sent cards are listed below. Write more in step 2, or write one by hand from the menu." : "Cards you write in step 2 appear here. You can also write one by hand from the menu.", "ab-muted"));
       list.append(empty);
     }
-    // Saved order, so a card stays in place when it is approved.
-    for (const card of waiting) renderCard(card, list, s);
     const sent = state.cards.filter(c => c.status === "sent");
+    const key = JSON.stringify(sent.map(c => [c, atShown(c)]));
+    if (historyKey === key) return;
+    historyKey = key;
+    const s = historyScope.reset();
     const wasOpen = history.open;
     history.replaceChildren();
     history.hidden = !sent.length;
     const summary = el("summary", `Sent cards (${sent.length})`);
     history.append(summary);
-    const fill = () => { if (history.childElementCount === 1) { const box = el("div", undefined, "ab-cards"); for (const c of [...sent].reverse()) renderCard(c, box, s); history.append(box); } };
+    const fill = () => { if (history.childElementCount === 1) { const box = el("div", undefined, "ab-cards"); for (const c of [...sent].reverse()) box.append(renderCard(c, s).article); history.append(box); } };
     history.ontoggle = () => { if (history.open) fill(); };
     if (wasOpen) fill();
   }
@@ -528,6 +669,6 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
       await backgroundRefresh();
       if (alive() && !focus()) feedback.show("No cards for this idea are waiting for review.");
     },
-    dispose: () => { disposed = true; options.peers.delete(refreshFromPeer); unsubscribe(); scope.dispose(); barScope.dispose(); bannerScope.dispose(); sentScope.dispose(); },
+    dispose: () => { disposed = true; options.peers.delete(refreshFromPeer); unsubscribe(); for (const row of rows.values()) row.scope.dispose(); historyScope.dispose(); barScope.dispose(); bannerScope.dispose(); sentScope.dispose(); },
   };
 }

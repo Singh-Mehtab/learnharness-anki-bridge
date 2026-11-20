@@ -1,10 +1,11 @@
+import { systemTags } from "../src/anki/tags.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { Window } from "happy-dom";
 import { activate } from "../src/main.ts";
 import { connectionText } from "../src/settings-ui.ts";
 import type { PluginFrontendContext, PluginView } from "../sdk/index.d.ts";
-import { chooseMenu, fakeUi } from "./fake-ui.ts";
+import { chooseMenu, delayedButtons, fakeUi } from "./fake-ui.ts";
 
 type Call = { name: string; input: any };
 type Card = Record<string, unknown> & { id: string; status: string };
@@ -21,7 +22,7 @@ function fixture() {
 }
 const tick = async () => { for (let i = 0; i < 6; i++) await new Promise<void>(resolve => setTimeout(resolve, 0)); };
 
-async function setup(options: { handler?: (name: string, input: any) => unknown; state?: ReturnType<typeof fixture>; connection?: () => unknown } = {}) {
+async function setup(options: { handler?: (name: string, input: any) => unknown; state?: ReturnType<typeof fixture>; connection?: () => unknown; ui?: Record<string, unknown> } = {}) {
   const window = new Window();
   Object.assign(globalThis, { document: window.document });
   const controller = new AbortController(), activation = new AbortController();
@@ -62,11 +63,16 @@ async function setup(options: { handler?: (name: string, input: any) => unknown;
       if (name === "approve") state.cards.filter(c => input.ids.includes(c.id)).forEach(c => { c.status = "approved"; });
       if (name === "drop") state.cards.filter(c => input.ids.includes(c.id)).forEach(c => { c.status = "dropped"; });
       if (name === "draft") state.cards.push(card(`manual-${state.cards.length}`, { front: input.front, back: input.back, extra: input.extra, kind: input.kind, nodeName: "Hand-written card", sessionName: "Manual" }));
-      if (name === "send") state.settings.lastDeck = input.deck;
-      if (name === "send") state.cards.filter(c => input.ids.includes(c.id)).forEach(c => { Object.assign(c, { status: "sent", noteId: 7, deck: input.deck, destination: paired() }); });
+      if (name === "send") {
+        state.settings.lastDeck = input.deck;
+        const cards = state.cards.filter(c => input.ids.includes(c.id));
+        cards.forEach(c => { Object.assign(c, { status: "sent", noteId: 7, deck: input.deck, destination: paired() }); });
+        const tags = [...new Set([...input.tags, ...(state.settings.systemTags ? cards.flatMap(c => systemTags(c.kind as Parameters<typeof systemTags>[0])) : [])])];
+        return structuredClone({ ...state, delivery: { added: input.ids, found: [], failed: [], skipped: [], deck: input.deck, tags } });
+      }
       return structuredClone(state);
     },
-    ui: fakeUi(),
+    ui: fakeUi(options.ui),
   } as unknown as PluginFrontendContext;
   activate(ctx);
   const container = window.document.createElement("div");
@@ -358,6 +364,170 @@ test("editing previews live, warns about long cards, keeps typing through a refr
   } finally { await f.dispose(); }
 });
 
+test("approval and refresh keep the scrolled pane anchored through deferred widget commits", async t => {
+  const state = fixture(); state.cards = Array.from({ length: 12 }, (_, i) => card(`card-${i}`, { front: "A line of markdown\n".repeat(23) }));
+  // LearnHarness appends a portal target now and mounts its contents later.
+  // Control the commit explicitly so the check runs after late layout changes.
+  const ui = fakeUi();
+  const mount = ui.mountMarkdown as PluginFrontendContext["ui"]["mountMarkdown"];
+  const pending = new Set<() => void>();
+  ui.mountMarkdown = ((container, initial, options) => {
+    const target = container.ownerDocument.createElement("div");
+    container.append(target);
+    let props = initial, mounted: ReturnType<typeof mount> | undefined;
+    const commit = () => { pending.delete(commit); mounted = mount(target, props, options); };
+    pending.add(commit);
+    const dispose = () => { pending.delete(commit); mounted?.dispose(); target.remove(); };
+    options.signal.addEventListener("abort", dispose, { once: true });
+    return { update: patch => { props = { ...props, ...patch }; mounted?.update(patch); }, dispose };
+  }) satisfies typeof mount;
+  const commitWidgets = () => { for (const commit of pending) commit(); };
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const f = await setup({ state, ui, handler: async name => { if (name === "approve") await gate; } });
+  try {
+    const pane = f.container;
+    Object.defineProperty(pane, "clientHeight", { value: 300 });
+    const rect = (top: number, height: number) => new f.window.DOMRect(0, top, 600, height);
+    // happy-dom has no layout. An empty portal target collapses the card's
+    // markdown, shifting all downstream rows when the widget later commits.
+    const cardRow = (i: number) => f.review().querySelectorAll("article")[i]!;
+    const rowHeight = (row: typeof f.window.Element.prototype) => 100 + 20 * (row.querySelector(".ab-markdown")?.textContent?.split("\n").length ?? 0);
+    assert.equal(rowHeight(cardRow(0)), 120);
+    commitWidgets();
+    assert.equal(rowHeight(cardRow(0)), 580);
+    pane.scrollTop = 460 + 3 * rowHeight(cardRow(0)) - 60;
+    t.mock.method(f.window.HTMLElement.prototype, "getBoundingClientRect", function (this: typeof pane) {
+      if (this === pane) return rect(60, 300);
+      const rows = Array.from(f.review().children);
+      const i = rows.indexOf(this);
+      if (i < 0) return rect(0, 0);
+      return rect(460 + rows.slice(0, i).reduce((offset, row) => offset + rowHeight(row), 0) + (f.status() ? 24 : 0) - pane.scrollTop, rowHeight(this));
+    });
+    const focus = f.window.HTMLElement.prototype.focus;
+    const focused = t.mock.method(f.window.HTMLElement.prototype, "focus", function (this: typeof pane, options?: FocusOptions) {
+      if (this.matches("article") && !options?.preventScroll) pane.scrollTop = 0;
+      focus.call(this);
+    });
+    const approve = f.button("Approve", cardRow(3));
+    approve.focus();
+    const originalTop = cardRow(3).getBoundingClientRect().top;
+    approve.click(); await tick();
+    assert.equal(f.status(), "Working…");
+    assert.equal(cardRow(3).getBoundingClientRect().top, originalTop, "the status line must not shift the viewport");
+    // Scrolling during the call must not snap back to the original position.
+    pane.scrollTop += 54;
+    const movedTop = cardRow(3).getBoundingClientRect().top;
+    release(); await tick(); commitWidgets();
+    assert.equal(cardRow(3).getAttribute("data-status"), "approved");
+    assert.equal(cardRow(3).getBoundingClientRect().top, movedTop);
+    assert.equal(f.doc.activeElement, cardRow(3));
+    assert.deepEqual(focused.mock.calls.at(-1)?.arguments, [{ preventScroll: true }]);
+    await f.more("Refresh cards"); await tick(); commitWidgets();
+    assert.equal(cardRow(3).getBoundingClientRect().top, movedTop);
+    assert.equal(f.doc.activeElement, cardRow(3));
+  } finally { release(); await f.dispose(); }
+});
+
+test("approval and resync preserve focus moved to the next card's Edit while saving", async () => {
+  const state = fixture(); state.cards = [card("a"), card("b")];
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const f = await setup({ state, handler: async name => { if (name === "approve") await gate; } });
+  try {
+    const first = f.review().querySelector("article")!;
+    const second = f.review().querySelectorAll("article")[1]!;
+    const approve = f.button("Approve", first);
+    const nextEdit = f.button("Edit", second);
+    approve.focus(); approve.click(); await tick();
+    assert.equal(f.status(), "Working…");
+    nextEdit.focus();
+    release(); await tick();
+    assert.equal(first.getAttribute("data-status"), "approved");
+    assert.equal(f.doc.activeElement, nextEdit);
+    await f.resync();
+    assert.equal(f.doc.activeElement, nextEdit);
+    nextEdit.click(); await tick();
+    assert.equal(f.doc.activeElement.closest("article").dataset.cardId, "b");
+    assert.equal(f.doc.activeElement.tagName, "TEXTAREA");
+  } finally { release(); await f.dispose(); }
+});
+
+test("an old Approve button cannot send before the host commits its replacement", async () => {
+  const state = fixture(); state.cards = [card("a")];
+  const { mountButton, commitButtons } = delayedButtons();
+  const f = await setup({ state, ui: { mountButton } });
+  try {
+    commitButtons();
+    const row = f.review().querySelector("article")!;
+    const approve = f.button("Approve", row);
+    approve.click(); await tick();
+    assert.equal(row.getAttribute("data-status"), "approved");
+    assert.equal(f.find("Send this card", row), undefined, "React has not committed the Send label yet");
+    assert.equal(approve.textContent, "Approve");
+    approve.click(); await tick(); // The still-visible DOM button pre-fix; an inert reference after disposal.
+    assert.deepEqual(f.calls.filter(c => c.name === "approve" || c.name === "send"), [{ name: "approve", input: { ids: ["a"] } }]);
+    assert.equal(approve.isConnected, false);
+    commitButtons();
+    assert.equal(f.review().querySelector("article"), row);
+    f.button("Send this card", row).click(); await tick();
+    assert.deepEqual(f.calls.filter(c => c.name === "send").map(c => c.input.ids), [["a"]]);
+  } finally { await f.dispose(); }
+});
+
+for (const sameCount of [false, true]) {
+  test(`old bulk send and download are retired when approved IDs ${sameCount ? "change at the same count" : "grow before host commit"}`, async () => {
+    const state = fixture(); state.cards = [card("a", { status: "approved" }), card("b")];
+    const { mountButton, commitButtons } = delayedButtons();
+    const f = await setup({ state, ui: { mountButton }, handler: name => {
+      if (name === "exportPackage") throw new Error("Synthetic export (no file)");
+    } });
+    try {
+      commitButtons();
+      const before = f.button("Send 1 card to Anki"), oldDownload = f.button("Download .apkg");
+      const more = f.button("More"), approve = f.button("Approve all drafts (1)");
+      const first = f.review().querySelector("article");
+      const focused = sameCount ? before : f.deck();
+      focused.focus();
+      await f.resync();
+      assert.equal(f.button("Send 1 card to Anki"), before, "an unchanged target keeps the mounted button");
+      assert.equal(f.doc.activeElement, focused);
+      state.cards[1].status = "approved";
+      if (sameCount) state.cards[0].status = "draft";
+      await f.resync();
+      assert.ok(f.doc.activeElement === (sameCount ? f.container.querySelector(".ab-send-actions") : focused));
+      assert.equal(f.review().querySelector("article"), first);
+      assert.equal(f.button("More"), more);
+      assert.equal(f.button("Approve all drafts (1)"), approve);
+      assert.equal(before.textContent, "Send 1 card to Anki");
+      before.click(); oldDownload.click(); await tick();
+      assert.deepEqual(f.calls.filter(c => c.name === "send" || c.name === "exportPackage"), []);
+      assert.equal(before.isConnected || oldDownload.isConnected, false);
+      commitButtons();
+      f.button("Download .apkg").click(); await tick();
+      f.button(sameCount ? "Send 1 card to Anki" : "Send 2 cards to Anki").click(); await tick();
+      const ids = sameCount ? ["b"] : ["a", "b"];
+      assert.deepEqual(f.calls.filter(c => c.name === "send" || c.name === "exportPackage").map(c => [c.name, c.input.ids]),
+        [["exportPackage", ids], ["send", ids]]);
+    } finally { await f.dispose(); }
+  });
+}
+
+test("approval does not steal focus moved outside the list while saving", async () => {
+  const state = fixture(); state.cards = [card("a")];
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const f = await setup({ state, handler: async name => { if (name === "approve") await gate; } });
+  try {
+    const approve = f.button("Approve", f.review());
+    approve.focus(); approve.click(); await tick();
+    const deck = f.deck(); deck.focus();
+    release(); await tick();
+    assert.equal(f.review().querySelector("article")?.getAttribute("data-status"), "approved");
+    assert.equal(f.doc.activeElement, deck);
+  } finally { release(); await f.dispose(); }
+});
+
 test("approve and send use named calls with deck, tags and destination; an empty deck explains itself", async () => {
   const state = fixture(); state.cards = [card("a"), card("b")];
   const f = await setup({ state });
@@ -416,6 +586,36 @@ test("approving all drafts and dropping all unsent cards need confirmation", asy
     f.button("Drop cards", f.dialog()!).click(); await tick();
     assert.deepEqual(f.calls.find(c => c.name === "drop")!.input, { ids: ["a", "b"] });
     assert.match(f.container.textContent!, /Nothing left to review\./, "dropped cards leave only the sent one");
+  } finally { await f.dispose(); }
+});
+
+test("Drop all unsent from an open More menu confirms the current cards after resync", async () => {
+  const state = fixture(); state.cards = [card("a")];
+  const f = await setup({ state });
+  try {
+    f.button("More", f.container).click();
+    state.cards.push(card("b"));
+    await f.resync();
+    assert.match(f.review().textContent!, /Idea b/);
+    await chooseMenu("Drop all unsent cards (1)"); await tick();
+    assert.match(f.dialog()!.textContent!, /Drop 2 cards that you have not sent/);
+    assert.equal(f.calls.some(c => c.name === "drop"), false, "wait for confirmation of the updated count");
+    f.button("Drop cards", f.dialog()!).click(); await tick();
+    assert.deepEqual(f.calls.filter(c => c.name === "drop").map(c => c.input), [{ ids: ["a", "b"] }]);
+  } finally { await f.dispose(); }
+});
+
+test("Show sent from an open More menu uses the current paired cards after resync", async () => {
+  const state = fixture();
+  const sent = (id: string, noteId: number) => card(id, { status: "sent", noteId, destination: paired() });
+  state.cards = [sent("old", 1)];
+  const f = await setup({ state });
+  try {
+    f.button("More", f.container).click();
+    state.cards = [sent("current", 2)];
+    await f.resync();
+    await chooseMenu("Show sent cards in Anki"); await tick();
+    assert.deepEqual(f.calls.filter(c => c.name === "show").map(c => c.input), [{ ids: ["current"] }]);
   } finally { await f.dispose(); }
 });
 
@@ -528,6 +728,34 @@ test("the editor is read-only while a save is in flight, so late typing can't be
     release(); await tick();
     assert.deepEqual(f.calls.find(c => c.name === "edit")!.input, { id: "a", front: "New question", back: "Answer", extra: "" });
   } finally { release(); await f.dispose(); }
+});
+
+test("a rejected Save unlocks the same editor so its fields can be corrected and retried", async () => {
+  const state = fixture(); state.cards = [card("a")];
+  let reject!: (error: Error) => void;
+  const held = new Promise<never>((_, fail) => { reject = fail; });
+  const f = await setup({ state, handler: (name, input) => {
+    if (name === "edit" && !input.front) return held;
+  } });
+  try {
+    f.button("Edit", f.review()).click();
+    const [front, back, extra] = Array.from(f.review().querySelectorAll("textarea")) as unknown as HTMLTextAreaElement[];
+    f.type(front!, ""); f.type(back!, "Keep this revised answer"); f.type(extra!, "Keep this hint");
+    const save = f.button("Save", f.review());
+    save.click(); await tick();
+    assert.ok([front, back, extra].every(a => a!.readOnly));
+    reject(new Error("Front is required.")); await tick();
+    assert.equal(f.status(), "Front is required.");
+    assert.equal(f.review().querySelector("textarea"), front, "no unrelated redraw replaced the editor");
+    assert.ok([front, back, extra].every(a => !a!.readOnly), "the retained inputs are editable again");
+    f.type(front!, "Corrected question");
+    save.click(); await tick();
+    assert.deepEqual(f.calls.filter(c => c.name === "edit").map(c => c.input), [
+      { id: "a", front: "", back: "Keep this revised answer", extra: "Keep this hint" },
+      { id: "a", front: "Corrected question", back: "Keep this revised answer", extra: "Keep this hint" },
+    ]);
+    assert.equal(f.review().querySelector("textarea"), null);
+  } finally { await f.dispose(); }
 });
 
 test("a refresh that changes the saved address drops a key typed for the old one", async () => {
@@ -803,4 +1031,26 @@ test("Download .apkg works unpaired, saves the package, keeps cards approved and
     f.button("Dismiss", f.container.querySelector(".ab-sent")!).click();
     assert.equal((f.container.querySelector(".ab-sent") as unknown as HTMLElement).hidden, true);
   } finally { URL.createObjectURL = realCreate; URL.revokeObjectURL = realRevoke; await f.dispose(); }
+});
+
+test("a found note is not called newly sent or assigned the requested deck and tags", async () => {
+  const state = fixture(); state.cards = [card("a", { status: "approved" })];
+  const f = await setup({ state, handler: name => {
+    if (name === "show") throw new Error("No matching cards found in the paired Anki profile.");
+    if (name !== "send") return;
+    Object.assign(state.cards[0], { status: "sent", noteId: 500, existingNote: true, destination: paired() });
+    return structuredClone({ ...state, delivery: { added: [], found: ["a"], skipped: [], failed: [], deck: null, tags: [] } });
+  } });
+  try {
+    f.type(f.deck(), "Not the actual deck");
+    f.type(f.tags(), "not-applied");
+    f.button("Send 1 card to Anki").click(); await tick();
+    const sent = f.container.querySelector(".ab-sent") as unknown as HTMLElement;
+    assert.equal(sent.hidden, false);
+    assert.match(sent.textContent!, /Found 1 existing note in Anki\. No deck or tag changes were made/);
+    assert.doesNotMatch(sent.textContent!, /sent to Anki|Not the actual deck|not-applied/);
+    f.button("Show in Anki", sent).click(); await tick();
+    assert.match(f.status()!, /No matching cards found/);
+    assert.equal(sent.hidden, false);
+  } finally { await f.dispose(); }
 });
