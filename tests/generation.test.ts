@@ -89,6 +89,24 @@ test('defaults carry the cheap slot’s thinking through confirmation, worker st
   } finally { await close(); }
 }));
 
+test('overlapping card-type toggles from Write and Settings both survive', () => withHost(async (host, directory) => {
+  const c = host.context(directory), close = await activate(c.ctx);
+  try {
+    // Write and Settings both last read [fact, equation]. Each sends only its own change, which the backend applies to the saved set.
+    await c.call('generationSettings', { toggleKind: { kind: 'apply', enabled: true } });
+    await c.call('generationSettings', { toggleKind: { kind: 'why', enabled: true } });
+    await c.call('generationSettings', { toggleKind: { kind: 'discriminate', enabled: true } });
+    await c.call('generationSettings', { toggleKind: { kind: 'equation', enabled: false } });
+    assert.deepEqual((await c.call('generationStatus')).generationSettings.enabledKinds, ['fact', 'why', 'apply', 'discriminate']);
+    for (const k of ['why', 'apply', 'discriminate']) await c.call('generationSettings', { toggleKind: { kind: k, enabled: false } });
+    await assert.rejects(c.call('generationSettings', { toggleKind: { kind: 'fact', enabled: false } }), /at least one card type/);
+    await assert.rejects(c.call('generationSettings', { toggleKind: { kind: 'compose', enabled: true } }), /Unsupported generation input/);
+    await assert.rejects(c.call('generationSettings', { toggleKind: { kind: 'why', enabled: 'yes' } }), /Unsupported generation input/);
+    await assert.rejects(c.call('generationSettings', { toggleKind: { kind: 'why', enabled: true }, enabledKinds: ['fact'] }), /Unsupported generation input/);
+    assert.deepEqual((await c.call('generationStatus')).generationSettings.enabledKinds, ['fact']);
+  } finally { await close(); }
+}));
+
 test('a blank flag increases the real preflight and worker cap; new kinds are opt-ins; constants and compose have no setting', () => withHost(async (host, directory) => {
   const c = host.context(directory), close = await activate(c.ctx);
   try {
@@ -450,6 +468,12 @@ test('v5 settings with only compose fall back to the default card types', () => 
   await writeFile(statePath(directory), malformed);
   await assert.rejects(activate(host.context(directory).ctx), /Invalid generation state/);
   assert.equal(await readFile(statePath(directory), 'utf8'), malformed, 'a v5 file without its toggle is refused, not reset');
+  // 0.7.2 never wrote a batch without its toggle, so a v6-shaped batch in a v5 file is malformed too.
+  const badHistory = JSON.stringify({ ...initialState(), schemaVersion: 5, generationSettings: { cardsPerNode: 1, enabledKinds: ['fact'], constantValues: false, model: null },
+    generations: [{ id: 'v5-generation', nodeIds: ['n_a'], createdAt: '2026-11-19T00:00:00Z', status: 'completed', settings: { cardsPerNode: 1, enabledKinds: ['fact'], model: null }, skipped: [], tasks: [] }] });
+  await writeFile(statePath(directory), badHistory);
+  await assert.rejects(activate(host.context(directory).ctx), /Invalid generation state/);
+  assert.equal(await readFile(statePath(directory), 'utf8'), badHistory, 'a v5 batch without its toggle is refused, not reset');
 }));
 
 test('v4 backup and restart recover a frozen legacy worker without changing its input or old cards', () => withHost(async (host, directory) => {

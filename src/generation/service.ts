@@ -10,7 +10,7 @@ import { writerInstructions, writerPrompt } from '../writer/prompt.ts';
 import { resultSchemaFor } from '../writer/schema.ts';
 import { validateResult } from '../writer/validate.ts';
 import { capFor } from '../writer/kinds.ts';
-import { isStoredKind } from '../writer/types.ts';
+import { CORE_KINDS, isCoreKind, isStoredKind } from '../writer/types.ts';
 import type { Batch } from '../writer/input.ts';
 import type { WriterInput, WriterResult } from '../writer/types.ts';
 import { validGenerationSettings } from './types.ts';
@@ -250,8 +250,16 @@ export class GenerationService {
         return { ...graphCoverage(this.ctx.learning.graph(), this.store.snapshot()), catalog };
       }
       if (name === 'generationSettings') {
-        keys(value, ['cardsPerNode', 'enabledKinds', 'model']);
-        const settings = { ...this.store.snapshot().generationSettings, ...value };
+        keys(value, ['cardsPerNode', 'enabledKinds', 'model', 'toggleKind']);
+        const { toggleKind, ...patch } = value;
+        const settings = { ...this.store.snapshot().generationSettings, ...patch };
+        if (toggleKind !== undefined) {
+          // One checkbox change, applied to the saved set inside the fence, so Write and Settings can't undo each other.
+          const t = object(toggleKind); keys(t, ['kind', 'enabled']);
+          if ('enabledKinds' in patch || !isCoreKind(t.kind) || typeof t.enabled !== 'boolean') throw new Error('Unsupported generation input.');
+          settings.enabledKinds = CORE_KINDS.filter(k => k === t.kind ? t.enabled : settings.enabledKinds.includes(k));
+          if (!settings.enabledKinds.length) throw new Error('Keep at least one card type on.');
+        }
         if (!validGenerationSettings(settings)) throw new Error('Choose 1–4 cards per node, one or more available card types, and a model, or null for the cheap model.');
         await this.delivery.save(s => { s.generationSettings = settings; });
       } else if (name === 'preflight') {

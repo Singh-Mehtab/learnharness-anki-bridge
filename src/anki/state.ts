@@ -98,7 +98,10 @@ export function migrateState(raw: unknown): State {
   }
   if (object(value) && value.schemaVersion === 5) {
     const old = value.generationSettings;
-    if (!validV072GenerationSettings(old)) throw new Error('Invalid generation state. The file has not been reset.');
+    // A batch in a file 0.7.2 wrote has 0.7.2 or older settings; anything else is malformed, not current.
+    const history = object(raw) && raw.schemaVersion === 5 && Array.isArray(value.generations) ? value.generations : [];
+    if (!validV072GenerationSettings(old) || history.some(g => !object(g) || !(validV072GenerationSettings(g.settings) || validLegacyGenerationSettings(g.settings))))
+      throw new Error('Invalid generation state. The file has not been reset.');
     // #37 removed the constant-values toggle and #38 stopped drafting compose. Only the
     // current settings change; generation history keeps its 0.7.2 settings and inputs.
     value = { ...value, schemaVersion: 6, generationSettings: fromV072Settings(old) };

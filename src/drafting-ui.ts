@@ -1,6 +1,6 @@
 import type { PluginFrontendContext } from "../sdk/index.d.ts";
 import type { Generation, GenerationSettings } from "./generation/types.ts";
-import { CORE_KINDS, FLAGGED_CARD_CAP, SETTINGS_KINDS, WRITE_KINDS } from "./writer/types.ts";
+import { FLAGGED_CARD_CAP, SETTINGS_KINDS, WRITE_KINDS } from "./writer/types.ts";
 import { exampleCard, KIND_HELP, KIND_NAMES } from "./kinds-ui.ts";
 import { CoveragePicker } from "./coverage-ui.ts";
 import type { CoverageRow, CoverageView } from "./coverage-ui.ts";
@@ -293,15 +293,8 @@ export function mountDrafting(ctx: PluginFrontendContext, ideasHost: HTMLElement
       box.onchange = () => {
         invalidate();
         const wanted = box.checked;
-        void run(async () => {
-          // Read the saved types first, so this toggle can't undo one made in Settings or a quick earlier click.
-          const latest = await ctx.call<DraftingSnapshot>("generationStatus");
-          if (alive()) state = latest;
-          const current = latest.generationSettings.enabledKinds;
-          const next = CORE_KINDS.filter(k => k === kind ? wanted : current.includes(k));
-          if (!next.length || next.length === current.length && next.every(k => current.includes(k))) return;
-          await snapshot("generationSettings", { enabledKinds: next });
-        });
+        // Send only this change; the backend applies it to the saved types, so it can't undo one made in Settings.
+        void run(async () => { await snapshot("generationSettings", { toggleKind: { kind, enabled: wanted } }); });
       };
       chip.append(box, el("span", KIND_NAMES[kind]));
       chips.append(chip);

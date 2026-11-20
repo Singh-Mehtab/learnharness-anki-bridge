@@ -53,7 +53,11 @@ async function setup(options: { handler?: (name: string, input: any) => unknown;
       if (name === "connection") return options.connection ? options.connection() : { profile: "Throwaway", decks: ["Scratch", "New::Deck"] };
       if (name === "settings") Object.assign(state.settings, input.apiKey === undefined ? {} : { hasApiKey: !!input.apiKey }, input.url ? { url: input.url } : {}, input.tagTemplate === undefined ? {} : { tagTemplate: input.tagTemplate }, input.systemTags === undefined ? {} : { systemTags: input.systemTags });
       if (name === "pair") state.destination = input.expectedDestination;
-      if (name === "generationSettings") Object.assign(state.generationSettings, input);
+      if (name === "generationSettings") {
+        const { toggleKind, ...rest } = input;
+        Object.assign(state.generationSettings, rest);
+        if (toggleKind) state.generationSettings.enabledKinds = ["fact", "equation", "why", "steps", "apply", "discriminate"].filter(k => k === toggleKind.kind ? toggleKind.enabled : state.generationSettings.enabledKinds.includes(k));
+      }
       if (name === "edit") Object.assign(state.cards.find(c => c.id === input.id)!, { front: input.front, back: input.back, extra: input.extra, status: "draft" });
       if (name === "approve") state.cards.filter(c => input.ids.includes(c.id)).forEach(c => { c.status = "approved"; });
       if (name === "drop") state.cards.filter(c => input.ids.includes(c.id)).forEach(c => { c.status = "dropped"; });
@@ -132,7 +136,8 @@ test("Settings switch Apply and Contrast on for drafting, with examples, and Wri
     // Write changed after Settings loaded; the Settings toggle must keep that change.
     f.state.generationSettings.enabledKinds = ["fact", "equation", "why"];
     boxes()[0]!.checked = true; boxes()[0]!.dispatchEvent(f.event("change")); await tick();
-    assert.deepEqual(f.calls.filter(c => c.name === "generationSettings").map(c => c.input), [{ enabledKinds: ["fact", "equation", "why", "apply"] }]);
+    assert.deepEqual(f.calls.filter(c => c.name === "generationSettings").map(c => c.input), [{ toggleKind: { kind: "apply", enabled: true } }]);
+    assert.deepEqual(f.state.generationSettings.enabledKinds, ["fact", "equation", "why", "apply"]);
     assert.match(panel.textContent!, /Apply on\./);
     assert.deepEqual(boxes().map(b => b.checked), [true, false]);
     assert.match(write(), /Also on in Settings: Apply\./, "the open Write step updates");

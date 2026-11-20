@@ -42,7 +42,12 @@ function setup(options: { catalogUnavailable?: boolean; initialGraphFailure?: bo
           state: dismissed ? "dismissed" : "no-cards", base: dismissed ? "dismissed" : "no-cards" });
         return structuredClone(graph);
       }
-      if (name === "generationSettings") Object.assign(state.generationSettings, input);
+      if (name === "generationSettings") {
+        // Like the backend: a toggle applies to the saved types at the moment it arrives.
+        const { toggleKind, ...rest } = input;
+        Object.assign(state.generationSettings, rest);
+        if (toggleKind) state.generationSettings.enabledKinds = ["fact", "equation", "why", "steps", "apply", "discriminate"].filter(k => k === toggleKind.kind ? toggleKind.enabled : state.generationSettings.enabledKinds.includes(k));
+      }
       if (name === "preflight" || name === "retryGeneration") { await hold; return { ...structuredClone(preflight), followsCheapSlot: !state.generationSettings.model }; }
       if (name === "generate") state.generations.push({ id: "p1", status: "running", nodeIds: ["n_a"], skipped: [], settings: {}, createdAt: "", tasks: [
         { requestId: "r1", status: "running", input: {}, outputAllowance: 1200, sources: [{ nodeId: "n_a", name: "Alpha" }] }] });
@@ -186,10 +191,11 @@ test("card types and cap save as soon as they change, keep Settings types, and t
     const cap = f.write.querySelector(".ab-write-settings select") as unknown as HTMLSelectElement;
     cap.value = "4"; cap.dispatchEvent(f.event("change")); await tick();
     const toggles = () => [...f.write.querySelectorAll(".ab-chips input[type=checkbox]")] as unknown as HTMLInputElement[];
-    // Settings switched Apply on after this view loaded; Write has not seen it yet.
+    // Settings switched Apply on after this view loaded; Write has not seen it yet, and sends only its own change.
     f.state.generationSettings.enabledKinds = ["fact", "equation", "apply"];
     toggles()[2]!.checked = true; toggles()[2]!.dispatchEvent(f.event("change")); await tick();
-    assert.deepEqual(f.calls.filter(c => c.name === "generationSettings").map(c => c.input), [{ cardsPerNode: 4 }, { enabledKinds: ["fact", "equation", "why", "apply"] }]);
+    assert.deepEqual(f.calls.filter(c => c.name === "generationSettings").map(c => c.input), [{ cardsPerNode: 4 }, { toggleKind: { kind: "why", enabled: true } }]);
+    assert.deepEqual(f.state.generationSettings.enabledKinds, ["fact", "equation", "why", "apply"]);
     assert.match(f.text(), /Also on in Settings: Apply\./);
     for (const i of [1, 2]) { toggles()[i]!.checked = false; toggles()[i]!.dispatchEvent(f.event("change")); await tick(); }
     assert.deepEqual(f.state.generationSettings.enabledKinds, ["fact", "apply"]);

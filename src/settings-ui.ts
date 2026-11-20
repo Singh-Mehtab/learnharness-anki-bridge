@@ -3,7 +3,7 @@
 import type { PluginFrontendContext } from "../sdk/index.d.ts";
 import { exampleCard, KIND_HELP, KIND_NAMES } from "./kinds-ui.ts";
 import { button, confirmDialog, el, field, input, plural, RenderScope, status } from "./ui.ts";
-import { CORE_KINDS, SETTINGS_KINDS } from "./writer/types.ts";
+import { SETTINGS_KINDS } from "./writer/types.ts";
 import type { CoreCardKind } from "./writer/types.ts";
 import type { ButtonHandle } from "./ui.ts";
 
@@ -93,12 +93,8 @@ export function mountSettings(ctx: PluginFrontendContext, container: HTMLElement
       const wanted = box.checked;
       if (busy) { syncKinds(); kindStatus.show("Wait for the current action to finish, then try again.", "error"); return; }
       void act(kindStatus, async () => {
-        // Read the saved types first, so this can't undo a change made on the Write step.
-        const latest = await ctx.call<SettingsSnapshot>("snapshot");
-        const current = latest.generationSettings?.enabledKinds ?? [];
-        const next = CORE_KINDS.filter(k => k === kind ? wanted : current.includes(k));
-        if (!next.length) throw new Error("Keep at least one card type on.");
-        await apply("generationSettings", { enabledKinds: next });
+        // Send only this change; the backend applies it to the saved types, so it can't undo one made on the Write step.
+        await apply("generationSettings", { toggleKind: { kind, enabled: wanted } });
         return `${KIND_NAMES[kind]} ${wanted ? "on" : "off"}.`;
       }, "Saving…").then(() => { if (alive()) syncKinds(); });
     };
