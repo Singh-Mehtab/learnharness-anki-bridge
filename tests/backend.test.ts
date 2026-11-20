@@ -17,7 +17,7 @@ test('backend activation registers public operations without graph, model or net
   const directory = await mkdtemp(path.join(os.tmpdir(), 'anki-backend-'));
   const c = context(directory); const close = await activate(c.ctx);
   try {
-    assert.equal(c.handlers.size, 29);
+    assert.equal(c.handlers.size, 32);
     const added = await c.call('draft', { front: 'Prompt', back: 'Answer' });
     assert.equal(added.cards[0].status, 'draft');
     await c.call('approve', { ids: [added.cards[0].id] });
@@ -55,4 +55,38 @@ test('backend refuses newer data without resetting it, then allows corrected act
     await rm(file);
     const close = await activate(context(directory).ctx); await close();
   } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test('S4: changing the address or API key forgets the review result, even when changed back', async () => {
+  const { randomUUID } = await import('node:crypto');
+  const { StateStore, initialState } = await import('../src/anki/state.ts');
+  const { fakeAnkiConnect } = await import('./fake-anki-connect.ts');
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'anki-backend-reviews-'));
+  const id = randomUUID();
+  const anki = await fakeAnkiConnect({ notes: [{ noteId: 1000, lhId: id, cards: [{ cardId: 2000, lapses: 4 }] }] });
+  const destination = { url: anki.url, profile: 'Throwaway' };
+  const seed = await StateStore.open(directory);
+  await seed.replace({ ...initialState(), settings: { url: anki.url, apiKey: '', lastDeck: 'Scratch' }, destination,
+    cards: [{ id, nodeId: 'n', nodeName: 'N', statementHash: 'h', sessionId: 's', sessionName: 'S', kind: 'fact', front: 'F', back: 'B', extra: '', status: 'sent', deck: 'Scratch', noteId: 1000, destination }] });
+  await seed.close();
+  const c = context(directory); const close = await activate(c.ctx);
+  const last = async () => (await c.call('lastReviewCheck') as unknown as { check: unknown }).check;
+  try {
+    await c.call('checkReviews');
+    assert.ok(await last());
+    await c.call('settings', { apiKey: 'new-key' });
+    assert.equal(await last(), null, 'a new API key forgets the result');
+    await c.call('settings', { apiKey: '' });
+    await c.call('checkReviews');
+    assert.ok(await last());
+    await c.call('settings', { url: 'http://127.0.0.1:9/' });
+    await c.call('settings', { url: anki.url });
+    assert.equal(await last(), null, 'an address change forgets the result even after switching back');
+    await c.call('checkReviews');
+    await c.call('settings', { url: anki.url });
+    assert.ok(await last(), 'saving the same settings keeps it');
+    // Round 3 S1: a pairing attempt that fails before saving changes nothing.
+    await assert.rejects(c.call('pair', { confirmed: true, expectedDestination: destination }));
+    assert.ok(await last(), 'a failed pairing keeps the result');
+  } finally { await close(); await anki.close(); await rm(directory, { recursive: true, force: true }); }
 });

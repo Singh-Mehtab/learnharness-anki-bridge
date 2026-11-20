@@ -1,6 +1,14 @@
 # FI-1 weak-spots view: design note
 
-Status: design only. No plugin code changes. Nothing here is scheduled or approved for merge.
+Status: implemented in the FI-1 pull request ("FI-1: Show topics to revisit from Anki reviews"). The build follows this note with these changes, made at the user's request:
+
+- Names: the page is "Topics to revisit" and the button is "Check Anki reviews".
+- No opt-in setting. Pressing Check Anki reviews is the consent for each read, so no settings key or state change was added.
+- Thresholds as proposed here: 3 or more lapses, 2 or more qualifying Again presses in 30 days, or a leech tag.
+- Session links use the card's saved session plus `GraphSnapshot.nodeSessions` (open decision 7).
+- Cards show their locally saved Front and Back beside the evidence.
+
+The rest of this note is the original design.
 
 Base: origin/main e98e1ca (v0.6.1). UI placement targets the unmerged 0.7.0 redesign (PR #29, branch `origin/feat/0.7.0-redesign`), read-only. Anki side evidence comes from the SourceHut AnkiConnect repository (`https://git.sr.ht/~foosoft/anki-connect`), read at tags 26.10.11.0 (`f69c9e4`) and 26.11.15.0 (`ee75fcf`). No real Anki, AnkiConnect instance, LearnHarness data or model was used.
 

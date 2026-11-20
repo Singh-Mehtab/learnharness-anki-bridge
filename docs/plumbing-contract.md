@@ -21,6 +21,9 @@ The frontend calls these names through `ctx.call`. Inputs and outputs are JSON-c
 | `show` | `{ids}` | Opens the paired notes in Anki's browser |
 | `repairFields` | none | Adds missing fields only; never reorders fields or replaces templates |
 | `updateStyling` | `{confirmed: true}` | Replaces owned styling/templates after the UI's explicit warning |
+| `checkReviews` | `{expectedDestination?: {url, profile}}` | `{check, running}`; reads review results for bridge-sent notes in the paired profile. Runs only when the user presses Check Anki reviews. |
+| `lastReviewCheck` | none | `{check, running}` from memory; no Anki request. `check` is null after re-pairing or an address or API key change |
+| `clearReviewCheck` | none | `{check: null, running}`; forgets the in-memory result |
 
 A snapshot contains `settings: {url, lastDeck, hasApiKey}`, `destination`, `cards` and an optional activation `recoveryError`. It never returns the stored API key. Each card records its source identifiers, kind, Markdown content, status, target deck, destination and Anki note ID when available.
 
@@ -32,7 +35,9 @@ A snapshot contains `settings: {url, lastDeck, hasApiKey}`, `destination`, `card
 
 Editing an unsent card returns it to `draft`. Sent cards cannot be edited through the bridge, even if Anki deleted the note. A failed card retains approval for retry. Re-pairing does not erase sent history and cannot bypass an unresolved delivery at another destination.
 
-Only the delivery service sends notes. No operation updates/deletes existing Anki notes or accesses scheduling. Coverage must count sent cards only when their recorded destination matches the current pairing.
+Only the delivery service sends notes. No operation updates or deletes existing Anki notes or changes scheduling.
+
+`checkReviews` is the only operation that reads review data. It goes through `ReviewReader` (`src/anki/review-reader.ts`), which refuses any AnkiConnect action outside `version`, `getActiveProfile`, `notesInfo`, `cardsInfo` and `getReviewsOfCards`. It reads only the note IDs saved for cards sent to the paired destination, never searches the collection, and accepts a note only if it is the `LearnHarness Basic` type, its `LH_ID` field equals the local card ID and its profile (when returned) is the paired one. The active profile is checked before and after every batch; a mismatch discards the whole result. The result lives in backend memory only: nothing is written to `state.json`, the graph, flags or a model prompt, and there is no polling. Coverage must count sent cards only when their recorded destination matches the current pairing.
 
 ## Integration work still needed
 

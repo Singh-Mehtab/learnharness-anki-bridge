@@ -4,6 +4,7 @@ import { StateStore } from './anki/state.ts';
 import { GenerationService, GENERATION_OPERATIONS } from './generation/service.ts';
 import { SessionService, SESSION_OPERATIONS } from './session/service.ts';
 import { CoverageService, COVERAGE_OPERATIONS } from './coverage/service.ts';
+import { ReviewService, REVIEW_OPERATIONS } from './reviews/service.ts';
 
 export async function activate(ctx: PluginBackendContext): Promise<() => Promise<void>> {
   const store = await StateStore.open(ctx.dataDirectory);
@@ -12,12 +13,15 @@ export async function activate(ctx: PluginBackendContext): Promise<() => Promise
   const generation = new GenerationService(ctx, store, service);
   coverage.onChanged = () => generation.invalidatePreflights();
   const session = new SessionService(ctx.learning, store, service, { signal: ctx.signal });
+  // Review checks read Anki only when the user asks, and keep results in memory only.
+  const reviews = new ReviewService(ctx.learning, store, { signal: ctx.signal });
   // Flag notes are part of the writer prompt, so editing a note makes an open estimate stale.
   generation.flagNotes = () => session.flagNotes();
   const handlers: (() => void)[] = [];
   const close = async () => {
     for (const unregister of handlers.splice(0)) unregister();
     session.close();
+    reviews.close();
     // Generation cleanup can still read delivery snapshots while it settles.
     try { await generation.close(); } finally { coverage.close(); await service.close(); }
   };
@@ -27,14 +31,21 @@ export async function activate(ctx: PluginBackendContext): Promise<() => Promise
     await service.activate();
     if (ctx.signal.aborted) throw new Error('Anki Bridge activation was cancelled.');
     for (const name of ['snapshot', 'settings', 'connection', 'pair', 'draft', 'edit', 'approve', 'send', 'reconcile', 'presence', 'show', 'repairFields', 'updateStyling', 'drop']) {
-      handlers.push(ctx.handle(name, input => {
+      handlers.push(ctx.handle(name, async input => {
         if (name === 'settings' || name === 'pair') generation.invalidatePreflights();
-        return service.command(name, input ?? {});
+        if (name !== 'pair') return service.command(name, input ?? {});
+        // Address, key and pairing changes clear review results at the commit (ReviewService.onCommit).
+        // Re-pairing to the same profile commits no change, so forget explicitly as the README promises.
+        // A failed pairing changed nothing, so the result and any running check are left alone.
+        const result = await service.command(name, input ?? {});
+        reviews.forget();
+        return result;
       }));
     }
     for (const name of GENERATION_OPERATIONS) handlers.push(ctx.handle(name, input => generation.command(name, input ?? {})));
     for (const name of SESSION_OPERATIONS) handlers.push(ctx.handle(name, input => session.command(name, input ?? {})));
     for (const name of COVERAGE_OPERATIONS) handlers.push(ctx.handle(name, input => coverage.command(name, input ?? {})));
+    for (const name of REVIEW_OPERATIONS) handlers.push(ctx.handle(name, input => reviews.command(name, input ?? {})));
     return close;
   } catch (error) {
     await close();

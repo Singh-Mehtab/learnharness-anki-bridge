@@ -15,6 +15,7 @@ Anki Bridge turns what you learn in [LearnHarness](https://github.com/amosblomqv
 - Tags cards to match your collection. A template such as `{deck}::Lecture_01` tags each card by deck and lecture, and you can change the tags before each send.
 - Shows what you have already covered. Each idea says whether it has cards in Anki, cards waiting for review, or none, so you can fill the gaps.
 - Only adds notes. It never edits or deletes existing Anki notes, and Anki keeps your reviews and scheduling.
+- Lists topics to revisit when you ask. Check Anki reviews looks at how the cards it sent are going and groups the ones you keep missing by the idea they came from.
 
 ## How it works
 
@@ -69,6 +70,14 @@ This writes `anki-bridge-v0.7.2.zip` at the repository root. Then:
 
 The [install guide](docs/install.md) covers upgrading without losing drafts, rolling back and troubleshooting.
 
+## Topics to revisit
+
+Open Topics to revisit from the sidebar, or from More in step 3, and press Check Anki reviews. Nothing is read from Anki before you press it. Anki Bridge then reads review results for the notes it sent to the paired profile and lists a topic when one of its cards has 3 or more lapses, 2 or more Again presses on reviews in the last 30 days, or Anki's leech tag. Again on a learning step doesn't count.
+
+Each topic shows its cards with their lapses, review count, recent Again dates, leech and suspended status and deck, plus buttons to open the sessions the idea came from and to show a card in Anki. The list is a suggestion to look again, not proof that you don't know something: a card you keep missing may be badly worded, or the miss may be an ordinary slip. The thresholds are starting points and may change.
+
+Cards edited in Anki so they no longer match (a different note type or delivery ID) and cards deleted in Anki are skipped and counted under the list. Results stay in memory until you press Clear, re-pair, change the AnkiConnect address or key, or close LearnHarness.
+
 ## Flag replies during a lesson
 
 In a teaching session, Flag for Anki in the top bar marks the teacher's latest reply. You can add a note for the writer. `Cmd/Ctrl+Shift+A` flags straight away and offers the note in a short confirmation. After you flag a reply or save a note, the dialog says so and closes itself. Make cards opens Anki Bridge with that session's flagged ideas ticked.
@@ -101,7 +110,7 @@ The Anki Bridge settings hold the AnkiConnect address and optional key, the Anki
 ## Privacy and safety
 
 - Writing cards sends the chosen ideas to the active model provider, along with their linked ideas, an excerpt of the session reply each idea came from (flagged or not), your flag notes and any existing cards for those ideas. The Write cards dialog lists this before anything is sent.
-- From Anki, the bridge reads the open profile's name, its deck names and its tag names, for the deck and tag suggestions. It only looks up notes it sent itself, to check they still exist. Anki returns those notes' fields with the answer, and the bridge doesn't use them. It doesn't read your other notes or your review history.
+- From Anki, the bridge reads the open profile's name, its deck names and its tag names, for the deck and tag suggestions. It only looks up notes it sent itself, to check they still exist. Anki returns those notes' fields with the answer, and the bridge doesn't use them. It doesn't read your other notes. When you press Check Anki reviews, it reads lapse counts, review logs, tags, deck and suspended status for the notes it sent to the paired profile. Those results stay in memory: they are not saved, added to the graph or sent to a model, and nothing in Anki changes.
 - The optional AnkiConnect key is stored in plain text in the plugin's `data/` folder. Never share that folder. Use AnkiConnect on your own machine.
 - Community plugins run local code with LearnHarness's permissions. Install builds you trust.
 - Adding missing fields and resetting styling and templates only change the bridge's own note type, and both ask you to confirm first.
@@ -117,7 +126,7 @@ The Anki Bridge settings hold the AnkiConnect address and optional key, the Anki
 - Done: drafting from the graph, session flags, coverage labels, delivery to Anki and fact-first drafting. See the [changelog](CHANGELOG.md).
 - Next: try the new defaults in daily use and test card quality on material the writer was not tuned on.
 - After that: a public release, then a listing in the LearnHarness community plugin list.
-- Ideas, not scheduled: sending cards you keep failing in Anki back to LearnHarness as weak spots, and practice sessions aimed at those weak spots.
+- Ideas, not scheduled: practice sessions aimed at topics to revisit.
 
 ## Development
 
