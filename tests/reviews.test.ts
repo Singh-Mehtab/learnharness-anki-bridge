@@ -365,3 +365,68 @@ test('S3: a card deleted after cardsInfo drops out instead of failing the check'
     allowedOnly(t.anki.actions());
   } finally { await t.cleanup(); }
 });
+
+// Sol review round 2 regressions.
+
+test('F2: an API key changed and changed back during the last profile check is still not published', async () => {
+  const t = await setup([{ node: 'node-a' }], ids => [{ noteId: 1000, lhId: ids[0]!, cards: [{ cardId: 2000, lapses: 4 }] }]);
+  try {
+    let reviewsDone = false;
+    t.anki.state.after = async (action) => {
+      if (action === 'getReviewsOfCards') reviewsDone = true;
+      else if (action === 'getActiveProfile' && reviewsDone) {
+        const s = t.store.snapshot();
+        await t.store.replace({ ...s, settings: { ...s.settings, apiKey: 'B' } });
+        await t.store.replace({ ...s, settings: { ...s.settings, apiKey: '' } });
+      }
+    };
+    await assert.rejects(t.call('checkReviews'), /changed during the check/);
+    assert.equal((await t.call('lastReviewCheck')).check, null);
+  } finally { await t.cleanup(); }
+});
+
+test('F4: the result is forgotten at the settings commit, before the save finishes', async () => {
+  const t = await setup([{ node: 'node-a' }], ids => [{ noteId: 1000, lhId: ids[0]!, cards: [{ cardId: 2000, lapses: 4 }] }]);
+  try {
+    assert.ok((await t.call('checkReviews')).check);
+    let seen: Promise<Answer> | undefined;
+    // Registered after the service, so it runs after the service's own listener at the same commit point.
+    const off = t.store.onCommit(() => { seen ??= t.call('lastReviewCheck'); });
+    const s = t.store.snapshot();
+    await t.store.replace({ ...s, settings: { ...s.settings, apiKey: 'new' } });
+    off();
+    assert.equal((await seen!).check, null);
+    // A commit that leaves the connection alone keeps the result.
+    assert.ok((await t.call('checkReviews')).check);
+    await t.store.replace({ ...t.store.snapshot(), settings: { ...t.store.snapshot().settings, lastDeck: 'Other' } });
+    assert.ok((await t.call('lastReviewCheck')).check);
+  } finally { await t.cleanup(); }
+});
+
+test('round 2 S1: a card listed by two notes counts only for the note cardsInfo names', async () => {
+  const t = await setup([{ node: 'node-a' }, { node: 'node-b' }], ids => [
+    { noteId: 1000, lhId: ids[0]!, cards: [{ cardId: 2000, lapses: 0 }] },
+    { noteId: 1001, lhId: ids[1]!, cards: [{ cardId: 2001, lapses: 0 }] },
+  ]);
+  try {
+    const note = (i: number) => ({ noteId: 1000 + i, profile: 'Throwaway', modelName: 'LearnHarness Basic', tags: [], fields: { LH_ID: { value: t.ids[i], order: 4 } }, cards: [2000] });
+    t.anki.state.raw.set('notesInfo', [note(0), note(1)]);
+    t.anki.state.raw.set('cardsInfo', [{ cardId: 2000, note: 1001, lapses: 5, reps: 9, queue: 2, deckName: 'D' }]);
+    const { check } = await t.call('checkReviews');
+    assert.deepEqual(check!.topics.map(x => x.nodeId), ['node-b']);
+    assert.equal(check!.counts.missing, 1);
+    assert.deepEqual(t.anki.state.requests.filter(r => r.action === 'getReviewsOfCards').map(r => r.params.cards), [[2000]]);
+  } finally { await t.cleanup(); }
+});
+
+test('round 2 S2: a retried history read uses the refreshed lapse count', async () => {
+  const t = await setup([{ node: 'node-a' }], ids => [{ noteId: 1000, lhId: ids[0]!, cards: [{ cardId: 2000, lapses: 2, reps: 5 }] }]);
+  try {
+    t.anki.state.errorsOnce.set('getReviewsOfCards', 'staleCursor: collection changed');
+    let bumped = false;
+    t.anki.state.after = (action) => { if (action === 'cardsInfo' && !bumped) { bumped = true; t.anki.state.notes[0]!.cards[0]!.lapses = 3; } };
+    const { check } = await t.call('checkReviews');
+    assert.deepEqual(check!.topics.map(x => x.nodeId), ['node-a']);
+    assert.equal(check!.topics[0]!.cards[0]!.lapses, 3);
+  } finally { await t.cleanup(); }
+});

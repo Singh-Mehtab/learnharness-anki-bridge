@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { Window } from "happy-dom";
 import { activate } from "../src/main.ts";
+import { mountTopics } from "../src/topics-ui.ts";
 import { initialState, StateStore } from "../src/anki/state.ts";
 import type { State } from "../src/anki/state.ts";
 import { REVIEW_READ_ACTIONS } from "../src/anki/review-reader.ts";
@@ -78,7 +79,7 @@ async function setup(options: { paired?: boolean } = {}) {
   const click = async (label: string | RegExp) => { const b = find(label); assert.ok(b, `button ${label}`); assert.equal(b.disabled, false, `button ${label} is enabled`); b.click(); await tick(); };
   const text = () => container.textContent as string;
   const cleanup = async () => { scope.abort(); service.close(); await store.close(); await anki.close(); await rm(directory, { recursive: true, force: true }); };
-  return { resyncs, destination, anki, store, service, views, actions, calls, shown, sessions, opened: () => opened, settingsOpened: () => settingsOpened, doc, container, mount, find, click, text, cleanup };
+  return { ctx, scope, resyncs, destination, anki, store, service, views, actions, calls, shown, sessions, opened: () => opened, settingsOpened: () => settingsOpened, doc, container, mount, find, click, text, cleanup };
 }
 
 test("Topics to revisit reads nothing until Check Anki reviews, then groups cards by node with evidence and links", async () => {
@@ -212,5 +213,30 @@ test("S5: after the pairing changes elsewhere, the page re-reads it so the next 
     for (const f of t.resyncs) f();
     await settle(() => /paired Anki profile "Third"/.test(t.text()));
     assert.match(t.text(), /paired Anki profile "Third"/);
+  } finally { await t.cleanup(); }
+});
+
+test("F5: a Settings save in another pane re-reads the pairing, even during a check", async () => {
+  const t = await setup({ paired: false });
+  const peers = new Set<() => void>();
+  try {
+    const dispose = mountTopics(t.ctx, t.container, t.scope.signal, peers);
+    await tick();
+    assert.equal(t.find("Check Anki reviews")!.disabled, true);
+    assert.equal(peers.size, 1, "Topics listens to Settings saves");
+    await t.store.replace({ ...t.store.snapshot(), destination: { ...t.destination } });
+    for (const peer of peers) peer();
+    await settle(() => t.find("Check Anki reviews")?.disabled === false);
+    assert.match(t.text(), /paired Anki profile "Throwaway"/);
+
+    // A save during a check is held until the check ends, then applied.
+    t.anki.state.delay = 40;
+    await t.click("Check Anki reviews");
+    await t.store.replace({ ...t.store.snapshot(), destination: { url: t.destination.url, profile: "Later" } });
+    for (const peer of peers) peer();
+    await settle(() => /paired Anki profile "Later"/.test(t.text()));
+    assert.match(t.text(), /paired Anki profile "Later"/);
+    dispose();
+    assert.equal(peers.size, 0);
   } finally { await t.cleanup(); }
 });

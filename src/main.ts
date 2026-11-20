@@ -44,7 +44,7 @@ export function activate(ctx: PluginFrontendContext): void {
   ctx.cleanup(ctx.registerAction({ id: "open-bridge", name: "Anki Bridge", run: () => ctx.app.openView("bridge") }));
   ctx.cleanup(ctx.placeAction({ id: "bridge-sidebar", actionId: "open-bridge", location: "sidebar" }));
   // Topics to revisit reads Anki only when the user presses Check Anki reviews on that page.
-  ctx.cleanup(ctx.registerView({ id: "topics", name: "Topics to revisit", mount: (container, signal) => mountTopics(ctx, container, signal) }));
+  ctx.cleanup(ctx.registerView({ id: "topics", name: "Topics to revisit", mount: (container, signal) => mountTopics(ctx, container, signal, peers) }));
   ctx.cleanup(ctx.registerAction({ id: "open-topics", name: "Topics to revisit", run: () => ctx.app.openView("topics") }));
   ctx.cleanup(ctx.placeAction({ id: "topics-sidebar", actionId: "open-topics", location: "sidebar" }));
   ctx.cleanup(ctx.registerSettings((container, signal) => mountSettings(ctx, container, signal, peers)));

@@ -33,13 +33,10 @@ export async function activate(ctx: PluginBackendContext): Promise<() => Promise
     for (const name of ['snapshot', 'settings', 'connection', 'pair', 'draft', 'edit', 'approve', 'send', 'reconcile', 'presence', 'show', 'repairFields', 'updateStyling', 'drop']) {
       handlers.push(ctx.handle(name, async input => {
         if (name === 'settings' || name === 'pair') generation.invalidatePreflights();
-        if (name !== 'settings' && name !== 'pair') return service.command(name, input ?? {});
-        const connection = () => { const s = store.snapshot(); return JSON.stringify([s.settings.url, s.settings.apiKey, s.destination]); };
-        const before = connection();
-        const result = await service.command(name, input ?? {});
-        // Review results belong to one connection: forget them on any re-pair or address/key change.
-        if (name === 'pair' || connection() !== before) reviews.forget();
-        return result;
+        if (name !== 'pair') return service.command(name, input ?? {});
+        // Address, key and pairing changes clear review results at the commit (ReviewService.onCommit).
+        // Re-pairing to the same profile commits no change, so forget explicitly as the README promises.
+        try { return await service.command(name, input ?? {}); } finally { reviews.forget(); }
       }));
     }
     for (const name of GENERATION_OPERATIONS) handlers.push(ctx.handle(name, input => generation.command(name, input ?? {})));

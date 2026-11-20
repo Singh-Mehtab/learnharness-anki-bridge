@@ -124,6 +124,7 @@ async function backUpBeforeMigration(directory: string, version: number, origina
 export class StateStore {
   private value: State;
   private closed = false;
+  private readonly commits = new Set<(state: State) => void>();
   private readonly directory: string;
   private readonly lockToken: string;
   private constructor(directory: string, value: State, lockToken: string) {
@@ -201,6 +202,8 @@ export class StateStore {
     } catch (error) { await unlink(lock); throw error; }
   }
   snapshot(): State { return structuredClone(this.value); }
+  /** Runs synchronously at each commit point, before the directory sync. Returns an unsubscribe. */
+  onCommit(listener: (state: State) => void): () => void { this.commits.add(listener); return () => { this.commits.delete(listener); }; }
   async replace(value: State): Promise<void> {
     if (this.closed) throw new Error('Anki Bridge state is closed.');
     validateState(value);
@@ -213,6 +216,7 @@ export class StateStore {
       await rename(temporary, path.join(this.directory, 'state.json'));
       // Rename is the commit point. Never use the old in-memory state after it.
       this.value = next;
+      for (const listener of this.commits) listener(next);
       const dir = await open(this.directory, 'r');
       try { await dir.sync(); } finally { await dir.close(); }
     } finally { await unlink(temporary).catch((e: NodeJS.ErrnoException) => { if (e.code !== 'ENOENT') throw e; }); }

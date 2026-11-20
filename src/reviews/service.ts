@@ -19,10 +19,15 @@ const chunks = <T>(items: readonly T[], size: number): T[][] => Array.from({ len
 
 /** The paired profile is not the open one, so any earlier result no longer applies. */
 class ProfileMismatch extends Error {}
+const connectionKey = (state: { settings: { url: string; apiKey: string }; destination: Destination | null }) => JSON.stringify([state.settings.url, state.settings.apiKey, state.destination?.url ?? null, state.destination?.profile ?? null]);
 const retryable = (error: unknown) => error instanceof AnkiError && error.kind === 'api' && /stale ?cursor|not ?found/i.test(error.message);
 
 export class ReviewService {
   private last: ReviewCheck | undefined;
+  /** Advances whenever a commit changes the address, API key or pairing, so A→B→A still counts as a change. */
+  private revision = 0;
+  private connection: string;
+  private readonly unsubscribe: () => void;
   private running = false;
   private closed = false;
   private readonly lifetime = new AbortController();
@@ -31,17 +36,23 @@ export class ReviewService {
   private readonly options: { signal?: AbortSignal; timeoutMs?: number; now?: () => number };
   constructor(learning: GraphSource, store: StateStore, options: { signal?: AbortSignal; timeoutMs?: number; now?: () => number } = {}) {
     this.learning = learning; this.store = store; this.options = options;
+    this.connection = connectionKey(store.snapshot());
+    this.unsubscribe = store.onCommit(state => {
+      const key = connectionKey(state);
+      if (key !== this.connection) { this.connection = key; this.revision++; this.last = undefined; }
+    });
     if (options.signal?.aborted) this.lifetime.abort();
     else options.signal?.addEventListener('abort', this.abort, { once: true });
   }
   private abort = () => this.lifetime.abort();
   close(): void {
     this.closed = true; this.last = undefined;
+    this.unsubscribe();
     this.lifetime.abort();
     this.options.signal?.removeEventListener('abort', this.abort);
   }
   /** Called by the backend after a pair or a settings change commits, so an A→B→A switch still forgets. */
-  forget(): void { this.last = undefined; }
+  forget(): void { this.revision++; this.last = undefined; }
   private active(): void {
     if (this.closed || this.lifetime.signal.aborted) throw new Error('Anki Bridge is disabled.');
   }
@@ -63,7 +74,10 @@ export class ReviewService {
     this.running = true;
     const apiKey = this.store.snapshot().settings.apiKey;
     try {
-      const check = await this.check(input.expectedDestination);
+      const revision = this.revision;
+      const check = await this.check(input.expectedDestination, revision);
+      // Last line of defence: nothing is published if the connection changed at any point.
+      if (revision !== this.revision) throw new ProfileMismatch('The Anki connection or pairing changed during the check. Nothing was kept. Check again.');
       this.last = check;
       return { check, running: false };
     } catch (error) {
@@ -100,7 +114,7 @@ export class ReviewService {
     }
   }
 
-  private async check(expected: unknown): Promise<ReviewCheck> {
+  private async check(expected: unknown, revision: number): Promise<ReviewCheck> {
     const state = this.store.snapshot();
     const paired = state.destination;
     if (!paired || paired.url !== state.settings.url) throw new Error('Pair Anki Bridge with this address and profile in Settings before checking reviews.');
@@ -119,7 +133,7 @@ export class ReviewService {
     const saved = () => {
       this.active();
       const current = this.store.snapshot();
-      if (!sameDestination(current.destination, paired) || current.settings.url !== paired.url || current.settings.apiKey !== apiKey) {
+      if (revision !== this.revision || !sameDestination(current.destination, paired) || current.settings.url !== paired.url || current.settings.apiKey !== apiKey) {
         throw new ProfileMismatch('The Anki connection or pairing changed during the check. Nothing was kept. Check again.');
       }
     };
@@ -164,7 +178,8 @@ export class ReviewService {
 
     // Cards of owned notes only.
     const wanted = [...new Set(owned.flatMap(o => o.cardIds))];
-    const ownerOf = new Map(owned.flatMap(o => o.cardIds.map(id => [id, o.card.noteId] as const)));
+    const owners = new Map<number, Set<number>>();
+    for (const o of owned) for (const id of o.cardIds) { const set = owners.get(id) ?? new Set<number>(); set.add(o.card.noteId); owners.set(id, set); }
     /** cardsInfo for one batch, keeping only cards that still exist and belong to the note that listed them. */
     const readCards = async (batch: number[]) => {
       const result = await this.retry(() => reader.call<Record<string, unknown>[]>('cardsInfo', { cards: batch }), guard);
@@ -175,7 +190,7 @@ export class ReviewService {
         if (!Object.keys(info).length) continue;
         const cardId = info.cardId as number;
         if (!batch.includes(cardId)) throw new Error('AnkiConnect returned a card that was not asked for. Nothing was kept.');
-        if (info.note !== ownerOf.get(cardId)) continue;
+        if (!owners.get(cardId)?.has(info.note as number)) continue;
         found.push({ cardId, note: info.note as number, lapses: info.lapses as number, reps: info.reps as number, queue: info.queue as number, deckName: info.deckName as string });
       }
       return found;
@@ -186,15 +201,18 @@ export class ReviewService {
     // Review logs, only for cards cardsInfo just confirmed. A card deleted since then (notFound on
     // 26.10.11.0) drops out: re-read cardsInfo for the batch and retry history for what is left.
     const reviews = new Map<number, ReviewRow[]>();
-    const confirmed = owned.flatMap(o => o.cardIds.filter(id => infos.has(id)));
+    const confirmed = [...new Set(owned.flatMap(o => o.cardIds.filter(id => infos.has(id))))];
     for (let batch of chunks(confirmed, REVIEW_BATCH.reviews)) {
       let result: Record<string, ReviewRow[]>;
       try { result = await reader.call<Record<string, ReviewRow[]>>('getReviewsOfCards', { cards: batch }); }
       catch (error) {
         if (!retryable(error)) throw error;
         await guard();
-        const still = new Set((await readCards(batch)).map(c => c.cardId));
+        const refreshed = await readCards(batch);
+        const still = new Set(refreshed.map(c => c.cardId));
         for (const id of batch) if (!still.has(id)) infos.delete(id);
+        // Keep the newer lapse counts, so they match the history read next.
+        for (const info of refreshed) infos.set(info.cardId, info);
         batch = batch.filter(id => still.has(id));
         result = batch.length ? await reader.call<Record<string, ReviewRow[]>>('getReviewsOfCards', { cards: batch }) : {};
       }
@@ -206,7 +224,7 @@ export class ReviewService {
       }
     }
 
-    const present = owned.map(o => ({ ...o, cards: o.cardIds.map(id => infos.get(id)).filter((c): c is CardInfo & { note: number } => !!c) }));
+    const present = owned.map(o => ({ ...o, cards: o.cardIds.map(id => infos.get(id)).filter((c): c is CardInfo & { note: number } => !!c && c.note === o.card.noteId) }));
     const readable = present.filter(o => o.cards.length);
     missing += present.length - readable.length;
 

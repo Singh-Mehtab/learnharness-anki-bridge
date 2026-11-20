@@ -1,5 +1,6 @@
 // Topics to revisit: what the user's own Anki reviews suggest looking at again.
 // Nothing is read from Anki until the user presses Check Anki reviews.
+import type { Peers } from "./settings-ui.ts";
 import type { PluginFrontendContext } from "../sdk/index.d.ts";
 import type { CardEvidence, ReviewCheck, Topic } from "./reviews/signals.ts";
 import type { Destination } from "./settings-ui.ts";
@@ -31,7 +32,7 @@ export function cardEvidence(c: CardEvidence): string {
 
 const REASON: Record<CardEvidence["reasons"][number], string> = { lapses: "3+ lapses", again: "2+ Again in 30 days", leech: "Leech" };
 
-export function mountTopics(ctx: PluginFrontendContext, container: HTMLElement, signal: AbortSignal): () => void {
+export function mountTopics(ctx: PluginFrontendContext, container: HTMLElement, signal: AbortSignal, peers: Peers = new Set()): () => void {
   const root = el("div", undefined, "anki-bridge ab-page ab-topics");
   const head = el("header", undefined, "ab-topics-head");
   head.append(el("h2", "Topics to revisit", "ab-step-title"));
@@ -45,7 +46,7 @@ export function mountTopics(ctx: PluginFrontendContext, container: HTMLElement, 
   root.append(head, intro, privacy, actions, feedback, summary, list, footer);
   container.append(root);
 
-  let disposed = false, busy = false, stale = false;
+  let disposed = false, busy = false, stale = false, refreshPending = false;
   let snapshot: Snapshot | undefined, check: ReviewCheck | null = null;
   const alive = () => !disposed && !signal.aborted && !ctx.signal.aborted;
   const scope = new RenderScope(signal), barScope = new RenderScope(signal);
@@ -153,6 +154,8 @@ export function mountTopics(ctx: PluginFrontendContext, container: HTMLElement, 
     } finally {
       busy = false;
       if (alive()) { renderBar(); render(); }
+      // A Settings save or resync that arrived during the check is applied now.
+      if (refreshPending && alive()) { refreshPending = false; void load(); }
     }
   }
 
@@ -176,6 +179,9 @@ export function mountTopics(ctx: PluginFrontendContext, container: HTMLElement, 
     if (alive()) { renderBar(); render(); }
   }
   void load();
-  const unsubscribe = ctx.onResync(() => { if (!busy) void load(); });
-  return () => { disposed = true; unsubscribe(); scope.dispose(); barScope.dispose(); root.remove(); };
+  // Reload the local pairing after a host resync or a Settings save in another pane.
+  const refresh = () => { if (busy) refreshPending = true; else void load(); };
+  const unsubscribe = ctx.onResync(refresh);
+  peers.add(refresh);
+  return () => { disposed = true; unsubscribe(); peers.delete(refresh); scope.dispose(); barScope.dispose(); root.remove(); };
 }
