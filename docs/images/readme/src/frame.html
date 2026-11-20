@@ -1,0 +1,35 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><link rel="stylesheet" href="common.css">
+<style>
+#art { background: transparent; padding: 24px 40px 64px; }
+.win { position: relative; border-radius: 12px; overflow: hidden; border: 1px solid #3a3a3a; background: #161616; box-shadow: 0 14px 30px rgba(0,0,0,.28), 0 2px 6px rgba(0,0,0,.18); }
+.bar { height: 34px; background: #1b1b1b; border-bottom: 1px solid #2a2a2a; display: flex; align-items: center; padding-left: 14px; gap: 8px; }
+.bar i { width: 12px; height: 12px; border-radius: 50%; display: block; }
+.view { position: relative; overflow: hidden; }
+.view img { position: absolute; width: 1440px; }
+.over { position: absolute; border-radius: 12px; overflow: hidden; border: 1px solid #444; box-shadow: 0 16px 34px rgba(0,0,0,.45), 0 3px 10px rgba(0,0,0,.3); }
+.over img { position: absolute; width: 1440px; }
+</style></head>
+<body>
+<div id="art"><div class="win"><div class="bar" id="bar"><i style="background:#ff5f57"></i><i style="background:#febc2e"></i><i style="background:#28c840"></i></div><div class="view" id="view"></div></div></div>
+<script>
+const q = new URLSearchParams(location.search);
+const crop = (q.get('crop') || '0,0,1440,900').split(',').map(Number);
+const [x, y, w, h] = crop;
+if (q.get('pad')) document.getElementById('art').style.padding = q.get('pad').split(',').map(v => v + 'px').join(' ');
+if (q.get('chrome') === '0') document.getElementById('bar').remove();
+const view = document.getElementById('view');
+view.style.width = w + 'px'; view.style.height = h + 'px';
+const img = new Image(); img.src = q.get('src'); img.style.left = -x + 'px'; img.style.top = -y + 'px'; view.append(img);
+if (q.get('over')) {
+  const [ox, oy, ow, oh] = q.get('ocrop').split(',').map(Number);
+  const [px, py] = q.get('opos').split(',').map(Number);
+  const box = document.createElement('div'); box.className = 'over';
+  Object.assign(box.style, { left: px + 'px', top: py + 'px', width: ow + 'px', height: oh + 'px' });
+  const o = new Image(); o.src = q.get('over'); o.style.left = -ox + 'px'; o.style.top = -oy + 'px'; box.append(o);
+  document.querySelector('.win').append(box);
+  document.querySelector('.win').style.overflow = 'visible';
+  view.style.borderRadius = '0 0 12px 12px'; const b = document.getElementById('bar'); if (b) b.style.borderRadius = '12px 12px 0 0'; else view.style.borderRadius = '12px';
+}
+</script>
+</body></html>

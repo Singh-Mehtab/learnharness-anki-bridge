@@ -1,0 +1,50 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><link rel="stylesheet" href="common.css">
+<style>
+#art { background: transparent; width: 1280px; height: 340px; position: relative; }
+svg.motif { position: absolute; inset: 0; }
+.word { position: absolute; left: 0; right: 0; top: 118px; text-align: center; font-family: var(--display); font-size: 94px; letter-spacing: -0.5px; line-height: 1; color: var(--paper); }
+.word span { background: var(--bg-word, transparent); padding: 0 26px; }
+.card { position: absolute; width: 168px; height: 112px; border-radius: 9px; border: 1.5px solid var(--rule); background: var(--panel); }
+.card .half { height: 50%; padding: 12px 14px; font-family: var(--sans); font-size: 14px; line-height: 1.25; color: var(--paper); }
+.card .half + .half { border-top: 1.5px dashed var(--rule); color: var(--muted); }
+.card .bar { height: 7px; border-radius: 4px; background: var(--rule); margin-bottom: 7px; }
+.card .bar.s { width: 62%; }
+.card .bar.a { background: var(--anki); opacity: .85; width: 46%; }
+.back1 { right: 70px; top: 98px; transform: rotate(7deg); opacity: .55; }
+.back2 { right: 82px; top: 104px; transform: rotate(3deg); opacity: .8; }
+.front { right: 96px; top: 112px; }
+</style></head>
+<body><script>document.body.className = new URLSearchParams(location.search).get("theme") || "";</script>
+<div id="art">
+  <svg class="motif" width="1280" height="340" viewBox="0 0 1280 340">
+    <g transform="translate(30 0)"><g stroke="var(--rule)" stroke-width="2" fill="none">
+      <line x1="96" y1="96" x2="168" y2="150"/>
+      <line x1="168" y1="150" x2="120" y2="232"/>
+      <line x1="168" y1="150" x2="246" y2="168"/>
+      <line x1="96" y1="96" x2="196" y2="70"/>
+      <line x1="196" y1="70" x2="246" y2="168"/>
+      <line x1="120" y1="232" x2="210" y2="262"/>
+      <line x1="210" y1="262" x2="246" y2="168"/>
+    </g>
+    <path d="M246 168 C 330 168, 360 300, 630 300 S 970 230, 1050 214" stroke="var(--flag)" stroke-width="2" fill="none" stroke-dasharray="1 7" stroke-linecap="round"/>
+    <g fill="var(--panel)" stroke="var(--muted)" stroke-width="2">
+      <circle cx="96" cy="96" r="8"/>
+      <circle cx="196" cy="70" r="6"/>
+      <circle cx="168" cy="150" r="9"/>
+      <circle cx="120" cy="232" r="7"/>
+      <circle cx="210" cy="262" r="6"/>
+    </g>
+    <circle cx="246" cy="168" r="11" fill="var(--flag)"/>
+    <circle cx="246" cy="168" r="19" fill="none" stroke="var(--flag)" stroke-width="1.5" opacity=".45"/>
+    </g>
+  </svg>
+  <div class="word"><span>Anki Bridge</span></div>
+  <div class="card back1"></div>
+  <div class="card back2"></div>
+  <div class="card front">
+    <div class="half"><div class="bar"></div><div class="bar s"></div></div>
+    <div class="half"><div class="bar a"></div></div>
+  </div>
+</div>
+</body></html>

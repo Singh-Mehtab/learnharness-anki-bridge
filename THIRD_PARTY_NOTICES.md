@@ -8,7 +8,7 @@ Source: https://github.com/amosblomqvist/learnharness, v0.6.1, AGPL-3.0. Copyrig
 
 ## Twig and core Flashcards
 
-The card writer and its benchmark adapt card-kind and prompt rules from [Twig](https://github.com/amoghu1s1/twig), by its contributors, and LearnHarness core Flashcards, by the LearnHarness contributors. Both are AGPL-3.0.
+The card writer and its benchmark adapt card-kind and prompt rules from [Twig](https://github.com/amoghu1s1/twig), by its contributors, and LearnHarness core Flashcards, by the LearnHarness contributors. Both are AGPL-3.0. The prompt also adapts card-writing rules (one fact per card, the "and" test) from the recall-cards proposal in [LearnHarness PR #447](https://github.com/amosblomqvist/learnharness/pull/447) by lellopz05, under the same license.
 
 ## genanki
 
