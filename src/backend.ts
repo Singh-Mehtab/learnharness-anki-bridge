@@ -24,7 +24,14 @@ export async function activate(ctx: PluginBackendContext): Promise<() => Promise
     session.close();
     reviews.close();
     // Generation cleanup can still read delivery snapshots while it settles.
-    try { await generation.close(); } finally { coverage.close(); await service.close(); }
+    try { await generation.close(); }
+    catch (error) {
+      coverage.close();
+      await service.close().catch(() => {});
+      throw error;
+    }
+    coverage.close();
+    await service.close();
   };
   try {
     if (ctx.signal.aborted) throw new Error('Anki Bridge activation was cancelled.');
@@ -52,7 +59,7 @@ export async function activate(ctx: PluginBackendContext): Promise<() => Promise
     for (const name of REVIEW_OPERATIONS) handlers.push(ctx.handle(name, input => reviews.command(name, input ?? {})));
     return close;
   } catch (error) {
-    await close();
+    await close().catch(() => {});
     throw error;
   }
 }

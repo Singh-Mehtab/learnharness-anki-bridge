@@ -63,7 +63,7 @@ test('schema 3 migration preserves populated flags, settings, applied results an
     const store = await StateStore.open(directory);
     try {
       assert.equal(await readFile(backup, 'utf8'), bytes);
-      assert.equal((await stat(backup)).mode & 0o777, 0o600);
+      if (process.platform !== 'win32') assert.equal((await stat(backup)).mode & 0o777, 0o600);
       assert.deepEqual(store.snapshot(), { ...saved, dismissals: [], generationSettings: { ...saved.generationSettings, enabledKinds: ['fact', 'equation'] } });
       assert.equal(store.snapshot().flags[0].note, 'Preserve this note');
       assert.equal(store.snapshot().generations[0].tasks[0].status, 'applied');

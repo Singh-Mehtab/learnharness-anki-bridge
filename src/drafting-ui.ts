@@ -142,14 +142,21 @@ export function mountDrafting(ctx: PluginFrontendContext, ideasHost: HTMLElement
   }
 
   const name = (id: string) => nodes.find(n => n.id === id)?.name ?? id;
-  /** Estimate, confirm in a dialog, then start. Retry passes its own estimate call. */
-  async function estimateAndStart(estimate: () => Promise<Preflight>): Promise<void> {
-    if (picker.isStale) throw new Error("The idea list is out of date. Refresh it first.");
+  type RetryResult = Preflight | { recovery: true; snapshot: DraftingSnapshot };
+  /** Estimate, confirm in a dialog, then start. Retry can instead save a finished result. */
+  async function estimateAndStart(estimate: () => Promise<RetryResult>, savingResult = false): Promise<void> {
+    if (!savingResult && picker.isStale) throw new Error("The idea list is out of date. Refresh it first.");
     invalidate(); const at = revision;
-    feedback.show("Estimating…");
+    feedback.show(savingResult ? "Saving finished result…" : "Estimating…");
     const p = await estimate();
     if (!alive()) return;
     feedback.show("");
+    if ("recovery" in p) {
+      state = p.snapshot;
+      await refresh(); await onCardsChanged();
+      return;
+    }
+    if (picker.isStale) throw new Error("The idea list is out of date. Refresh it first.");
     if (at !== revision) throw new Error("The selection changed. Press Write cards again.");
     const body = el("div", undefined, "ab-estimate");
     const facts = el("dl", undefined, "ab-facts");
@@ -196,7 +203,8 @@ export function mountDrafting(ctx: PluginFrontendContext, ideasHost: HTMLElement
     // One panel: the running run, or else the latest run's result until it is dismissed.
     const newest = [...state.generations].reverse();
     const running = newest.filter(g => g.status === "running");
-    const shown = running.length ? running.slice(0, 1) : newest.slice(0, 1).filter(g => !g.hidden);
+    const unsaved = newest.find(g => g.tasks.some(t => t.resultPending));
+    const shown = running.length ? running.slice(0, 1) : unsaved ? [unsaved] : newest.slice(0, 1).filter(g => !g.hidden);
     for (const generation of shown) {
       const panel = el("div", undefined, "ab-progress");
       panel.dataset.status = generation.status;
@@ -226,18 +234,28 @@ export function mountDrafting(ctx: PluginFrontendContext, ideasHost: HTMLElement
           feedback.show("Cancelled. Finished cards are kept for review. The other ideas can be selected again.");
         }, false) }));
       } else {
-        const summary = generation.status === "completed" && !failed.length
+        const pendingResult = generation.tasks.some(t => t.resultPending);
+        const summary = pendingResult ? "A finished result has not been saved." : generation.status === "completed" && !failed.length
           ? cards ? `Wrote ${plural(cards, "card")}${omissions ? "" : ` for ${plural(carded, "idea")}`}.` : "No cards written."
-          : !cards && failed.length && !cancelled.length ? `Couldn't write cards. ${failed.length === 1 ? "The model call failed." : `${failed.length} model calls failed.`}`
+          : !cards && failed.length && !cancelled.length ? `Couldn't write cards. ${failed.length === 1 ? "One batch failed." : `${failed.length} batches failed.`}`
           : `Wrote ${plural(cards, "card")}. ${[failed.length ? `${plural(failed.length, "batch", "batches")} failed` : "", cancelled.length ? `${plural(cancelled.length, "batch", "batches")} cancelled` : ""].filter(Boolean).join(", ")}.`;
         text.append(el("strong", summary), el("span", cards ? " Review them in step 3." : "", "ab-muted"));
         if (omissions) panel.append(el("p", `${plural(omissions, "exact duplicate")} not added.`, "ab-muted"));
         const errors = [...new Set(failed.map(t => readableError(t.error)).filter(Boolean))];
         if (errors.length) panel.append(el("p", errors.join(" "), "ab-progress-error"));
-        if (failed.length || cancelled.length) activityWidgets.push(button(ctx, actions, signal, { label: applied.length ? "Retry the rest" : "Try again", onClick: () => run(async () => {
-          await estimateAndStart(() => ctx.call<Preflight>("retryGeneration", { id: generation.id }));
+        if (failed.length || cancelled.length) activityWidgets.push(button(ctx, actions, signal, { label: pendingResult ? "Retry saving" : applied.length ? "Retry the rest" : "Try again", onClick: () => run(async () => {
+          await estimateAndStart(() => ctx.call<RetryResult>("retryGeneration", { id: generation.id }), pendingResult);
         }, false) }));
-        activityWidgets.push(button(ctx, actions, signal, { label: "Dismiss", onClick: () => run(async () => {
+        if (pendingResult) activityWidgets.push(button(ctx, actions, signal, { label: "Abandon unavailable result", onClick: () => run(async () => {
+          const ok = await confirmDialog(ctx, signal, { title: "Abandon unavailable result?", confirm: "Abandon result", destructive: true,
+            body: el("p", "Only unavailable results will be abandoned. Saved cards will be kept. No model call will start; to write cards for the released ideas, run a new estimate and confirm it.") });
+          if (!ok || !alive()) return;
+          invalidate();
+          await snapshot("abandonGenerationResult", { id: generation.id, confirmed: true });
+          await refresh(); await onCardsChanged();
+          feedback.show("Unavailable results abandoned. You can select those ideas again.", "success");
+        }, false) }));
+        if (!pendingResult) activityWidgets.push(button(ctx, actions, signal, { label: "Dismiss", onClick: () => run(async () => {
           await snapshot("dismissGeneration", { id: generation.id });
         }, false) }));
       }

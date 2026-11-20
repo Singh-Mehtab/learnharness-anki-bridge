@@ -25,6 +25,7 @@ function setup(options: { catalogUnavailable?: boolean; initialGraphFailure?: bo
   let modelValue: { provider: string; id: string } | undefined;
   const peers = new Set<() => void>();
   let failNextCoverage = options.initialGraphFailure;
+  let recovery: (() => unknown) | undefined;
   let mutationGate: Promise<void> | undefined, hold: Promise<void> | undefined, graphHold: Promise<void> | undefined;
   let refreshed = 0, modelMounts = 0, knowledgeMounts = 0;
   const ctx = {
@@ -49,10 +50,17 @@ function setup(options: { catalogUnavailable?: boolean; initialGraphFailure?: bo
         Object.assign(state.generationSettings, rest);
         if (toggleKind) state.generationSettings.enabledKinds = ["fact", "equation", "why", "steps", "apply", "discriminate"].filter(k => k === toggleKind.kind ? toggleKind.enabled : state.generationSettings.enabledKinds.includes(k));
       }
+      if (name === "retryGeneration" && recovery) return recovery();
       if (name === "preflight" || name === "retryGeneration") { await hold; return { ...structuredClone(preflight), followsCheapSlot: !state.generationSettings.model }; }
       if (name === "generate") state.generations.push({ id: "p1", status: "running", nodeIds: ["n_a"], skipped: [], settings: {}, createdAt: "", tasks: [
         { requestId: "r1", status: "running", input: {}, outputAllowance: 1200, sources: [{ nodeId: "n_a", name: "Alpha" }] }] });
       if (name === "cancelGeneration") { state.generations[0].status = "cancelled"; state.generations[0].tasks[0].status = "cancelled"; }
+      if (name === "abandonGenerationResult") {
+        const generation = state.generations.find((g: any) => g.id === input.id);
+        generation.status = "failed";
+        Object.assign(generation.tasks[0], { status: "failed", resultPending: undefined, error: "The unavailable result was abandoned." });
+        graph.nodes[0].coverage = coverage();
+      }
       if (name === "dismissGeneration") state.generations.find((g: any) => g.id === input.id).hidden = true;
       return structuredClone(state);
     },
@@ -92,6 +100,7 @@ function setup(options: { catalogUnavailable?: boolean; initialGraphFailure?: bo
       return { resolve: () => { mutationGate = undefined; resolve(); }, reject: () => { mutationGate = undefined; reject(new Error("Graph read failed")); } };
     },
     holdEstimates: () => { let release!: () => void; hold = new Promise(r => { release = r; }); return () => { hold = undefined; release(); }; },
+    onRetry: (handler: () => unknown) => { recovery = handler; },
     refreshed: () => refreshed, modelMounts: () => modelMounts, knowledgeMounts: () => knowledgeMounts,
     menu: async (label: string) => { (ideas.querySelector("button.ab-icon-button") as unknown as HTMLButtonElement).click(); await chooseMenu(label); },
     close: async () => { panel.dispose(); controller.abort(); await window.happyDOM.close(); } };
@@ -312,7 +321,7 @@ test("failed batches show the provider message, not raw JSON", async () => {
     f.state.generations.push({ id: "g", status: "failed", nodeIds: ["n_a"], skipped: [], settings: {}, createdAt: "", tasks: [
       { requestId: "r", status: "failed", input: {}, outputAllowance: 1, sources: [], error: '401 {"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}' }] });
     await f.panel.setScope(undefined); await tick();
-    assert.match(f.text(), /Couldn't write cards\. The model call failed\./);
+    assert.match(f.text(), /Couldn't write cards\. One batch failed\./);
     assert.match(f.text(), /Invalid x-api-key \(HTTP 401\)\./);
     assert.doesNotMatch(f.text(), /authentication_error/);
     assert.equal(readableError("plain failure"), "plain failure");
@@ -491,5 +500,53 @@ test("a programmatic handoff accepts 1000 ideas and refuses 1001 with a warning"
     await f.panel.setScope(undefined, { nodeIds: ids }); await tick();
     assert.equal(f.ideas.querySelectorAll("li input:checked").length, 0, "a new scope starts from an empty selection");
     assert.match(f.text(), /That would select 1001 ideas/);
+  } finally { await f.close(); }
+});
+
+test("Retry saving uses the finished result without a model confirmation", async () => {
+  const f = setup();
+  const batch = { id: "g1", status: "interrupted", nodeIds: ["n_a"], skipped: [], tasks: [
+    { status: "interrupted", resultPending: true, error: "The model finished, but Anki Bridge could not save its result." },
+  ] };
+  try {
+    f.state.generations = [batch];
+    f.onRetry(() => ({ recovery: true, snapshot: { ...f.state, generations: [{ ...batch, status: "completed", tasks: [
+      { status: "applied", result: { targets: [{ nodeId: "n_a", cards: [{}] }] } },
+    ] }] } }));
+    await f.panel.setScope(undefined); await tick();
+    assert.match(f.text(), /A finished result has not been saved/);
+    assert.equal(f.has("Dismiss"), false);
+    f.button("Retry saving").click(); await tick();
+    assert.deepEqual(f.calls.filter(c => ["preflight", "retryGeneration", "generate"].includes(c.name)), [{ name: "retryGeneration", input: { id: "g1" } }]);
+    assert.equal(f.dialog(), null);
+    assert.match(f.text(), /Wrote 1 card for 1 idea/);
+    assert.equal(f.has("Dismiss"), true);
+  } finally { await f.close(); }
+});
+
+test("abandoning an unavailable result requires its own confirmation and releases ideas without estimating or writing", async () => {
+  const f = setup();
+  try {
+    f.state.generations = [{ id: "g1", status: "interrupted", nodeIds: ["n_a"], skipped: [], tasks: [
+      { status: "interrupted", resultPending: true },
+    ] }];
+    Object.assign(f.graph.nodes[0].coverage, { generating: true, selectable: false, uncarded: false });
+    await f.panel.setScope(undefined); await tick();
+    assert.equal(f.box().disabled, true);
+    f.button("Abandon unavailable result").click(); await tick();
+    assert.match(f.dialog()!.textContent!, /No model call will start.*run a new estimate and confirm it/);
+    f.button("Cancel").click(); await tick();
+    assert.equal(f.calls.some(c => c.name === "abandonGenerationResult"), false);
+    assert.equal(f.box().disabled, true);
+    f.button("Abandon unavailable result").click(); await tick();
+    f.button("Abandon result").click(); await tick();
+    assert.deepEqual(f.calls.filter(c => ["abandonGenerationResult", "preflight", "retryGeneration", "generate"].includes(c.name)), [
+      { name: "abandonGenerationResult", input: { id: "g1", confirmed: true } },
+    ]);
+    assert.equal(f.box().disabled, false);
+    assert.equal(f.has("Retry saving"), false);
+    assert.equal(f.has("Dismiss"), true);
+    assert.match(f.text(), /You can select those ideas again/);
+    assert.doesNotMatch(f.text(), /model call failed/);
   } finally { await f.close(); }
 });

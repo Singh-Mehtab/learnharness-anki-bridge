@@ -11,6 +11,10 @@ import { outputAllowance, pack } from '../src/writer/input.ts';
 import type { WriterInput } from '../src/writer/types.ts';
 import { DeliveryService } from '../src/anki/delivery.ts';
 import { GenerationService } from '../src/generation/service.ts';
+import { Window } from 'happy-dom';
+import { mountReview } from '../src/review-ui.ts';
+import { fakeUi } from './fake-ui.ts';
+import type { PluginFrontendContext } from '../sdk/index.d.ts';
 
 const result = (nodeIds: string[], skip: string[] = []) => ({ targets: nodeIds.map(nodeId => skip.includes(nodeId)
   ? { nodeId, cards: [], skipReason: 'Nothing worth testing beyond the statement.' }
@@ -332,7 +336,7 @@ test('schema 1 state migrates without losing pairing or cards, and malformed gen
     assert.equal(snap.cards.length, 1); assert.equal(snap.destination.profile, 'Throwaway'); assert.deepEqual(snap.generations, []);
   } finally { await close(); }
   const saved = JSON.parse(await readFile(statePath(directory), 'utf8'));
-  assert.equal(saved.schemaVersion, 6);
+  assert.equal(saved.schemaVersion, 7);
   saved.generations = [{ id: 'g', bogus: true }];
   const broken = JSON.stringify(saved);
   await writeFile(statePath(directory), broken);
@@ -394,7 +398,8 @@ test('an unexpected driver failure interrupts the batch instead of leaving it ru
     await until(async () => (await c.call('generationStatus')).generations[0].status === 'interrupted', 'interrupted');
     const snap = await c.call('generationStatus');
     assert.match(snap.generations[0].tasks[0].error, /Host storage failed/);
-    assert.match(snap.recoveryError, /Host storage failed/);
+    assert.match(snap.generationRecoveryError, /Host storage failed/);
+    assert.equal(snap.recoveryError, undefined);
     assert.deepEqual(host.workers.cancelled, ['task-1']);
     // New work is not blocked.
     const q = await c.call('preflight', { nodeIds: ['n_b'] });
@@ -443,7 +448,7 @@ test('v5 (0.7.2) state drops the constants toggle and compose from settings only
   const c = host.context(directory), close = await activate(c.ctx);
   try {
     const saved = JSON.parse(await readFile(statePath(directory), 'utf8'));
-    assert.equal(saved.schemaVersion, 6);
+    assert.equal(saved.schemaVersion, 7);
     assert.equal(await readFile(path.join(directory, 'state.v5.bak'), 'utf8'), bytes);
     assert.deepEqual(saved.generationSettings, { cardsPerNode: 3, enabledKinds: ['fact', 'why'], model: oldSettings.model });
     assert.deepEqual(saved.generations[0].settings, oldSettings, 'history keeps what the batch was run with');
@@ -509,7 +514,7 @@ test('v4 backup and restart recover a frozen legacy worker without changing its 
     const c = host.context(directory), close = await activate(c.ctx);
     try {
       const saved = JSON.parse(await readFile(statePath(directory), 'utf8'));
-      assert.equal(saved.schemaVersion, 6);
+      assert.equal(saved.schemaVersion, 7);
       assert.equal(await readFile(path.join(directory, 'state.v4.bak'), 'utf8'), bytes);
       assert.deepEqual(saved.generationSettings, { cardsPerNode: 3, enabledKinds: ['fact', 'equation'], model: legacySettings.model });
       assert.deepEqual(saved.generations[0].settings, legacySettings);
@@ -595,3 +600,149 @@ test('cross-request omissions use exact live content and preserve distinct cards
     } finally { await reopened(); }
   } finally { await close(); }
 }));
+
+async function withReviewBanner(call: (name: string) => Promise<unknown>, check: (refresh: () => Promise<string>) => Promise<void>) {
+  const window = new Window(), controller = new AbortController();
+  const previousDocument = globalThis.document;
+  Object.assign(globalThis, { document: window.document });
+  const host = window.document.createElement('div'), header = window.document.createElement('div');
+  const ctx = { call: (name: string) => {
+    assert.equal(name, 'snapshot', 'unpaired Review does not call Anki');
+    return call(name);
+  }, signal: controller.signal, onResync: () => () => {}, ui: fakeUi() } as unknown as PluginFrontendContext;
+  const review = mountReview(ctx, host as unknown as HTMLElement, controller.signal, {
+    headerAside: header as unknown as HTMLElement, peers: new Set(), onChanged: async () => {},
+  });
+  try {
+    const banner = () => host.querySelector('.ab-banners')?.textContent ?? '';
+    await until(() => banner().includes('Card generation needs checking:'), 'initial Review generation warning');
+    await check(async () => {
+      await review.refresh();
+      return banner();
+    });
+  } finally {
+    review.dispose(); controller.abort(); await window.happyDOM.close();
+    Object.assign(globalThis, { document: previousDocument });
+  }
+}
+
+for (const mode of ['retry', 'retry with post-commit warning', 'reactivate', 'post-commit', 'interrupted finish commit', 'unavailable result'] as const) {
+  test(`a succeeded worker with a result save failure is applied once without starting another worker (${mode})`, t => withHost(async (host, directory) => {
+    const replace = StateStore.prototype.replace;
+    let fail = true, failFinish = false, postCommit = mode === 'post-commit';
+    const injected = t.mock.method(StateStore.prototype, 'replace', async function (this: StateStore, next: ReturnType<StateStore['snapshot']>) {
+      if (failFinish && next.generations[0]?.status === 'completed') throw new Error('Synthetic finish write failure');
+      if (fail && next.cards.length && next.generations[0].tasks[0].status === 'applied') {
+        if (postCommit) {
+          await replace.call(this, next);
+          fail = false; // Only the result commit reported a failure, not the following finish write.
+        }
+        throw new Error('Synthetic result write failure');
+      }
+      await replace.call(this, next);
+    });
+    const first = host.context(directory);
+    let close = await activate(first.ctx);
+    try {
+      await first.call('generationSettings', { model: { provider: 'scratch', id: 'writer' } });
+      const p = await first.call('preflight', { nodeIds: ['n_a'] });
+      await first.call('generate', { preflightId: p.preflightId });
+      await until(() => host.workers.starts.length === 1);
+      host.workers.succeed('task-1', result(['n_a']));
+      if (mode === 'post-commit') {
+        await until(async () => (await first.call('generationStatus')).generations[0].status === 'completed');
+        const snap = await first.call('generationStatus');
+        assert.match(snap.generationRecoveryError, /Synthetic result write failure/);
+        assert.equal(snap.recoveryError, undefined);
+        await withReviewBanner(name => first.call(name), async refresh => {
+          const banner = await refresh();
+          assert.match(banner, /Card generation needs checking: The result was recorded, but saving reported an error: Synthetic result write failure/);
+          assert.doesNotMatch(banner, /An earlier send needs checking/);
+        });
+      } else {
+        await until(async () => (await first.call('generationStatus')).generations[0].status === 'interrupted');
+        const pending = JSON.parse(await readFile(statePath(directory), 'utf8'));
+        assert.equal(pending.cards.length, 0);
+        assert.equal(pending.generations[0].tasks[0].resultPending, true);
+        await assert.rejects(first.call('preflight', { nodeIds: ['n_a'] }), /generating/);
+        if (mode === 'retry' || mode === 'retry with post-commit warning') {
+          await withReviewBanner(name => first.call(name), async refresh => {
+            assert.match(await refresh(), /Card generation needs checking: Stop writing/);
+            await assert.rejects(first.call('abandonGenerationResult', { id: p.preflightId, confirmed: true }), /No pending result is unavailable/);
+            const failed = await first.call('retryGeneration', { id: p.preflightId });
+            assert.equal(failed.recovery, true);
+            assert.equal(failed.snapshot.generations[0].tasks[0].resultPending, true);
+            assert.match(await refresh(), /Card generation needs checking: Stop writing/);
+            postCommit = mode === 'retry with post-commit warning';
+            fail = postCommit;
+            const saved = await first.call('retryGeneration', { id: p.preflightId });
+            assert.equal(saved.snapshot.cards.length, 1);
+            const banner = await refresh();
+            assert.doesNotMatch(banner, /Stop writing/);
+            if (postCommit) {
+              assert.match(banner, /Card generation needs checking: The result was recorded, but saving reported an error/);
+            } else {
+              assert.equal(saved.snapshot.generationRecoveryError, undefined);
+              assert.doesNotMatch(banner, /Card generation needs checking/);
+            }
+          });
+        }
+        if (mode === 'interrupted finish commit') {
+          fail = false; failFinish = true;
+          await assert.rejects(first.call('retryGeneration', { id: p.preflightId }), /Synthetic finish write failure/);
+          const disk = JSON.parse(await readFile(statePath(directory), 'utf8'));
+          assert.equal(disk.generations[0].status, 'interrupted');
+          assert.equal(disk.generations[0].tasks[0].status, 'applied');
+          assert.equal(disk.generations[0].tasks[0].resultPending, undefined);
+          assert.equal(disk.cards.length, 1);
+          assert.equal(host.workers.starts.length, 1);
+        }
+        if (mode === 'unavailable result') host.workers.tasks.delete('task-1');
+      }
+      fail = false;
+      await close();
+      failFinish = false;
+      const next = host.context(directory);
+      close = await activate(next.ctx);
+      const final = await next.call('generationStatus');
+      if (mode === 'unavailable result') {
+        const id = p.preflightId;
+        assert.equal(final.cards.length, 0);
+        assert.equal(final.generations[0].tasks[0].resultPending, true);
+        assert.match(final.generationRecoveryError, /Stop writing/);
+        assert.equal(next.ctx.workers.list().length, 0);
+        const idea = async () => (await next.call('coverageContext')).nodes.find((n: { id: string }) => n.id === 'n_a').coverage;
+        assert.equal((await idea()).selectable, false);
+        await assert.rejects(next.call('retryGeneration', { id }), /saved worker result is unavailable.*No model call/);
+        await assert.rejects(next.call('dismissGeneration', { id }), /Save or abandon/);
+        await assert.rejects(next.call('abandonGenerationResult', { id }), /Confirm abandoning/);
+        assert.equal((await idea()).selectable, false);
+        const abandoned = await next.call('abandonGenerationResult', { id, confirmed: true });
+        assert.equal(abandoned.cards.length, 0);
+        assert.equal(abandoned.generations[0].status, 'failed');
+        assert.equal(abandoned.generations[0].tasks[0].resultPending, undefined);
+        assert.match(abandoned.generations[0].tasks[0].error, /was abandoned/);
+        assert.equal(abandoned.generationRecoveryError, undefined);
+        assert.equal((await idea()).selectable, true);
+        await next.call('dismissGeneration', { id });
+        const disk = JSON.parse(await readFile(statePath(directory), 'utf8'));
+        assert.equal(disk.generations[0].hidden, true);
+        assert.equal(disk.generations[0].tasks[0].resultPending, undefined);
+        await assert.rejects(next.call('generate', { preflightId: 'not-confirmed' }), /Run preflight again/);
+        await next.call('generate', { preflightId: id }); // Replaying the old confirmation is a no-op.
+        const fresh = await next.call('retryGeneration', { id });
+        assert.notEqual(fresh.preflightId, id);
+        assert.equal(fresh.nodeCount, 1);
+        assert.equal(host.workers.starts.length, 1, 'abandoning and obtaining a fresh estimate never starts a worker');
+        return;
+      }
+      assert.equal(final.cards.length, 1);
+      assert.equal(final.cards[0].requestId, host.workers.starts[0].requestId);
+      assert.equal(final.generations[0].status, 'completed');
+      assert.equal(final.generations[0].tasks[0].status, 'applied');
+      assert.equal(final.generations[0].tasks[0].resultPending, undefined);
+      await assert.rejects(next.call('retryGeneration', { id: p.preflightId }), /No unfinished/);
+      assert.equal(host.workers.starts.length, 1);
+    } finally { injected.mock.restore(); await close(); }
+  }));
+}

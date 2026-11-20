@@ -107,17 +107,28 @@ function openFlagDialog(ctx: PluginFrontendContext, target: { sessionId: string;
       // The reply was already flagged with a note the learner hasn't seen. Show it so they can keep, edit or clear it.
       existing = current = view; note.value = view.note; heading.textContent = "Already flagged for Anki";
       status.textContent = `Already flagged with a note. ${describe(view)}`; status.dataset.tone = "";
-      primary.update({ label: "Save note" }); close.update({ label: "Close" });
+      // The old Flag must not save or clear an existing note while React
+      // still displays its first-action label.
+      const wasFocused = primary.root.contains(root.ownerDocument.activeElement);
+      handles.splice(handles.indexOf(primary), 1);
+      primary.dispose(); primary.root.remove();
+      primary = button("Save note", submit, "default");
+      if (wasFocused) note.focus({ preventScroll: true });
+      close.update({ label: "Close" });
       return;
     }
     finish(view, existing ? (noteChange ? (value ? "Note saved." : "Note removed.") : "Saved.")
       : view.created === false ? (value ? "Note saved." : "Already flagged.") : value ? "Flagged with your note." : "Flagged.");
   };
-  note.onkeydown = (event) => { if (event.key === "Enter") { event.preventDefault(); void run(submit); } };
+  note.onkeydown = (event) => { if (event.key === "Enter" && !event.isComposing && event.keyCode !== 229) { event.preventDefault(); void run(submit); } };
   const close = button(immediate ? "Close" : "Cancel", done, "ghost");
   // Undo only a flag this shortcut press created; never an earlier flag and its note.
-  if (immediate?.created) button("Undo flag", async () => { await ctx.call("unflag", { id: immediate.id }); done(); });
-  const primary = button(immediate ? "Save note" : "Flag", submit, "default");
+  if (immediate?.created) button("Undo flag", async () => {
+    // A click can arrive before the host commits the disabled state.
+    if (finished) return;
+    await ctx.call("unflag", { id: immediate.id }); done();
+  });
+  let primary = button(immediate ? "Save note" : "Flag", submit, "default");
   /** Once saved, only Close stays live while the dialog closes itself. */
   function syncFinished(): void { if (finished) for (const h of handles) if (h !== close) h.update({ disabled: true }); }
   root.append(heading, el("p", "Latest reply", "ab-label ab-quote-label"), reply, noteLabel, status, buttons);

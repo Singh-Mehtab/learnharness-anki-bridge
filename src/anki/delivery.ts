@@ -15,6 +15,10 @@ export interface PublicSnapshot {
   generationSettings: GenerationSettings;
   generations: Generation[];
   recoveryError?: string;
+  generationRecoveryError?: string;
+}
+export interface SendResult extends PublicSnapshot {
+  delivery: { added: string[]; found: string[]; skipped: string[]; failed: string[]; deck: string | null; tags: string[] };
 }
 export interface DraftInput {
   front: string; back: string; extra?: string; kind?: CardKind;
@@ -55,6 +59,7 @@ export class DeliveryService {
   private readonly lifetime = new AbortController();
   private closed = false;
   private recoveryError?: string;
+  private generationRecoveryError?: string;
   sourceStatements?: () => Map<string, string>;
   private readonly store: StateStore;
   private readonly options: { signal?: AbortSignal; timeoutMs?: number };
@@ -77,7 +82,7 @@ export class DeliveryService {
     for (const key of new Set([this.store.snapshot().settings.apiKey, ...used])) if (key) message = message.split(key).join('[API key hidden]');
     return message;
   }
-  reportRecoveryError(error: unknown): void { this.recoveryError = this.message(error); }
+  reportGenerationRecoveryError(error: unknown): void { this.generationRecoveryError = this.message(error); }
   snapshot(includeSource = true): PublicSnapshot {
     const { settings, destination, cards, generationSettings, generations } = this.store.snapshot();
     let current: Map<string, string> | undefined, sourceUnavailable = false;
@@ -90,7 +95,13 @@ export class DeliveryService {
         sourceMissing: current ? !current.has(card.nodeId) : false,
         sourceChanged: current?.has(card.nodeId) ? current.get(card.nodeId) !== card.sourceSnapshot.statement : false,
       }) } : card);
-    return { generationSettings, generations, settings: { url: settings.url, lastDeck: settings.lastDeck, hasApiKey: !!settings.apiKey, tagTemplate: settings.tagTemplate ?? '', systemTags: settings.systemTags ?? true }, destination, cards: publicCards, ...(this.recoveryError ? { recoveryError: this.recoveryError } : {}) };
+    // A pending-result warning lasts only as long as any result still needs saving.
+    const pendingWarning = generations.some(g => g.tasks.some(t => t.resultPending))
+      ? 'Stop writing until the finished result can be saved or the unavailable result is abandoned.' : undefined;
+    const generationRecoveryError = [this.generationRecoveryError, pendingWarning].filter(Boolean).join(' ');
+    return { generationSettings, generations, settings: { url: settings.url, lastDeck: settings.lastDeck, hasApiKey: !!settings.apiKey, tagTemplate: settings.tagTemplate ?? '', systemTags: settings.systemTags ?? true }, destination, cards: publicCards,
+      ...(this.recoveryError ? { recoveryError: this.recoveryError } : {}),
+      ...(generationRecoveryError ? { generationRecoveryError } : {}) };
   }
   private busyOwner: 'user' | 'background' | undefined;
   /** One writer fence. User calls fail fast on another user operation (no double sends),
@@ -140,16 +151,18 @@ export class DeliveryService {
     await this.destination(client);
     return found;
   }
-  private async recordFound(id: string, found: number[], destination: Destination, deck?: string): Promise<void> {
-    await this.patchCard(id, { status: 'sent', noteId: found[0], destination, ...(deck ? { deck } : {}), presence: 'present', lastError: found.length > 1 ? 'More than one Anki note has this delivery ID. No new note was added.' : undefined });
+  private async recordFound(id: string, found: number[], destination: Destination): Promise<void> {
+    await this.patchCard(id, { status: 'sent', noteId: found[0], destination, existingNote: true, presence: 'present', lastError: found.length > 1 ? 'More than one Anki note has this delivery ID. No new note was added.' : undefined });
   }
-  private async recover(client: AnkiClient, destination: Destination): Promise<void> {
+  private async recover(client: AnkiClient, destination: Destination): Promise<string[]> {
+    const matched: string[] = [];
     for (const card of this.store.snapshot().cards.filter(c => c.status === 'sending')) {
       const found = await this.find(client, card, destination);
-      if (found.length) await this.recordFound(card.id, found, destination);
+      if (found.length) { await this.recordFound(card.id, found, destination); matched.push(card.id); }
       else await this.patchCard(card.id, { status: 'failed', lastError: 'No note found for the interrupted delivery. You may retry this approved card.' });
     }
     this.recoveryError = undefined;
+    return matched;
   }
   async activate(): Promise<void> {
     if (!this.store.snapshot().cards.some(c => c.status === 'sending')) return;
@@ -245,24 +258,28 @@ export class DeliveryService {
         if (paired) expectDestination(value.expectedDestination, paired, 'The paired Anki destination changed. Check the destination shown and send again.');
         const client = this.client(), destination = await this.destination(client);
         // Reconcile all interrupted cards first, never against another collection.
-        await this.recover(client, destination);
+        const found = (await this.recover(client, destination)).filter(id => ids.includes(id));
         const cards = ids.map(id => this.card(id)).filter(c => !c.noteId && c.status !== 'sent');
         if (cards.some(c => !['approved', 'failed'].includes(c.status))) throw new Error('Approve every selected draft before sending.');
-        if (!cards.length) return this.snapshot();
-        await this.destination(client);
-        await ensureNoteType(client);
-        await this.destination(client);
-        await client.call('createDeck', { deck });
-        await this.save(s => { s.settings.lastDeck = deck; });
+        const skipped = ids.filter(id => !found.includes(id) && !cards.some(c => c.id === id));
+        const added: string[] = [], failed: string[] = [], tags = new Set<string>();
+        let deckReady = false;
         for (const selected of cards) {
           this.active();
           const card = this.card(selected.id);
           // A retry always looks up its durable UUID before any new addNote.
-          const found = await this.find(client, card, destination);
-          if (found.length) { await this.recordFound(card.id, found, destination, card.deck ?? deck); continue; }
+          const existing = await this.find(client, card, destination);
+          if (existing.length) { await this.recordFound(card.id, existing, destination); found.push(card.id); continue; }
           await this.destination(client);
           // Model fields may have been edited in Anki while this batch was running.
           await ensureNoteType(client);
+          if (!deckReady) {
+            await this.destination(client);
+            await client.call('createDeck', { deck });
+            await this.save(s => { s.settings.lastDeck = deck; });
+            deckReady = true;
+          }
+          const noteTags = [...new Set([...chosenTags, ...(settings.systemTags === false ? [] : systemTags(card.kind))])];
           const fields = {
             Front: renderMarkdown(card.front), Back: renderMarkdown(card.back), Extra: renderMarkdown(card.extra),
             Source: htmlText(`${card.sessionName} / ${card.nodeName}`), LH_ID: card.id, LH_Node: htmlText(card.nodeId),
@@ -272,14 +289,14 @@ export class DeliveryService {
           try {
             await this.destination(client);
             result = await client.call('addNote', { note: { deckName: deck, modelName: MODEL_NAME, fields,
-              tags: [...new Set([...chosenTags, ...(settings.systemTags === false ? [] : systemTags(card.kind))])],
+              tags: noteTags,
               options: { allowDuplicate: false, duplicateScope: 'deck', duplicateScopeOptions: { deckName: deck, checkChildren: false, checkAllModels: false } } } });
           } catch (error) {
             // API rejections are definite, but still look up the UUID before failing.
             if (error instanceof AnkiError && error.kind === 'api') {
               const existing = await this.find(client, this.card(card.id), destination);
-              if (existing.length) await this.recordFound(card.id, existing, destination);
-              else await this.patchCard(card.id, { status: 'failed', lastError: this.message(error) });
+              if (existing.length) { await this.recordFound(card.id, existing, destination); found.push(card.id); }
+              else { await this.patchCard(card.id, { status: 'failed', lastError: this.message(error) }); failed.push(card.id); }
               continue;
             }
             await this.patchCard(card.id, { lastError: `Delivery outcome is uncertain: ${this.message(error)}. Reconcile before retrying.` });
@@ -293,7 +310,10 @@ export class DeliveryService {
           // Profile changes during a call leave the UUID unresolved rather than asserting a destination.
           await this.destination(client);
           await this.patchCard(card.id, { status: 'sent', noteId: result as number, presence: 'present' });
+          added.push(card.id);
+          for (const tag of noteTags) tags.add(tag);
         }
+        return { ...this.snapshot(), delivery: { added, found, skipped, failed, deck: added.length ? deck : null, tags: [...tags] } } satisfies SendResult;
       } else if (name === 'reconcile') {
         const client = this.client();
         await this.recover(client, await this.destination(client));
@@ -313,7 +333,10 @@ export class DeliveryService {
         const cards = idsInput(value.ids).map(id => this.card(id));
         const client = this.client(), destination = await this.destination(client);
         if (cards.some(c => !c.noteId || !sameDestination(c.destination, destination))) throw new Error('Only notes sent to the paired destination can be shown.');
-        await client.call('guiBrowse', { query: cards.map(c => `"LH_ID:${c.id}"`).join(' OR ') });
+        const matches = await client.call<unknown>('guiBrowse', { query: cards.map(c => query(c.id)).join(' OR ') });
+        await this.destination(client);
+        if (!Array.isArray(matches) || matches.some(id => !Number.isSafeInteger(id) || id <= 0)) throw new Error('AnkiConnect returned an invalid browser result.');
+        if (!matches.length) throw new Error('No matching cards found in the paired Anki profile.');
         return;
       } else if (name === 'repairFields' || name === 'updateStyling') {
         if (name === 'updateStyling' && value.confirmed !== true) throw new Error('Confirm that Anki-side styling and template edits will be replaced.');
@@ -328,10 +351,11 @@ export class DeliveryService {
     });
   }
   async close(): Promise<void> {
-    if (this.closed) return;
-    this.closed = true;
-    this.lifetime.abort();
-    this.options.signal?.removeEventListener('abort', this.abort);
+    if (!this.closed) {
+      this.closed = true;
+      this.lifetime.abort();
+      this.options.signal?.removeEventListener('abort', this.abort);
+    }
     await this.busy?.catch(() => undefined);
     await this.store.close();
   }

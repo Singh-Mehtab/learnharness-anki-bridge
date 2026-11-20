@@ -21,6 +21,7 @@ import { MAX_SELECTED_NODES } from '../coverage/flow.ts';
 const WORKER = 'manual-card-writer';
 const digest = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const errorText = (e: unknown) => e instanceof Error ? e.message : String(e);
+class ResultSavePending extends Error {}
 function object(v: unknown): Record<string, unknown> {
   if (!v || typeof v !== 'object' || Array.isArray(v)) throw new Error('Expected an input object.');
   return v as Record<string, unknown>;
@@ -48,6 +49,14 @@ interface Prepared {
   skipped: { nodeId: string; reason: string }[];
 }
 interface Preflight { id: string; nodeIds: string[]; backfillNodeIds: string[]; prepared: Prepared }
+
+function settledStatus(g: Generation): Generation['status'] {
+  if (g.status === 'cancelled' || g.tasks.some(t => t.status === 'pending' || t.status === 'running')) return g.status;
+  if (g.tasks.some(t => t.status === 'cancelled')) return 'cancelled';
+  if (g.tasks.some(t => t.status === 'interrupted')) return 'interrupted';
+  if (g.tasks.some(t => t.status === 'failed')) return 'failed';
+  return 'completed';
+}
 
 /** No model I/O here: only the host worker service starts bounded, explicitly confirmed calls. */
 export class GenerationService {
@@ -79,11 +88,13 @@ export class GenerationService {
       validateResult: (result, context) => validateResult(result, context),
     });
     await this.delivery.exclusive(async () => {
-      for (const g of this.store.snapshot().generations.filter(g => g.status === 'running')) {
-        for (const t of g.tasks.filter(t => ['pending', 'running'].includes(t.status))) {
+      // A result-save retry can commit its tasks before the separate finish write.
+      for (const g of this.store.snapshot().generations.filter(g => g.status === 'running' || g.tasks.some(t => t.resultPending)
+        || (g.status === 'interrupted' && settledStatus(g) !== g.status))) {
+        for (const t of g.tasks.filter(t => t.resultPending || (g.status === 'running' && ['pending', 'running'].includes(t.status)))) {
           const worker = this.findWorker(t);
-          if (worker?.status === 'succeeded') await this.apply(g.id, t.requestId, worker);
-          else {
+          if (worker?.status === 'succeeded') await this.applyFinished(g.id, t.requestId, worker);
+          else if (!t.resultPending) {
             if (worker && ['running', 'queued'].includes(worker.status)) this.ctx.workers.cancel(worker.id);
             await this.patch(g.id, t.requestId, { status: 'interrupted', error: 'Generation was interrupted. Retry requires a new preflight.' });
           }
@@ -106,12 +117,26 @@ export class GenerationService {
     await this.delivery.save(s => { const t = s.generations.find(g => g.id === id)!.tasks.find(t => t.requestId === requestId)!; Object.assign(t, patch); });
   }
   private async finish(id: string): Promise<void> {
-    await this.delivery.save(s => {
-      const g = s.generations.find(g => g.id === id)!;
-      if (g.tasks.some(t => ['pending', 'running'].includes(t.status))) return;
-      if (g.status === 'cancelled') return;
-      g.status = g.tasks.some(t => t.status === 'cancelled') ? 'cancelled' : g.tasks.some(t => t.status === 'interrupted') ? 'interrupted' : g.tasks.some(t => t.status === 'failed') ? 'failed' : 'completed';
-    });
+    const current = this.generation(id);
+    const status = settledStatus(current);
+    if (current.status !== status) await this.delivery.save(s => { s.generations.find(g => g.id === id)!.status = status; });
+  }
+  private async applyFinished(id: string, requestId: string, worker: PluginTaskSnapshot): Promise<void> {
+    try { await this.apply(id, requestId, worker); }
+    catch (error) {
+      this.active();
+      const task = this.generation(id).tasks.find(t => t.requestId === requestId)!;
+      // Rename may already have committed both cards and the applied mark.
+      if (task.status === 'applied' || task.status === 'failed' && !task.resultPending) {
+        this.delivery.reportGenerationRecoveryError(`The result was recorded, but saving reported an error: ${errorText(error)}`);
+        return;
+      }
+      await this.markResultPending(id, requestId, worker);
+    }
+  }
+  private async markResultPending(id: string, requestId: string, worker: PluginTaskSnapshot): Promise<void> {
+    await this.patch(id, requestId, { taskId: worker.id, status: 'interrupted', resultPending: true,
+      error: 'The model finished, but Anki Bridge could not save its result. Retry saving without another model call.' });
   }
   private async apply(id: string, requestId: string, worker: PluginTaskSnapshot): Promise<void> {
     this.active();
@@ -123,7 +148,7 @@ export class GenerationService {
       const result = worker.result as WriterResult;
       for (const target of result.targets) for (const c of target.cards) { renderMarkdown(c.front); renderMarkdown(c.back); renderMarkdown(c.extra ?? ''); }
     } catch (error) {
-      await this.patch(id, requestId, { status: 'failed', error: errorText(error) });
+      await this.patch(id, requestId, { status: 'failed', resultPending: undefined, error: errorText(error) });
       return;
     }
     const result = worker.result as WriterResult;
@@ -164,7 +189,7 @@ export class GenerationService {
             front: c.front, back: c.back, extra: c.extra ?? '', status: 'draft' });
         }
       }
-      stored.taskId = worker.id; stored.status = 'applied'; stored.result = result; delete stored.error;
+      stored.taskId = worker.id; stored.status = 'applied'; stored.result = result; delete stored.error; delete stored.resultPending;
       if (omitted) stored.duplicatesOmitted = omitted;
     });
   }
@@ -268,10 +293,36 @@ export class GenerationService {
       } else if (name === 'retryGeneration') {
         keys(value, ['id']); const g = this.generation(value.id);
         if (g.status === 'running') throw new Error('Cancel or finish this generation before retrying.');
+        // Also recover interrupted batches written by older versions when their host result still exists.
+        const recoverable = g.tasks.filter(t => t.status === 'interrupted').map(task => ({ task, worker: this.findWorker(task) }))
+          .filter(({ task, worker }) => task.resultPending || worker?.status === 'succeeded');
+        if (recoverable.length) {
+          if (recoverable.some(({ worker }) => worker?.status !== 'succeeded')) throw new Error('The saved worker result is unavailable. No model call was started. You can abandon the unavailable result to select those ideas again.');
+          for (const { task, worker } of recoverable) await this.applyFinished(g.id, task.requestId, worker!);
+          await this.finish(g.id);
+          return { recovery: true, snapshot: this.delivery.snapshot(false) };
+        }
         const ids = g.tasks.filter(t => t.status !== 'applied').flatMap(t => t.input.targets.map(n => n.nodeId));
         if (!ids.length) throw new Error('No unfinished tasks to retry.');
         const selected = [...new Set(ids)];
         return this.preflight(selected, backfillIds((g.backfillNodeIds ?? []).filter(id => selected.includes(id)), selected));
+      } else if (name === 'abandonGenerationResult') {
+        keys(value, ['id', 'confirmed']); const g = this.generation(value.id);
+        if (value.confirmed !== true) throw new Error('Confirm abandoning the unavailable result.');
+        if (g.status === 'running') throw new Error('Cancel or finish this generation before abandoning a result.');
+        const unavailable = new Set(g.tasks.filter(t => t.resultPending && this.findWorker(t)?.status !== 'succeeded').map(t => t.requestId));
+        if (!unavailable.size) throw new Error('No pending result is unavailable. If a result is pending, retry saving it.');
+        // Do not let an estimate from before this generation become usable again.
+        this.invalidatePreflights();
+        await this.delivery.save(s => {
+          const stored = s.generations.find(x => x.id === g.id)!;
+          for (const task of stored.tasks.filter(t => unavailable.has(t.requestId))) {
+            delete task.resultPending;
+            task.status = 'failed';
+            task.error = 'The unavailable result was abandoned. Generating cards for these ideas requires a new preflight.';
+          }
+          stored.status = settledStatus(stored);
+        });
       } else if (name === 'generate') {
         keys(value, ['preflightId']);
         if (typeof value.preflightId !== 'string') throw new Error('Confirm a valid preflight ID.');
@@ -299,7 +350,7 @@ export class GenerationService {
         if (g.status !== 'running') return this.delivery.snapshot(false);
         for (const t of g.tasks.filter(t => ['pending', 'running'].includes(t.status))) {
           const w = this.findWorker(t);
-          if (w?.status === 'succeeded') await this.apply(g.id, t.requestId, w);
+          if (w?.status === 'succeeded') await this.applyFinished(g.id, t.requestId, w);
           else { if (w && ['queued', 'running'].includes(w.status)) this.ctx.workers.cancel(w.id);
             await this.patch(g.id, t.requestId, { status: 'cancelled', error: 'Cancelled by user. Finished tasks retain their drafts.' }); }
         }
@@ -308,6 +359,7 @@ export class GenerationService {
         // Hides a finished batch from the page. Its drafts, skips and history stay.
         keys(value, ['id']); const g = this.generation(value.id);
         if (g.status === 'running') throw new Error('Cancel or finish this generation before dismissing it.');
+        if (g.tasks.some(t => t.resultPending)) throw new Error('Save or abandon the pending result before dismissing this generation.');
         await this.delivery.save(s => { s.generations.find(x => x.id === g.id)!.hidden = true; });
       } else throw new Error('Unknown generation operation.');
       return this.delivery.snapshot(false);
@@ -318,13 +370,15 @@ export class GenerationService {
   private drive(id: string): void {
     const driver = this.run(id).catch(async error => {
       if (this.closed || this.lifetime.signal.aborted) return;
-      this.delivery.reportRecoveryError(error);
+      // Review derives this warning from the pending task rather than latching it here.
+      if (!(error instanceof ResultSavePending)) this.delivery.reportGenerationRecoveryError(error);
       // Never leave a batch 'running' without a driver: that would block new generations.
       try {
         await this.delivery.exclusive(async () => {
           this.active();
           for (const t of this.generation(id).tasks.filter(t => ['pending', 'running'].includes(t.status))) {
             const w = this.findWorker(t);
+            if (w?.status === 'succeeded') { await this.markResultPending(id, t.requestId, w); continue; }
             if (w && ['queued', 'running'].includes(w.status)) this.ctx.workers.cancel(w.id);
             await this.patch(id, t.requestId, { status: 'interrupted', error: `Generation stopped: ${errorText(error)} Retry requires a new preflight.` });
           }
@@ -356,13 +410,17 @@ export class GenerationService {
       this.active();
       await this.ctx.workers.wait(taskId, this.lifetime.signal);
       this.active();
-      await this.delivery.exclusive(async () => {
+      const resultPending = await this.delivery.exclusive(async () => {
         this.active(); const w = this.ctx.workers.get(taskId);
         const t = this.generation(id).tasks.find(t => t.taskId === taskId)!;
         if (t.status === 'applied' || !['running', 'pending'].includes(t.status)) return;
-        if (w.status === 'succeeded') await this.apply(id, t.requestId, w);
-        else await this.patch(id, t.requestId, { status: w.status === 'cancelled' ? 'cancelled' : w.status === 'interrupted' ? 'interrupted' : 'failed', error: w.error?.message ?? 'Worker did not return a complete result.' });
+        if (w.status === 'succeeded') {
+          await this.applyFinished(id, t.requestId, w);
+          return this.generation(id).tasks.some(t => t.resultPending);
+        }
+        await this.patch(id, t.requestId, { status: w.status === 'cancelled' ? 'cancelled' : w.status === 'interrupted' ? 'interrupted' : 'failed', error: w.error?.message ?? 'Worker did not return a complete result.' });
       }, true);
+      if (resultPending) throw new ResultSavePending('A finished result could not be saved.');
     }
   }
   async close(): Promise<void> {
@@ -374,4 +432,4 @@ export class GenerationService {
   }
 }
 
-export const GENERATION_OPERATIONS = ['generationContext', 'generationSettings', 'preflight', 'generate', 'generationStatus', 'cancelGeneration', 'retryGeneration', 'dismissGeneration'] as const;
+export const GENERATION_OPERATIONS = ['generationContext', 'generationSettings', 'preflight', 'generate', 'generationStatus', 'cancelGeneration', 'retryGeneration', 'abandonGenerationResult', 'dismissGeneration'] as const;

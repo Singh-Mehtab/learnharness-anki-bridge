@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { link, mkdir, open, readFile, rename, unlink } from 'node:fs/promises';
+import fs, { link, mkdir, open, readFile, realpath, rename, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import { defaultGenerationSettings, fromV072Settings, validateGenerations, validLegacyGenerationSettings, validSource, validV072GenerationSettings } from '../generation/types.ts';
 import type { Generation, GenerationSettings, SourceSnapshot } from '../generation/types.ts';
@@ -27,6 +27,8 @@ export interface Card {
   status: CardStatus;
   deck?: string;
   noteId?: number;
+  /** Found by delivery ID; the requested/attempted deck is not proof of the actual deck. */
+  existingNote?: true;
   destination?: Destination;
   lastError?: string;
   presence?: 'present' | 'deleted' | 'unknown';
@@ -35,7 +37,7 @@ export interface Card {
   requestId?: string;
 }
 export interface State {
-  schemaVersion: 6;
+  schemaVersion: 7;
   generationSettings: GenerationSettings;
   generations: Generation[];
   flags: Flag[];
@@ -46,7 +48,7 @@ export interface State {
   cards: Card[];
 }
 export const initialState = (): State => ({
-  schemaVersion: 6,
+  schemaVersion: 7,
   generationSettings: defaultGenerationSettings(),
   generations: [],
   flags: [],
@@ -62,7 +64,10 @@ function destination(v: unknown): v is Destination {
   return object(v) && text(v.url) && !!v.url && text(v.profile) && !!v.profile;
 }
 export function validateState(value: unknown): asserts value is State {
-  if (!object(value) || value.schemaVersion !== 6) throw new Error('Unsupported state format. Keep state.json intact and use a compatible Anki Bridge version.');
+  validateStateFormat(value, 7);
+}
+function validateStateFormat(value: unknown, version: 6 | 7): void {
+  if (!object(value) || value.schemaVersion !== version) throw new Error('Unsupported state format. Keep state.json intact and use a compatible Anki Bridge version.');
   validateGenerations(value.generationSettings, value.generations);
   validateFlags(value.flags);
   validateDismissals(value.dismissals);
@@ -75,13 +80,15 @@ export function validateState(value: unknown): asserts value is State {
     if (card.sourceSnapshot !== undefined && !validSource(card.sourceSnapshot) || card.generationId !== undefined && !text(card.generationId) || card.requestId !== undefined && !text(card.requestId)) throw new Error('Invalid generation card metadata.');
     if (card.destination !== undefined && !destination(card.destination)) throw new Error('Invalid card destination.');
     if (card.noteId !== undefined && (!Number.isSafeInteger(card.noteId) || (card.noteId as number) <= 0)) throw new Error('Invalid Anki note ID.');
-    if (['sent', 'sending'].includes(card.status as string) && (!destination(card.destination) || !text(card.deck) || !card.deck)) throw new Error('Missing delivery destination or deck.');
+    const deckMayBeUnknown = version === 7 && card.status === 'sent' && card.existingNote === true;
+    if (['sent', 'sending'].includes(card.status as string) && (!destination(card.destination) || (!deckMayBeUnknown && (!text(card.deck) || !card.deck)))) throw new Error('Missing delivery destination or deck.');
+    if (card.existingNote !== undefined && (card.existingNote !== true || card.status !== 'sent')) throw new Error('Invalid existing-note metadata.');
     if (card.status === 'sent' && card.noteId === undefined) throw new Error('Sent card has no Anki note ID.');
     if (card.deck !== undefined && !text(card.deck) || card.lastError !== undefined && !text(card.lastError) || card.presence !== undefined && !['present', 'deleted', 'unknown'].includes(card.presence as string)) throw new Error('Invalid delivery metadata.');
   }
 }
 
-/** Upgrade older snapshots one step per version (1 -> 2 -> 3 -> 4 -> 5 -> 6), then validate the result.
+/** Upgrade older snapshots one step per version, then validate the result.
  * StateStore.open writes only after validation passes, so malformed or newer data is
  * refused and the file is left as it was. */
 export function migrateState(raw: unknown): State {
@@ -106,8 +113,22 @@ export function migrateState(raw: unknown): State {
     // current settings change; generation history keeps its 0.7.2 settings and inputs.
     value = { ...value, schemaVersion: 6, generationSettings: fromV072Settings(old) };
   }
+  if (object(value) && value.schemaVersion === 6) {
+    // 0.8.0 requires a deck for every sent card. Validate the old contract
+    // before migration so a deckless record cannot become a rollback backup.
+    validateStateFormat(value, 6);
+    value = { ...value, schemaVersion: 7 };
+  }
   validateState(value);
   return value;
+}
+
+/** Flush a rename or link to disk. Windows refuses fsync on a directory handle
+ * (EPERM), so skip it there, as LearnHarness does for its own stores. */
+export async function syncDirectory(directory: string, platform: NodeJS.Platform = process.platform): Promise<void> {
+  if (platform === 'win32') return;
+  const dir = await open(directory, 'r');
+  try { await dir.sync(); } finally { await dir.close(); }
 }
 
 /** Keep the original bytes before upgrading. Never replace an earlier backup. */
@@ -125,9 +146,41 @@ async function backUpBeforeMigration(directory: string, version: number, origina
         throw new Error(`The existing state.v${version}.bak differs from state.json. Move that backup to a safe place before upgrading. Neither file was changed.`);
       }
     }
-    const dir = await open(directory, 'r');
-    try { await dir.sync(); } finally { await dir.close(); }
+    await syncDirectory(directory);
   } finally { await unlink(temporary); }
+}
+
+// Only relinquished locks go here, not live owners. Store the retry callbacks on
+// the process so they survive the host reloading the backend module on re-enable.
+const cleanupKey = Symbol.for('learnharness.anki-bridge.pending-state-lock-cleanup');
+const processLocks = process as typeof process & { [cleanupKey]?: Map<string, () => Promise<void>> };
+const pendingLockCleanup = processLocks[cleanupKey] ??= new Map();
+function lockRelease(lock: string, token: string): () => Promise<void> {
+  let released = false;
+  let pending: Promise<void> | undefined;
+  return () => {
+    if (released) return Promise.resolve();
+    if (pending) return pending;
+    const done = () => {
+      released = true;
+      pendingLockCleanup.delete(lock);
+    };
+    pending = (async () => {
+      try {
+        const owner = JSON.parse(await readFile(lock, 'utf8'));
+        if (owner?.pid !== process.pid || owner.token !== token) {
+          done();
+          throw new Error('State lock ownership changed; refusing to remove it.');
+        }
+        await fs.unlink(lock);
+        done();
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+        done();
+      }
+    })().finally(() => { pending = undefined; });
+    return pending;
+  };
 }
 
 /** One backend owns a data directory. Writes are private, fsynced, atomic snapshots. */
@@ -136,22 +189,35 @@ export class StateStore {
   private closed = false;
   private readonly commits = new Set<(state: State) => void>();
   private readonly directory: string;
-  private readonly lockToken: string;
-  private constructor(directory: string, value: State, lockToken: string) {
-    this.directory = directory; this.value = value; this.lockToken = lockToken;
+  private readonly release: () => Promise<void>;
+  private constructor(directory: string, value: State, release: () => Promise<void>) {
+    this.directory = directory; this.value = value; this.release = release;
   }
   static async open(directory: string): Promise<StateStore> {
     await mkdir(directory, { recursive: true, mode: 0o700 });
+    directory = await realpath(directory);
     const lock = path.join(directory, 'state.lock');
+    await pendingLockCleanup.get(lock)?.();
     const busyLock = 'Another Anki Bridge backend owns this data directory. If LearnHarness is not running, remove state.lock from the plugin data folder and restart.';
     const token = randomUUID();
+    const release = lockRelease(lock, token);
+    const relinquish = () => {
+      pendingLockCleanup.set(lock, release);
+      return release();
+    };
+    let acquired = false;
     const acquire = async () => {
       const file = await open(lock, 'wx', 0o600);
       // Any failure after creating the lock removes it and reports the first error.
-      let failure: unknown;
-      try { await file.writeFile(JSON.stringify({ pid: process.pid, token })); await file.sync(); } catch (e) { failure = e; }
+      let failure: unknown, written = false;
+      try { await file.writeFile(JSON.stringify({ pid: process.pid, token })); written = true; await file.sync(); } catch (e) { failure = e; }
       try { await file.close(); } catch (e) { failure ??= e; }
-      if (failure !== undefined) { await unlink(lock).catch(() => {}); throw failure; }
+      if (failure !== undefined) {
+        // A partial write has no usable ownership token for later retry.
+        await (written ? relinquish() : fs.unlink(lock)).catch(() => {});
+        throw failure;
+      }
+      acquired = true;
     };
     const owner = async (): Promise<{ pid: number; token?: unknown }> => {
       let previous: { pid: number; token?: unknown };
@@ -188,12 +254,18 @@ export class StateStore {
         throw e;
       }
       try {
-        await marker.close();
-        const current = await owner();
-        if (current.pid !== previous.pid || current.token !== previous.token) throw new Error('Another Anki Bridge backend owns this data directory.');
-        await unlink(lock);
-        await acquire();
-      } finally { await unlink(recovery); }
+        try {
+          await marker.close();
+          const current = await owner();
+          if (current.pid !== previous.pid || current.token !== previous.token) throw new Error('Another Anki Bridge backend owns this data directory.');
+          await unlink(lock);
+          await acquire();
+        } catch (error) { await unlink(recovery).catch(() => {}); throw error; }
+        await unlink(recovery);
+      } catch (error) {
+        if (acquired) await relinquish().catch(() => {});
+        throw error;
+      }
     }
     try {
       const original = await readFile(path.join(directory, 'state.json')).catch((error: NodeJS.ErrnoException) => {
@@ -205,11 +277,11 @@ export class StateStore {
       if (original !== undefined && object(raw) && raw.schemaVersion !== value.schemaVersion) {
         await backUpBeforeMigration(directory, raw.schemaVersion as number, original);
       }
-      const store = new StateStore(directory, value, token);
+      const store = new StateStore(directory, value, release);
       // Create a durable initial snapshot without overwriting a malformed/newer file.
       await store.replace(value);
       return store;
-    } catch (error) { await unlink(lock); throw error; }
+    } catch (error) { await relinquish().catch(() => {}); throw error; }
   }
   snapshot(): State { return structuredClone(this.value); }
   /** Runs synchronously at each commit point, before the directory sync. Returns an unsubscribe. */
@@ -227,16 +299,14 @@ export class StateStore {
       // Rename is the commit point. Never use the old in-memory state after it.
       this.value = next;
       for (const listener of this.commits) listener(next);
-      const dir = await open(this.directory, 'r');
-      try { await dir.sync(); } finally { await dir.close(); }
+      await syncDirectory(this.directory);
     } finally { await unlink(temporary).catch((e: NodeJS.ErrnoException) => { if (e.code !== 'ENOENT') throw e; }); }
   }
   async close(): Promise<void> {
-    if (this.closed) return;
-    this.closed = true;
-    const lock = path.join(this.directory, 'state.lock');
-    const owner = JSON.parse(await readFile(lock, 'utf8'));
-    if (owner.token !== this.lockToken) throw new Error('State lock ownership changed; refusing to remove it.');
-    await unlink(lock);
+    if (!this.closed) {
+      this.closed = true;
+      pendingLockCleanup.set(path.join(this.directory, 'state.lock'), this.release);
+    }
+    await this.release();
   }
 }
