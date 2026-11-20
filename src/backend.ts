@@ -4,6 +4,7 @@ import { StateStore } from './anki/state.ts';
 import { GenerationService, GENERATION_OPERATIONS } from './generation/service.ts';
 import { SessionService, SESSION_OPERATIONS } from './session/service.ts';
 import { CoverageService, COVERAGE_OPERATIONS } from './coverage/service.ts';
+import { ReviewService, REVIEW_OPERATIONS } from './reviews/service.ts';
 
 export async function activate(ctx: PluginBackendContext): Promise<() => Promise<void>> {
   const store = await StateStore.open(ctx.dataDirectory);
@@ -12,12 +13,15 @@ export async function activate(ctx: PluginBackendContext): Promise<() => Promise
   const generation = new GenerationService(ctx, store, service);
   coverage.onChanged = () => generation.invalidatePreflights();
   const session = new SessionService(ctx.learning, store, service, { signal: ctx.signal });
+  // Review checks read Anki only when the user asks, and keep results in memory only.
+  const reviews = new ReviewService(ctx.learning, store, { signal: ctx.signal });
   // Flag notes are part of the writer prompt, so editing a note makes an open estimate stale.
   generation.flagNotes = () => session.flagNotes();
   const handlers: (() => void)[] = [];
   const close = async () => {
     for (const unregister of handlers.splice(0)) unregister();
     session.close();
+    reviews.close();
     // Generation cleanup can still read delivery snapshots while it settles.
     try { await generation.close(); } finally { coverage.close(); await service.close(); }
   };
@@ -35,6 +39,7 @@ export async function activate(ctx: PluginBackendContext): Promise<() => Promise
     for (const name of GENERATION_OPERATIONS) handlers.push(ctx.handle(name, input => generation.command(name, input ?? {})));
     for (const name of SESSION_OPERATIONS) handlers.push(ctx.handle(name, input => session.command(name, input ?? {})));
     for (const name of COVERAGE_OPERATIONS) handlers.push(ctx.handle(name, input => coverage.command(name, input ?? {})));
+    for (const name of REVIEW_OPERATIONS) handlers.push(ctx.handle(name, input => reviews.command(name, input ?? {})));
     return close;
   } catch (error) {
     await close();

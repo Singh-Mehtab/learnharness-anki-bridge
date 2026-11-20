@@ -200,3 +200,18 @@
 .anki-bridge .ab-panel-title { font-size: 14px; font-weight: 600; margin: 0; }
 .anki-bridge .ab-panel-intro { margin-top: -8px; }
 .anki-bridge .ab-destination { font-size: 13px; }
+
+/* Topics to revisit */
+.anki-bridge .ab-topics-head { margin-bottom: 8px; }
+.anki-bridge .ab-topics-privacy { margin: 0 0 12px; max-width: 72ch; }
+.anki-bridge .ab-topics-summary { margin: 12px 0; }
+.anki-bridge .ab-topic-list { display: grid; gap: 16px; }
+.anki-bridge .ab-topic h3 { font-size: 14px; font-weight: 600; margin: 0; }
+.anki-bridge .ab-topic-body { display: grid; gap: 12px; padding: 12px 14px; }
+.anki-bridge .ab-topic-summary { margin: 0; font-size: 13px; }
+.anki-bridge .ab-topic-sessions { align-items: center; flex-wrap: wrap; }
+.anki-bridge .ab-topic-card { border: 1px solid var(--ab-border); border-radius: 8px; overflow: hidden; }
+.anki-bridge .ab-topic-card > .ab-card-title { padding: 8px 14px 0; }
+.anki-bridge .ab-topic-card .ab-card-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 14px; border-top: 1px solid var(--ab-border); }
+.anki-bridge .ab-topic-evidence { margin: 0; }
+.anki-bridge .ab-topics-footer { margin: 16px 0 0; padding-left: 18px; }

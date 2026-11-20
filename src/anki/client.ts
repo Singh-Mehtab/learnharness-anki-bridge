@@ -39,6 +39,9 @@ function noteId(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
 }
 
+const count = (value: unknown): boolean => typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+const integer = (value: unknown): boolean => typeof value === "number" && Number.isSafeInteger(value);
+
 function validResult(action: string, result: unknown): boolean {
   switch (action) {
     case "version": return result === 6;
@@ -52,7 +55,15 @@ function validResult(action: string, result: unknown): boolean {
     case "notesInfo": return Array.isArray(result) && result.every((note) =>
       record(note) && (Object.keys(note).length === 0 ||
         (noteId(note.noteId) && record(note.fields) && strings(note.tags) &&
-          typeof note.modelName === "string" && Array.isArray(note.cards) && note.cards.every(noteId))));
+          typeof note.modelName === "string" && Array.isArray(note.cards) && note.cards.every(noteId) &&
+          (note.profile === undefined || typeof note.profile === "string"))));
+    case "cardsInfo": return Array.isArray(result) && result.every((card) =>
+      record(card) && (Object.keys(card).length === 0 ||
+        (noteId(card.cardId) && noteId(card.note) && count(card.lapses) && count(card.reps) &&
+          integer(card.queue) && typeof card.deckName === "string")));
+    case "getReviewsOfCards": return record(result) && Object.entries(result).every(([id, rows]) =>
+      /^[1-9]\d*$/.test(id) && Array.isArray(rows) && rows.every((row) =>
+        record(row) && noteId(row.id) && integer(row.ease) && integer(row.type)));
     case "modelFieldAdd": case "updateModelStyling": case "updateModelTemplates": return result === null;
     case "createModel": return record(result) && typeof result.name === "string";
     default: return true;

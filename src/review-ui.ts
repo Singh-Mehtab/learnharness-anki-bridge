@@ -263,6 +263,8 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
         { key: "reconcile", label: "Check unconfirmed sends", disabled: !(state?.cards ?? []).some(c => c.status === "sending"), onSelect: () => run(async () => { await call("reconcile"); return "Checked unconfirmed sends."; }) },
         { key: "presence", label: "Check which sent cards are still in Anki", disabled: !sent.length, onSelect: () => run(async () => { await call("presence"); return "Checked sent cards."; }) },
         { key: "show", label: "Show sent cards in Anki", disabled: !sent.length, onSelect: () => run(async () => { await ctx.call("show", { ids: sent.map(c => c.id) }); }) },
+        // Opens the page only. Reading reviews waits for Check Anki reviews there.
+        { key: "topics", label: "Topics to revisit", disabled: !sent.length, onSelect: () => ctx.app.openView("topics") },
         { key: "drop", label: `Drop all unsent cards (${drafts.length})`, disabled: !drafts.length, onSelect: () => run(async () => {
           const ok = await confirmDialog(ctx, signal, { title: "Drop all unsent cards", confirm: "Drop cards", destructive: true,
             body: `Drop ${plural(drafts.length, "card")} that you have not sent? Their ideas become available to write again. Sent cards are not affected.` });

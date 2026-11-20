@@ -38,7 +38,7 @@ test('a session scope reaches writing with flagged and bulk intent, saved caps, 
     const calls: Array<{ name: string; input: any }> = [];
     const ctx = {
       signal: f.c.controller.signal, cleanup: (fn: () => void) => cleanup.push(fn),
-      registerView: (v: PluginView) => { view = v; return () => {}; },
+      registerView: (v: PluginView) => { if (v.id === "bridge") view = v; return () => {}; },
       registerSettings: () => () => {}, registerAction: () => () => {}, placeAction: () => () => {},
       onResync: () => () => {}, onAppEvent: () => () => {}, app: { openSettings: () => {} },
       call: async (name: string, input: any) => { calls.push({ name, input }); return f.c.call(name, input); },

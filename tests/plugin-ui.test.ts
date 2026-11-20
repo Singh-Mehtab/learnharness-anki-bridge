@@ -34,7 +34,7 @@ async function setup(options: { handler?: (name: string, input: any) => unknown;
   const ctx = {
     signal: activation.signal,
     cleanup: (fn: () => void) => cleanups.push(fn),
-    registerView: (value: PluginView) => { view = value; return () => {}; },
+    registerView: (value: PluginView) => { if (value.id === "bridge") view = value; return () => {}; },
     registerAction: (value: { id: string; run: () => void }) => { actions.set(value.id, value); return () => {}; },
     placeAction: (value: { actionId: string; location: string }) => { placements.push(value); return () => {}; },
     onAppEvent: () => () => {},
@@ -89,7 +89,7 @@ async function setup(options: { handler?: (name: string, input: any) => unknown;
     status: () => container.querySelector(".ab-send-bar + .ab-status")!.textContent,
     more: async (label: string | RegExp) => { button("More", container).click(); await chooseMenu(label); },
     openSidebar: () => {
-      assert.deepEqual(placements.map(p => [p.actionId, p.location]), [["flag-for-anki", "top-bar"], ["make-cards", "top-bar"], ["open-bridge", "sidebar"]]);
+      assert.deepEqual(placements.map(p => [p.actionId, p.location]), [["flag-for-anki", "top-bar"], ["make-cards", "top-bar"], ["open-bridge", "sidebar"], ["open-topics", "sidebar"]]);
       actions.get("open-bridge")?.run(); return openedView;
     },
     settingsOpened: () => settingsOpened,
