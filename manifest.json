@@ -1,7 +1,7 @@
 {
   "id": "anki-bridge",
   "name": "Anki Bridge",
-  "version": "0.8.2",
+  "version": "0.9.0",
   "apiVersion": 1,
   "minAppVersion": "0.6.1",
   "description": "Draft cards from graph nodes, edit and approve, then send one way to Anki.",

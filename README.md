@@ -17,7 +17,7 @@
   <a href="CHANGELOG.md">Changelog</a>
 </p>
 
-<p align="center"><sub>Version 0.8.2 · No public release yet · Build from source</sub></p>
+<p align="center"><sub>Version 0.9.0 · <a href="https://github.com/Singh-Mehtab/learnharness-anki-bridge/releases/latest">Download</a> · AGPL-3.0</sub></p>
 
 Anki Bridge is a community plugin for [LearnHarness](https://github.com/amosblomqvist/learnharness). It reads the ideas in your knowledge graph, has your model draft flashcards from them, and adds the ones you approve to [Anki](https://apps.ankiweb.net/). You edit and approve every draft, and Anki schedules the reviews. Only cards you approve are added, either when you press Send or when you import a package you downloaded.
 
@@ -109,7 +109,7 @@ Each topic shows its cards with their lapses, reviews, recent Again dates and de
 ## Install
 
 > [!NOTE]
-> Anki Bridge has no public release yet. Version 0.8.2 is the current build for personal use. Use the `anki-bridge-v0.8.2.zip` install archive if you have it, or build it from source using the [install guide](docs/install.md#build-the-zip-from-source). GitHub's automatically generated source zip is not the install archive.
+> Download `anki-bridge-v0.9.0.zip` from the [latest release](https://github.com/Singh-Mehtab/learnharness-anki-bridge/releases/latest). GitHub's automatically generated source zip is not the install archive. You can also [build the zip from source](docs/install.md#build-the-zip-from-source).
 
 ### What you need
 
@@ -159,8 +159,7 @@ If you set an API key, it goes with every AnkiConnect request. By default each n
 - Cards are Basic front-and-back notes. Cloze, reversed and type-in cards are not supported.
 - Images and Mermaid diagrams cannot go in cards.
 - Card quality depends on your model, so check every draft. The writer was tuned on one lecture and has not been benchmarked on new subjects.
-- The 0.8.2 interface was checked with synthetic data in a scratch LearnHarness. Native Windows testing of 0.8.1 remains open, as does an end-to-end test of the 0.8.0 writer with a live model and a real Anki profile.
-- Downloaded packages have been checked with SQLite and zip readers but not yet imported into Anki.
+- Tested in daily use on macOS with LearnHarness 0.6.1, a live model and Anki, including importing downloaded packages. Windows and Linux have not been tested.
 - Sending and review checks need Anki Desktop open with AnkiConnect. Don't switch Anki profiles during a send, because AnkiConnect cannot check the profile and write in a single step.
 - An optional AnkiConnect API key is stored in plain text in the plugin's data folder.
 
@@ -168,8 +167,8 @@ If you set an API key, it goes with every AnkiConnect request. By default each n
 
 These are plans, not commitments.
 
-- Use Anki Bridge day to day and test card quality on material the writer was not tuned on.
-- A first public release.
+- Test on Windows and on newer LearnHarness versions.
+- Check card quality on subjects the writer was not tuned on.
 - An idea for later: practice sessions aimed at topics to revisit.
 
 ## Questions
@@ -179,6 +178,8 @@ These are plans, not commitments.
 **What happens if I edit a card in Anki?** Your edit stays. The plugin never updates a note after sending it. (Re-importing a downloaded package can, depending on Anki's import settings.) If you write more cards for an idea, the model sees up to six recent cards Anki Bridge made for it, as the plugin stored them, and tries new angles. It does not see edits made in Anki.
 
 **What if a send is interrupted?** The plugin records each card before adding its note. When LearnHarness starts again, the plugin looks for those cards in Anki itself and marks each one sent or failed. If Anki wasn't open on the paired profile, reconnect to the same address and profile, then use **Check unconfirmed sends** in the **More** menu. Use **Retry send** only on cards marked failed. If the check itself fails, leave those cards alone and try the check again later.
+
+**Where do I report a bug or suggest something?** Open an [issue](https://github.com/Singh-Mehtab/learnharness-anki-bridge/issues). Include your LearnHarness, Anki and AnkiConnect versions and your operating system. Don't paste your API key or private notes.
 
 **Is it affiliated with Anki or LearnHarness?** No. It is an unofficial community plugin.
 

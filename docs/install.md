@@ -1,6 +1,6 @@
 # Install Anki Bridge
 
-Anki Bridge 0.8.2 is a personal-use candidate, not a public release. Use the `anki-bridge-v0.8.2.zip` install archive, not GitHub's automatically generated source zip. If you don't have the install archive, you can build it using the steps below. The archive contains built plugin code. You don't need Node.js or npm to install it.
+Download `anki-bridge-v0.9.0.zip` from the [latest release](https://github.com/Singh-Mehtab/learnharness-anki-bridge/releases/latest). Use that install archive, not GitHub's automatically generated source zip. You can also build it using the steps below. The archive contains built plugin code. You don't need Node.js or npm to install it.
 
 ## Requirements
 
@@ -14,7 +14,7 @@ LearnHarness community plugins run local code with your app's permissions. Only 
 
 1. In LearnHarness, open **Settings → Community plugins** and select and copy the plugins directory path. Paste it into Explorer's address bar or Finder's **Go to Folder**. Quit LearnHarness completely. On Mac, use **Quit** or ⌘Q; closing its window is not enough.
 2. If the plugins directory already contains `anki-bridge`, stop and follow the upgrade steps instead. Otherwise, extract the zip outside the plugins directory. Windows **Extract All** may create a version-named outer folder: open it and move the inner `anki-bridge` folder into the plugins directory.
-3. Check that the manifest is directly at `<plugins directory>/anki-bridge/dist/manifest.json`, not `<plugins directory>/anki-bridge-v0.8.2/anki-bridge/dist/manifest.json`. Renaming the outer folder does not remove the extra level.
+3. Check that the manifest is directly at `<plugins directory>/anki-bridge/dist/manifest.json`, not `<plugins directory>/anki-bridge-v0.9.0/anki-bridge/dist/manifest.json`. Renaming the outer folder does not remove the extra level.
 4. Restart LearnHarness. Anki Bridge should appear in **Community plugins** and starts disabled. Enable it there, then open Anki Bridge from the sidebar. LearnHarness's built-in Flashcards plugin is independent and can stay enabled.
 
 ## Upgrade without losing data
@@ -61,4 +61,4 @@ npm ci
 npm run package:plugin
 ```
 
-This rebuilds `dist/` and writes `anki-bridge-v0.8.2.zip` at the repo root. The archive contains only the manifest, bundled code, stylesheet and license notices. It excludes plugin data, credentials, bench results and agent files.
+This rebuilds `dist/` and writes `anki-bridge-v0.9.0.zip` at the repo root. The archive contains only the manifest, bundled code, stylesheet and license notices. It excludes plugin data, credentials, bench results and agent files.
