@@ -163,8 +163,12 @@ export function mountTopics(ctx: PluginFrontendContext, container: HTMLElement, 
   async function clear(): Promise<void> {
     const ok = await confirmDialog(ctx, signal, { title: "Clear review results?", body: "This forgets the results of the last check. Nothing in Anki changes.", confirm: "Clear" });
     if (!ok || !alive()) return;
-    try { await ctx.call<Answer>("clearReviewCheck", {}); check = null; stale = false; feedback.show("Cleared.", "success"); }
-    catch (error) { feedback.show(message(error), "error"); }
+    try {
+      await ctx.call<Answer>("clearReviewCheck", {});
+      check = null; stale = false; feedback.show("Cleared.", "success");
+      // Start a fresh local reload so a reload begun before Clear cannot bring the old result back.
+      if (alive()) { void load(); return; }
+    } catch (error) { feedback.show(message(error), "error"); }
     if (alive()) { renderBar(); render(); }
   }
 
@@ -178,8 +182,8 @@ export function mountTopics(ctx: PluginFrontendContext, container: HTMLElement, 
       if (!alive() || sequence !== loads) return;
       snapshot = snap; check = last.check;
       if (last.running) feedback.show("A check is already running. Press Check Anki reviews again when it finishes.");
-    } catch (error) { if (alive()) feedback.show(message(error), "error"); }
-    if (alive()) { renderBar(); render(); }
+    } catch (error) { if (alive() && sequence === loads) feedback.show(message(error), "error"); }
+    if (alive() && sequence === loads) { renderBar(); render(); }
   }
   void load();
   // Reload the local pairing after a host resync or a Settings save in another pane.

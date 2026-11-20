@@ -259,3 +259,41 @@ test("round 3 S2: an older reload that answers last does not bring back the prev
     assert.doesNotMatch(t.text(), /paired Anki profile "Throwaway"/);
   } finally { await t.cleanup(); }
 });
+
+test("round 4 S1: a superseded reload that fails does not replace newer feedback", async () => {
+  const t = await setup();
+  try {
+    await t.mount();
+    let fail!: (e: Error) => void;
+    t.setHold(new Promise<void>((_, reject) => { fail = reject; }));
+    for (const f of t.resyncs) f();            // reload 1 waits, then fails
+    await tick();
+    t.setHold(undefined);
+    await t.click("Check Anki reviews");
+    await settle(() => /topics? to revisit\./.test(t.text()));
+    fail(new Error("old reload failed")); await tick();
+    assert.doesNotMatch(t.text(), /old reload failed/);
+    assert.match(t.text(), /2 topics to revisit\./);
+  } finally { await t.cleanup(); }
+});
+
+test("round 4 S2: a reload begun before Clear cannot bring the cleared result back", async () => {
+  const t = await setup();
+  try {
+    await t.mount();
+    await t.click("Check Anki reviews");
+    await settle(() => !!t.container.querySelector(".ab-topic"));
+    let release!: () => void;
+    t.setHold(new Promise<void>(resolve => { release = resolve; }));
+    for (const f of t.resyncs) f();            // reload 1 has the old result and waits on snapshot
+    await tick();
+    t.setHold(undefined);
+    await t.click("Clear");
+    const confirm = Array.from(t.doc.querySelectorAll(".ab-dialog button") as ArrayLike<HTMLButtonElement>).find(b => b.textContent === "Clear")!;
+    confirm.click();
+    await settle(() => !t.container.querySelector(".ab-topic"));
+    release(); await tick();
+    assert.equal(t.container.querySelectorAll(".ab-topic").length, 0);
+    assert.match(t.text(), /Not checked yet/);
+  } finally { await t.cleanup(); }
+});
