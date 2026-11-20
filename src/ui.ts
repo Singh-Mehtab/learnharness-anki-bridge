@@ -78,12 +78,14 @@ export function pill(text: string, tone: "neutral" | "good" | "warn" | "bad" | "
 }
 
 /** Numbered step heading, as in a guided flow. */
-export function stepHeading(n: number, title: string, aside?: HTMLElement): HTMLElement {
+export function stepHeading(n: number | null, title: string, aside?: HTMLElement): HTMLElement {
   const head = el("header", undefined, "ab-step-head");
-  const number = el("span", String(n), "ab-step-number");
-  number.setAttribute("aria-hidden", "true");
-  const h = el("h2", title, "ab-step-title");
-  head.append(number, h);
+  if (n !== null) {
+    const number = el("span", String(n), "ab-step-number");
+    number.setAttribute("aria-hidden", "true");
+    head.append(number);
+  }
+  head.append(el("h2", title, "ab-step-title"));
   if (aside) { aside.classList.add("ab-step-aside"); head.append(aside); }
   return head;
 }

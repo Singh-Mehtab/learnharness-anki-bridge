@@ -56,7 +56,7 @@ test('schema 3 migration preserves populated flags, settings, applied results an
     const backup = path.join(directory, 'state.v3.bak');
     await writeFile(file, bytes);
     await writeFile(backup, 'an older backup', { mode: 0o600 });
-    await assert.rejects(StateStore.open(directory), /backup to a safe place/);
+    await assert.rejects(StateStore.open(directory), /Move the backup somewhere safe before upgrading/);
     assert.equal(await readFile(file, 'utf8'), bytes);
     assert.equal(await readFile(backup, 'utf8'), 'an older backup');
     await rm(backup);

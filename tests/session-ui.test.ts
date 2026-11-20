@@ -180,7 +180,7 @@ test("the top-bar button opens a note dialog, flags, confirms and closes itself 
     for (let i = 0; i < 5; i++) await Promise.resolve();
     assert.deepEqual(f.calls, [{ name: "flag", input: { sessionId: "s1", messageIds: ["a1"], note: "I got the sign wrong" } }]);
     assert.match(content.textContent!, /Flagged for Anki/);
-    assert.match(content.textContent!, /Flagged with your note\. 2 ideas from this reply\./);
+    assert.match(content.textContent!, /Flagged with note\. 2 ideas from this reply\./);
     assert.equal(note.readOnly, true);
     assert.equal(f.buttonIn(content, "Flag").disabled, true, "a second save can't run while it closes");
     // Engaging with the dialog doesn't keep a finished one open.
@@ -315,7 +315,7 @@ test("Make cards opens the view scoped to that session and shows its flags", asy
     const s = sources(f, requests); await tick(); await tick();
     assert.deepEqual(s.scopes, [{ sessionId: "s2" }]);
     assert.equal(s.select().value, "s2");
-    assert.match(s.container.textContent!, /You flagged a reply in this session/);
+    assert.equal(s.container.querySelector(".ab-flags-title")!.textContent, "1 flagged reply");
     assert.match(s.container.textContent!, /Note: sign/);
     assert.deepEqual(Array.from(s.select().options).map(o => o.textContent), ["Spin · 4 ideas · 1 flag", "Nuclear · 2 ideas · 1 flag waiting", "All sessions (whole graph)"]);
   } finally { await f.close(); }
@@ -390,11 +390,12 @@ test("waiting flags re-check on extraction activity and refresh the idea list", 
   });
   try {
     const s = sources(f); await tick(); await tick();
-    assert.match(s.container.textContent!, /still extracting ideas/);
+    assert.match(s.container.textContent!, /Still extracting ideas/);
+    assert.equal(s.container.querySelector(".ab-flags-title")!.textContent, "1 flagged reply");
     waiting = false;
     for (const listener of f.events) listener({ type: "turn-settled" });
     await tick(1100); await tick(); await tick();
-    assert.doesNotMatch(s.container.textContent!, /still extracting/);
+    assert.doesNotMatch(s.container.textContent!, /Still extracting/);
     assert.ok(s.refreshes() >= 1);
   } finally { await f.close(); }
 });

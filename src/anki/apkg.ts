@@ -42,7 +42,7 @@ export function packageFields(card: Card): string[] {
   };
   const fields = FIELDS.map(name => values[name]);
   // Anki joins fields with U+001F, so one inside a field would shift every later field.
-  if (fields.some(field => field.includes('\x1f'))) throw new Error(`Card "${card.front.slice(0, 60)}" contains a control character Anki uses to separate fields. Edit it before downloading.`);
+  if (fields.some(field => field.includes('\x1f'))) throw new Error(`Card "${card.front.slice(0, 60)}" contains a control character. Edit it first.`);
   return fields;
 }
 
@@ -57,7 +57,7 @@ function data(value: unknown): Record<string, unknown> {
 function deckInput(value: unknown): string {
   if (typeof value !== 'string' || !value.trim()) throw new Error('Choose a deck first.');
   const deck = value.trim();
-  if (deck.length > 250 || /[\r\n\0]/.test(deck)) throw new Error('Use a deck name shorter than 251 characters on one line.');
+  if (deck.length > 250 || /[\r\n\0]/.test(deck)) throw new Error('Use a one-line deck name under 251 characters.');
   return deck;
 }
 function idsInput(value: unknown): string[] {
@@ -78,7 +78,7 @@ export function selectPackageCards(state: State, input: unknown): { deck: string
     const card = state.cards.find(c => c.id === id);
     if (!card) throw new Error('Card not found.');
     // Sent, unconfirmed and dropped cards stay out: a package of them would only duplicate notes.
-    if (card.noteId !== undefined || (card.status !== 'approved' && card.status !== 'failed')) throw new Error('Only approved cards that have not been sent can be downloaded. Approve drafts first.');
+    if (card.noteId !== undefined || (card.status !== 'approved' && card.status !== 'failed')) throw new Error('Only approved, unsent cards can be downloaded. Approve drafts first.');
     return { card, fields: packageFields(card), tags: packageTags(chosen, card, withSystemTags) };
   });
   return { deck, cards };
@@ -165,7 +165,7 @@ const fieldChecksum = (text: string) => parseInt(createHash('sha1').update(text)
 type SqliteModule = typeof import('node:sqlite');
 async function sqlite(): Promise<SqliteModule> {
   try { return await import('node:sqlite'); }
-  catch { throw new Error('This LearnHarness runtime has no built-in SQLite (node:sqlite), so Anki packages cannot be written. Send to Anki instead.'); }
+  catch { throw new Error('No built-in SQLite (node:sqlite) in this runtime, so .apkg files cannot be written. Send to Anki instead.'); }
 }
 
 /** Writes Anki's schema 11 collection for one deck and returns the database file's bytes. */
@@ -209,7 +209,7 @@ export function zip(entries: { name: string; data: Uint8Array }[], date: Date): 
   let offset = 0;
   for (const entry of entries) {
     const name = Buffer.from(entry.name, 'utf8'), compressed = deflateRawSync(entry.data), crc = crc32(entry.data);
-    if (offset + compressed.length > 0xffff_0000 || entry.data.length > 0xffff_0000) throw new Error('The package is too large to download.');
+    if (offset + compressed.length > 0xffff_0000 || entry.data.length > 0xffff_0000) throw new Error('Package too large to download.');
     const local = Buffer.alloc(30);
     local.writeUInt32LE(0x04034b50, 0); local.writeUInt16LE(20, 4); local.writeUInt16LE(0, 6); local.writeUInt16LE(8, 8);
     local.writeUInt16LE(time, 10); local.writeUInt16LE(day, 12); local.writeUInt32LE(crc, 14);

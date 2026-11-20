@@ -143,16 +143,16 @@ test('explicit tags replace the template, and the learnharness tags follow the s
 test('only approved cards that were never sent can be downloaded, with clear input errors', async () => {
   const state = syntheticState();
   const reject = (input: unknown, pattern: RegExp) => assert.rejects(exportPackage(state, input, NOW), pattern);
-  for (const id of [ids.draft, ids.sent, ids.sending, ids.dropped]) await reject({ ids: [id], deck: 'D' }, /Only approved cards that have not been sent/);
+  for (const id of [ids.draft, ids.sent, ids.sending, ids.dropped]) await reject({ ids: [id], deck: 'D' }, /Only approved, unsent cards can be downloaded/);
   state.cards.push(card('0b6f7c1e-0000-4000-8000-000000000007', 'failed', { noteId: 9 }));
-  await reject({ ids: ['0b6f7c1e-0000-4000-8000-000000000007'], deck: 'D' }, /Only approved cards/);
-  await reject({ ids: [ids.fact, ids.draft], deck: 'D' }, /Only approved cards/);
+  await reject({ ids: ['0b6f7c1e-0000-4000-8000-000000000007'], deck: 'D' }, /Only approved, unsent cards can be downloaded/);
+  await reject({ ids: [ids.fact, ids.draft], deck: 'D' }, /Only approved, unsent cards can be downloaded/);
   await reject({ ids: ['missing'], deck: 'D' }, /Card not found/);
   await reject({ ids: [], deck: 'D' }, /distinct cards/);
   await reject({ ids: [ids.fact, ids.fact], deck: 'D' }, /distinct cards/);
   await reject({ ids: [ids.fact], deck: '  ' }, /Choose a deck/);
-  await reject({ ids: [ids.fact], deck: 'Line\nbreak' }, /one line/);
-  await reject({ ids: [ids.fact], deck: 'x'.repeat(251) }, /shorter than 251/);
+  await reject({ ids: [ids.fact], deck: 'Line\nbreak' }, /one-line deck name under 251 characters/);
+  await reject({ ids: [ids.fact], deck: 'x'.repeat(251) }, /one-line deck name under 251 characters/);
   await reject({ ids: [ids.fact], deck: 'D', tags: ['has space'] }, /contains a space/);
   await reject({ ids: [ids.fact], deck: 'D', destination: {} }, /Unsupported export option/);
   await reject(null, /input object/);

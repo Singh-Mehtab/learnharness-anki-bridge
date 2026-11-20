@@ -7,7 +7,7 @@ The README's diagrams and screenshot frames are HTML pages rendered to PNG at 2x
 | `banner.html` | `banner-dark.png`, `banner-light.png` (`?theme=light`) |
 | `workflow.html` | `how-it-works-dark.png`, `how-it-works-light.png` |
 | `card-types.html` | `card-types-dark.png`, `card-types-light.png` |
-| `frame.html` | Window frames around screenshots: `hero.png`, `choose-ideas.png`, `flag.png`, `write.png`, `edit.png`, `code.png`, `sent.png`, `settings.png`, `more-card-types.png`, `topics.png` |
+| `frame.html` | Window frames used for earlier screenshots |
 
 ## Fonts
 
@@ -33,4 +33,4 @@ PLAYWRIGHT_CORE=/path/to/playwright-core/index.mjs CHROME="/path/to/chrome" \
 
 ## Screenshots
 
-Take screenshots at 2x device scale of the current plugin build (0.8.0 for this set) from a scratch LearnHarness 0.6.1 server with scratch `LH_DATA_DIR` and `LH_AUTH_FILE`, synthetic sessions and a fake AnkiConnect. For Topics to revisit, the fake AnkiConnect also answers `cardsInfo` and `getReviewsOfCards` with invented review histories. Never use real graph data or a real Anki profile. The current set uses invented sessions on heat engines, enzyme kinetics and sorting.
+Take screenshots at 2x device scale of the current plugin build (0.8.2 for the current README) from a scratch LearnHarness 0.6.1 server with scratch `LH_DATA_DIR` and `LH_AUTH_FILE`, synthetic sessions and a fake AnkiConnect. For Topics to revisit, the fake AnkiConnect also answers `cardsInfo` and `getReviewsOfCards` with invented review histories. Never use real graph data or a real Anki profile. The current set uses invented sessions on heat engines, enzyme kinetics and sorting.

@@ -35,6 +35,7 @@ export interface CoverageContext {
 export interface CoverageSelectable { id: string; cards: CardCounts; coverage?: Coverage }
 export const isWaitingCard = (card: Pick<Card, 'status' | 'noteId'>): boolean =>
   card.status === 'sending' || (['draft', 'approved', 'failed'].includes(card.status) && card.noteId === undefined);
+export const isUnsentRecord = (card: Pick<Card, 'status'>): boolean => card.status !== 'sent' && card.status !== 'dropped';
 export const hasCards = (cards: CardCounts): boolean => cards.waiting > 0 || cards.sent > 0;
 export const canSelectNode = (node: CoverageSelectable): boolean => node.coverage?.selectable ?? true;
 export const isUncardedNode = (node: CoverageSelectable): boolean => node.coverage?.uncarded ?? !hasCards(node.cards);
@@ -44,12 +45,12 @@ export const coverageLabel = (state: CoverageState): string => ({
 })[state];
 
 export function validateDismissals(value: unknown): asserts value is Dismissal[] {
-  if (!Array.isArray(value) || value.length > 100_000) throw new Error('Invalid dismissals. The file has not been reset.');
+  if (!Array.isArray(value) || value.length > 100_000) throw new Error('Invalid dismissals.');
   const ids = new Set<string>();
   for (const d of value) {
     if (!d || typeof d !== 'object' || Array.isArray(d) || typeof d.nodeId !== 'string' || !d.nodeId || d.nodeId.length > 500 || d.nodeId.includes('\0') || ids.has(d.nodeId) ||
         typeof d.statementHash !== 'string' || !/^[a-f0-9]{64}$/.test(d.statementHash) || typeof d.dismissedAt !== 'string' || !Number.isFinite(Date.parse(d.dismissedAt))) {
-      throw new Error('Invalid dismissal. The file has not been reset.');
+      throw new Error('Invalid dismissal.');
     }
     ids.add(d.nodeId);
   }
@@ -98,7 +99,7 @@ export function projectCoverage(sources: readonly CoverageSource[], state: Pick<
     const status: CoverageState = missing ? 'source-missing' : changed ? 'source-changed' : base;
     const selectable = !missing && !dismissed && !unresolved && !generating;
     return { ...source, cards, coverage: { state: status, base, selectable, uncarded: status === 'no-cards' && selectable,
-      canDismiss: !missing && !dismissed && !currentOrUnknownSent && !generating && !byNode.get(source.id)?.some(c => c.status !== 'sent' && c.status !== 'dropped'),
+      canDismiss: !missing && !dismissed && !currentOrUnknownSent && !generating && !byNode.get(source.id)?.some(isUnsentRecord),
       dismissed, generating, unresolved, olderSourceCards, unknownSourceCards, deletedNotes,
       ...(missing && dismissal ? { historicalDismissal: true } : {}),
       ...(skips.has(source.id) ? { skipReason: skips.get(source.id) } : {}) } };

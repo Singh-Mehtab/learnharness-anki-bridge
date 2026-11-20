@@ -28,9 +28,9 @@ function option(text: string, value: string): HTMLOptionElement { const o = el("
 export function flagStatusText(view: Pick<FlagView, "status" | "nodeIds">): string {
   switch (view.status) {
     case "matched": return `${plural(view.nodeIds.length, "idea")} from this reply.`;
-    case "waiting": return "Waiting for extraction. LearnHarness extracts ideas after a reply settles; press Refresh to check again.";
-    case "no-nodes": return "Extraction found no new ideas in this reply. Remove the flag, or keep it in case a later extraction adds some.";
-    case "missing": return "This reply is no longer in the saved session.";
+    case "waiting": return "Waiting for extraction. Press Refresh to check.";
+    case "no-nodes": return "No new ideas in this reply.";
+    case "missing": return "Reply no longer in the session.";
   }
 }
 
@@ -67,7 +67,7 @@ function openFlagDialog(ctx: PluginFrontendContext, target: { sessionId: string;
   const status = el("p", undefined, "ab-status"); status.setAttribute("role", "status"); status.setAttribute("aria-live", "polite");
   const note = input(""); note.maxLength = MAX_FLAG_NOTE; note.placeholder = "For example: I got the sign wrong";
   note.value = immediate?.note ?? "";
-  const noteLabel = field("Note for the card writer, optional", note);
+  const noteLabel = field("Note for the writer, optional", note);
   const buttons = el("div", undefined, "ab-actions ab-dialog-actions");
   const handles: Array<ReturnType<typeof hostButton>> = [];
   const setDisabled = (disabled: boolean) => { for (const h of handles) h.update({ disabled }); };
@@ -118,7 +118,7 @@ function openFlagDialog(ctx: PluginFrontendContext, target: { sessionId: string;
       return;
     }
     finish(view, existing ? (noteChange ? (value ? "Note saved." : "Note removed.") : "Saved.")
-      : view.created === false ? (value ? "Note saved." : "Already flagged.") : value ? "Flagged with your note." : "Flagged.");
+      : view.created === false ? (value ? "Note saved." : "Already flagged.") : value ? "Flagged with note." : "Flagged.");
   };
   note.onkeydown = (event) => { if (event.key === "Enter" && !event.isComposing && event.keyCode !== 229) { event.preventDefault(); void run(submit); } };
   const close = button(immediate ? "Close" : "Cancel", done, "ghost");
@@ -148,7 +148,7 @@ export function registerSessionActions(ctx: PluginFrontendContext, requests: Ses
     disabled: (context) => flaggableTurn(context) === null,
     run: async (context) => {
       const target = flaggableTurn(context);
-      if (!target) throw new Error("Wait for the teacher's reply to finish before flagging it.");
+      if (!target) throw new Error("Wait for the reply to finish.");
       if (context.placement === "keyboard") {
         // The shortcut flags at once, without a note; the confirmation offers one.
         const view = await ctx.call<FlagView>("flag", { sessionId: target.sessionId, messageIds: target.turn.messageIds });
@@ -172,6 +172,7 @@ export function registerSessionActions(ctx: PluginFrontendContext, requests: Ses
 export interface SourceOptions {
   requests: SessionRequests;
   drafting: Pick<DraftingHandle, "setScope" | "refresh">;
+  onRequested?: () => void;
 }
 export interface SourceHandle {
   (): void;
@@ -251,10 +252,10 @@ export function mountSources(ctx: PluginFrontendContext, container: HTMLElement,
     picker.value = sessionId ?? GRAPH;
 
     notes.replaceChildren();
-    if (flow && !flow.session.exists) notes.append(el("p", "This session is no longer saved. Its flags stay until you remove them.", "ab-note"));
+    if (flow && !flow.session.exists) notes.append(el("p", "Session no longer saved. Its flags stay until removed.", "ab-note"));
     if (flow?.flags.length) {
       const box = el("div", undefined, "ab-flags");
-      box.append(el("p", flow.flags.length === 1 ? "You flagged a reply in this session. Its ideas are selected below." : `You flagged ${flow.flags.length} replies in this session. Their ideas are selected below.`, "ab-flags-title"));
+      box.append(el("p", plural(flow.flags.length, "flagged reply", "flagged replies"), "ab-flags-title"));
       const items = el("ul");
       for (const flag of flow.flags) {
         const item = el("li", undefined, "ab-flag-item");
@@ -272,7 +273,7 @@ export function mountSources(ctx: PluginFrontendContext, container: HTMLElement,
       box.append(items);
       notes.append(box);
     }
-    if (flow && !flow.nodes.length && flow.flags.some(f => f.status === "waiting")) notes.append(el("p", "LearnHarness is still extracting ideas from this session. They appear here when the reply settles.", "ab-note"));
+    if (flow && !flow.nodes.length && flow.flags.some(f => f.status === "waiting")) notes.append(el("p", "Still extracting ideas.", "ab-note"));
     const elsewhere = (list?.unresolved ?? []).filter(f => f.sessionId !== sessionId);
     if (elsewhere.length) {
       const line = el("div", undefined, "ab-elsewhere");
@@ -285,7 +286,12 @@ export function mountSources(ctx: PluginFrontendContext, container: HTMLElement,
   }
 
   const unsubscribers = [
-    options.requests.subscribe(id => { options.requests.take(); if (busy) refreshPending = true; choose(id); }),
+    options.requests.subscribe(id => {
+      if (!alive()) return;
+      options.requests.take();
+      options.onRequested?.();
+      choose(id);
+    }),
     ctx.onResync(() => { if (busy) refreshPending = true; else void run(load, true); }),
     // Extraction has no completion event. Phase changes are a hint to re-check
     // waiting flags; Refresh remains the reliable path.
@@ -294,7 +300,10 @@ export function mountSources(ctx: PluginFrontendContext, container: HTMLElement,
       if (list?.unresolved.some(f => f.status === "waiting") || flow?.flags.some(f => f.status === "waiting")) scheduleRefresh();
     }),
   ];
-  if (sessionId) void options.drafting.setScope({ sessionId });
+  if (sessionId !== undefined) {
+    options.onRequested?.();
+    void options.drafting.setScope({ sessionId });
+  }
   void run(load);
   return Object.assign(() => { disposed = true; clearTimeout(refreshTimer); noteScope.abort(); for (const u of unsubscribers) u(); root.remove(); }, {
     refresh: async () => {

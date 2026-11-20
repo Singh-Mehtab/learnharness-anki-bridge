@@ -58,7 +58,7 @@ export function mountDrafting(ctx: PluginFrontendContext, ideasHost: HTMLElement
   const alive = () => !disposed && !signal.aborted && !ctx.signal.aborted;
   const picker = new CoveragePicker({
     ctx, signal, reviewWaiting, defaults: false,
-    empty: () => loading ? "Loading ideas…" : scope ? "No ideas from this session yet." : "Your graph has no ideas yet. Teach a session in LearnHarness first.",
+    empty: () => loading ? "Loading ideas…" : scope ? "No ideas yet." : "No ideas yet. Teach a session first.",
     changed: source => { if (source === "user") choiceRevision++; invalidate(); syncWrite(); },
     mutate: (name, node) => { invalidate(); void run(async () => {
       try { await ctx.call(name, { nodeId: node.id, statementHash: node.statementHash }); }
@@ -145,7 +145,7 @@ export function mountDrafting(ctx: PluginFrontendContext, ideasHost: HTMLElement
   type RetryResult = Preflight | { recovery: true; snapshot: DraftingSnapshot };
   /** Estimate, confirm in a dialog, then start. Retry can instead save a finished result. */
   async function estimateAndStart(estimate: () => Promise<RetryResult>, savingResult = false): Promise<void> {
-    if (!savingResult && picker.isStale) throw new Error("The idea list is out of date. Refresh it first.");
+    if (!savingResult && picker.isStale) throw new Error("Idea list is out of date. Refresh it.");
     invalidate(); const at = revision;
     feedback.show(savingResult ? "Saving finished result…" : "Estimating…");
     const p = await estimate();
@@ -156,8 +156,8 @@ export function mountDrafting(ctx: PluginFrontendContext, ideasHost: HTMLElement
       await refresh(); await onCardsChanged();
       return;
     }
-    if (picker.isStale) throw new Error("The idea list is out of date. Refresh it first.");
-    if (at !== revision) throw new Error("The selection changed. Press Write cards again.");
+    if (picker.isStale) throw new Error("Idea list is out of date. Refresh it.");
+    if (at !== revision) throw new Error("Selection changed. Press Write cards again.");
     const body = el("div", undefined, "ab-estimate");
     const facts = el("dl", undefined, "ab-facts");
     const fact = (term: string, value: string) => { facts.append(el("dt", term), el("dd", value)); };
@@ -165,24 +165,24 @@ export function mountDrafting(ctx: PluginFrontendContext, ideasHost: HTMLElement
     fact("Ideas", sent === p.nodeCount ? String(sent) : `${sent} of ${p.nodeCount} selected`);
     fact("Cards", `Up to ${p.maximumCards}`);
     fact("Model", `${p.modelName ?? p.model.id}${p.model.thinkingLevel ? `, ${p.model.thinkingLevel} thinking` : ""}${p.followsCheapSlot ? " (cheap model)" : ""}`);
-    fact("Model calls", `${p.batches.length}, or up to ${p.batches.length * 3} if answers need fixing`);
-    fact("Cost", p.estimatedCost === null ? "No estimate for this model" : `About $${p.estimatedCost.toFixed(4)} for the first attempt`);
-    fact("Sent to the model", "These ideas, linked ideas, an excerpt of the reply each idea came from, your flag notes and existing cards for these ideas");
+    fact("Model calls", `${p.batches.length}, up to ${p.batches.length * 3} with fixes`);
+    fact("Cost", p.estimatedCost === null ? "No estimate" : `About $${p.estimatedCost.toFixed(4)}, first attempt`);
+    fact("Sent to the model", "Ideas, linked ideas, excerpts from source session messages, flag notes, and existing cards for these ideas");
     body.append(facts);
     if (p.skipped.length) {
       const skipped = el("ul", undefined, "ab-skipped");
       for (const skip of p.skipped) skipped.append(el("li", `${name(skip.nodeId)}: ${skip.reason}`));
-      body.append(el("p", `${plural(p.skipped.length, "idea")} will be skipped:`, "ab-muted"), skipped);
+      body.append(el("p", `${plural(p.skipped.length, "idea")} skipped:`, "ab-muted"), skipped);
     }
-    body.append(el("p", "Cards are written in the background. You can leave this page; progress also shows under Background agents.", "ab-muted"));
+    body.append(el("p", "Safe to leave this page.", "ab-muted"));
     if (!p.batches.length) {
       const reasons = p.skipped.slice(0, 3).map(skip => `${name(skip.nodeId)}: ${skip.reason}`);
       if (p.skipped.length > 3) reasons.push(`and ${plural(p.skipped.length - 3, "more idea")}.`);
-      throw new Error(["None of these ideas can be carded right now.", ...reasons].join(" "));
+      throw new Error(["No ideas can be carded.", ...reasons].join(" "));
     }
     const ok = await confirmDialog(ctx, signal, { title: "Write cards", body, confirm: "Start writing" });
     if (!ok || !alive()) return;
-    if (at !== revision || picker.isStale) throw new Error("The selection changed while the dialog was open. Press Write cards again.");
+    if (at !== revision || picker.isStale) throw new Error("Selection changed. Press Write cards again.");
     // Backend rejects stale, changed or replayed estimates independently of this check.
     await snapshot("generate", { preflightId: p.preflightId });
     await refresh(); await onCardsChanged();
@@ -231,15 +231,15 @@ export function mountDrafting(ctx: PluginFrontendContext, ideasHost: HTMLElement
         panel.append(bar);
         activityWidgets.push(button(ctx, actions, signal, { label: "Cancel", onClick: () => run(async () => {
           await snapshot("cancelGeneration", { id: generation.id }); await refresh(); await onCardsChanged();
-          feedback.show("Cancelled. Finished cards are kept for review. The other ideas can be selected again.");
+          feedback.show("Cancelled. Saved cards are kept.");
         }, false) }));
       } else {
         const pendingResult = generation.tasks.some(t => t.resultPending);
-        const summary = pendingResult ? "A finished result has not been saved." : generation.status === "completed" && !failed.length
+        const summary = pendingResult ? "Result not saved." : generation.status === "completed" && !failed.length
           ? cards ? `Wrote ${plural(cards, "card")}${omissions ? "" : ` for ${plural(carded, "idea")}`}.` : "No cards written."
-          : !cards && failed.length && !cancelled.length ? `Couldn't write cards. ${failed.length === 1 ? "One batch failed." : `${failed.length} batches failed.`}`
+          : !cards && failed.length && !cancelled.length ? `No cards written. ${plural(failed.length, "batch", "batches")} failed.`
           : `Wrote ${plural(cards, "card")}. ${[failed.length ? `${plural(failed.length, "batch", "batches")} failed` : "", cancelled.length ? `${plural(cancelled.length, "batch", "batches")} cancelled` : ""].filter(Boolean).join(", ")}.`;
-        text.append(el("strong", summary), el("span", cards ? " Review them in step 3." : "", "ab-muted"));
+        text.append(el("strong", summary));
         if (omissions) panel.append(el("p", `${plural(omissions, "exact duplicate")} not added.`, "ab-muted"));
         const errors = [...new Set(failed.map(t => readableError(t.error)).filter(Boolean))];
         if (errors.length) panel.append(el("p", errors.join(" "), "ab-progress-error"));
@@ -248,12 +248,12 @@ export function mountDrafting(ctx: PluginFrontendContext, ideasHost: HTMLElement
         }, false) }));
         if (pendingResult) activityWidgets.push(button(ctx, actions, signal, { label: "Abandon unavailable result", onClick: () => run(async () => {
           const ok = await confirmDialog(ctx, signal, { title: "Abandon unavailable result?", confirm: "Abandon result", destructive: true,
-            body: el("p", "Only unavailable results will be abandoned. Saved cards will be kept. No model call will start; to write cards for the released ideas, run a new estimate and confirm it.") });
+            body: el("p", "This stops recovery of the unsaved result. Saved cards are kept. No model call starts. To write replacements, run a new estimate and confirm it.") });
           if (!ok || !alive()) return;
           invalidate();
           await snapshot("abandonGenerationResult", { id: generation.id, confirmed: true });
           await refresh(); await onCardsChanged();
-          feedback.show("Unavailable results abandoned. You can select those ideas again.", "success");
+          feedback.show("Result abandoned.", "success");
         }, false) }));
         if (!pendingResult) activityWidgets.push(button(ctx, actions, signal, { label: "Dismiss", onClick: () => run(async () => {
           await snapshot("dismissGeneration", { id: generation.id });
@@ -291,14 +291,14 @@ export function mountDrafting(ctx: PluginFrontendContext, ideasHost: HTMLElement
         return run(async () => { await snapshot("generationSettings", { model: { provider: value.provider, id: value.id } }); });
       } }, { signal }));
     } catch {
-      modelBox.textContent = settings.model ? "Model picker unavailable. The saved choice is still active." : "Model picker unavailable. Writing uses the cheap model.";
+      modelBox.textContent = settings.model ? "Model picker unavailable. Saved choice still applies." : "Model picker unavailable. Using the cheap model.";
     }
     // The host picker has no empty choice, so Clear is how a chosen model goes back to blank.
     if (settings.model) widgets.push(button(ctx, modelRow, signal, { label: "Clear", variant: "ghost", size: "sm", title: "Use the cheap model", onClick: () => {
       invalidate();
       return run(async () => { await snapshot("generationSettings", { model: null }); });
     } }));
-    modelField.append(el("span", "Leave blank to use the cheap model.", "ab-muted ab-hint"));
+    modelField.append(el("span", "Blank uses the cheap model.", "ab-muted ab-hint"));
 
     // Write shows the common types (#38). Apply and Contrast are switched on in Settings.
     const kindsField = el("div", undefined, "ab-field ab-field-inline ab-kinds");
@@ -340,7 +340,7 @@ export function mountDrafting(ctx: PluginFrontendContext, ideasHost: HTMLElement
     const help = el("div", undefined, "ab-kind-lines");
     for (const kind of WRITE_KINDS) { const line = el("span"); line.append(el("strong", KIND_NAMES[kind]), ` ${KIND_HELP[kind].replace(/\.$/, "")}.`); help.append(line); }
     const fromSettings = SETTINGS_KINDS.filter(k => enabled.includes(k));
-    if (fromSettings.length) help.append(el("span", `Also on in Settings: ${fromSettings.map(k => KIND_NAMES[k]).join(" and ")}.`, "ab-kind-extra"));
+    if (fromSettings.length) help.append(el("span", `Also on: ${fromSettings.map(k => KIND_NAMES[k]).join(" and ")}.`, "ab-kind-extra"));
     const examples = el("details", undefined, "ab-kind-examples");
     examples.open = examplesOpen;
     examples.ontoggle = () => { examplesOpen = examples.open; };
@@ -348,12 +348,11 @@ export function mountDrafting(ctx: PluginFrontendContext, ideasHost: HTMLElement
     kindHelp.append(help, examples);
 
     writeButton = button(ctx, writeBar, signal, { label: "Write cards", variant: "default", onClick: () => run(async () => {
-      if (!picker.ids.length) throw new Error("Select at least one idea in step 1.");
+      if (!picker.ids.length) throw new Error("Select an idea first.");
       const ids = picker.ids, backfill = picker.backfillNodeIds;
       await estimateAndStart(() => ctx.call<Preflight>("preflight", { nodeIds: ids, backfillNodeIds: backfill }));
     }, false) });
     widgets.push(writeButton);
-    writeBar.append(el("span", "The model only drafts. You check every card before anything reaches Anki.", "ab-muted"));
     renderActivity();
   }
   // Settings can switch Apply or Contrast on; show that here without a page reload.

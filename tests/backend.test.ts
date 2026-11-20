@@ -22,7 +22,7 @@ test('backend activation registers public operations without graph, model or net
     const added = await c.call('draft', { front: 'Prompt', back: 'Answer' });
     assert.equal(added.cards[0].status, 'draft');
     await c.call('approve', { ids: [added.cards[0].id] });
-    await assert.rejects(c.call('send', { ids: [added.cards[0].id], deck: 'Scratch' }), /Pair/);
+    await assert.rejects(c.call('send', { ids: [added.cards[0].id], deck: 'Scratch' }), /Choose a profile for this address in settings first/);
     // Unpaired and with no Anki at all, a download still works and changes nothing.
     const before = await readFile(path.join(directory, 'state.json'), 'utf8');
     const realFetch = globalThis.fetch;

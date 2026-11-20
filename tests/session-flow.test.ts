@@ -69,9 +69,9 @@ test('notes are one trimmed line with a cap; flags validate strictly', () => {
   for (const bad of [
     [flag({ id: 'nope' })], [flag({ messageIds: [] })], [flag({ messageIds: ['a', 'a'] })], [flag({ note: 'a\nb' })],
     [flag({ flaggedAt: 'yesterday' })], [flag({ sessionId: '' })], [flag(), flag()],
-    [flag(), flag({ id: '00000000-0000-4000-8000-000000000002' })], // same anchor twice
-    'flags',
-  ]) assert.throws(() => validateFlags(bad), /not been reset/);
+  ]) assert.throws(() => validateFlags(bad), /Invalid flag\./);
+  assert.throws(() => validateFlags([flag(), flag({ id: '00000000-0000-4000-8000-000000000002' })]), /Two flags claim the same message/);
+  assert.throws(() => validateFlags('flags'), /Invalid flag list/);
 });
 
 const graph: GraphLike = {

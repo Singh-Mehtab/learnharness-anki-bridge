@@ -178,13 +178,13 @@ test('wrong, missing or switched profiles stop the check and drop earlier result
 test('no pairing, a changed address or a stale view sends no request', async () => {
   const t = await setup([{ node: 'node-a' }], ids => [{ noteId: 1000, lhId: ids[0]!, cards: [{ cardId: 2000 }] }], { paired: false });
   try {
-    await assert.rejects(t.call('checkReviews'), /Pair Anki Bridge/);
+    await assert.rejects(t.call('checkReviews'), /Choose a profile for this address in settings first/);
     const state = t.store.snapshot();
     await t.store.replace({ ...state, destination: { url: t.anki.url, profile: 'Throwaway' } });
-    await assert.rejects(t.call('checkReviews', { expectedDestination: { url: t.anki.url, profile: 'Old' } }), /paired Anki profile changed/);
+    await assert.rejects(t.call('checkReviews', { expectedDestination: { url: t.anki.url, profile: 'Old' } }), /Paired profile changed\. Check it and try again/);
     await assert.rejects(t.call('checkReviews', { unexpected: true }), /Unsupported/);
     await t.store.replace({ ...t.store.snapshot(), settings: { ...state.settings, url: 'http://127.0.0.1:9/' } });
-    await assert.rejects(t.call('checkReviews'), /Pair Anki Bridge/);
+    await assert.rejects(t.call('checkReviews'), /Choose a profile for this address in settings first/);
     assert.deepEqual(t.anki.actions(), []);
   } finally { await t.cleanup(); }
 });

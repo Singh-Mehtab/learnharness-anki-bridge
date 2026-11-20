@@ -13,7 +13,10 @@ export const REVIEW_OPERATIONS = ['checkReviews', 'lastReviewCheck', 'clearRevie
 /** Unmeasured guesses. cardsInfo is the heaviest call on 26.10.11.0, which renders each card. */
 export const REVIEW_BATCH = { notes: 50, cards: 25, reviews: 50 } as const;
 
-interface GraphSource { graph(): { propositions: readonly { id: string }[]; nodeSessions: Record<string, string[]>; sessions: Record<string, string> } }
+interface GraphSource {
+  graph(): { propositions: readonly { id: string }[]; nodeSessions: Record<string, string[]>; sessions: Record<string, string> };
+  listSessions?(): readonly { id: string; createdAt: string }[];
+}
 const record = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 const chunks = <T>(items: readonly T[], size: number): T[][] => Array.from({ length: Math.ceil(items.length / size) }, (_, i) => items.slice(i * size, i * size + size));
 
@@ -69,12 +72,12 @@ export class ReviewService {
     if (Object.keys(input).some(k => !allowed.includes(k))) throw new Error('Unsupported review check input.');
     if (name === 'lastReviewCheck') return { check: this.current(), running: this.running };
     if (name === 'clearReviewCheck') {
-      if (this.running) throw new Error('Wait for the review check to finish before clearing the results.');
+      if (this.running) throw new Error('Wait for the review check to finish.');
       this.last = undefined;
       return { check: null, running: false };
     }
     if (name !== 'checkReviews') throw new Error('Unknown review check operation.');
-    if (this.running) throw new Error('A review check is already running. Wait for it to finish.');
+    if (this.running) throw new Error('A review check is already running.');
     this.running = true;
     const apiKey = this.store.snapshot().settings.apiKey;
     try {
@@ -121,11 +124,11 @@ export class ReviewService {
   private async check(expected: unknown, revision: number): Promise<ReviewCheck> {
     const state = this.store.snapshot();
     const paired = state.destination;
-    if (!paired || paired.url !== state.settings.url) throw new Error('Pair Anki Bridge with this address and profile in Settings before checking reviews.');
+    if (!paired || paired.url !== state.settings.url) throw new Error('Choose a profile for this address in settings first.');
     if (expected !== undefined) {
       const ok = record(expected) && typeof expected.url === 'string' && typeof expected.profile === 'string' &&
         (() => { try { return normalizeUrl(expected.url as string) === paired.url; } catch { return false; } })() && expected.profile === paired.profile;
-      if (!ok) throw new Error('The paired Anki profile changed. Check the profile shown and try again.');
+      if (!ok) throw new Error('Paired profile changed. Check it and try again.');
     }
     const { apiKey } = state.settings;
     const local = state.cards.filter((c): c is Card & { noteId: number } => c.status === 'sent' && !!c.noteId && sameDestination(c.destination, paired));
@@ -244,6 +247,24 @@ export class ReviewService {
       graph = { nodes: new Set(g.propositions.map(n => n.id)), nodeSessions: g.nodeSessions ?? {}, sessions: g.sessions ?? {} };
     } catch { graph = null; }
     const built = buildTopics(readings, now, graph);
+    const links = built.topics.flatMap(t => t.sessions);
+    const linksByTitle = new Map<string, string>();
+    const sameTitle = links.some(({ id, name }) => {
+      const title = name.trim().replace(/\s+/g, ' ') || 'Session';
+      const previous = linksByTitle.get(title);
+      linksByTitle.set(title, id);
+      return previous !== undefined && previous !== id;
+    });
+    if (sameTitle) {
+      // Only same-title links need local session dates to avoid relying on raw IDs.
+      try {
+        const dates = new Map(this.learning.listSessions?.().map(s => [s.id, s.createdAt]));
+        for (const link of links) {
+          const createdAt = dates.get(link.id);
+          if (createdAt) link.createdAt = createdAt;
+        }
+      } catch { /* Session links still work without dates. */ }
+    }
     this.active();
     const destination: Destination = { ...paired };
     return { checkedAt: now, destination, rules: REVIEW_RULES, topics: built.topics,

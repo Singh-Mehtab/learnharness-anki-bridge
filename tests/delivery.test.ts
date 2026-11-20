@@ -93,7 +93,7 @@ test('hand-written cards require explicit pairing and durable approval, then add
   try {
     const id = await f.draft();
     assert.equal(f.calls.length, 0);
-    await assert.rejects(f.send([id]), /Pair/);
+    await assert.rejects(f.send([id]), /Choose a profile for this address in settings first/);
     await f.pair();
     assert.deepEqual(f.calls.map(c => c.action), ['version', 'getActiveProfile', 'deckNames'], 'pairing skips the optional tag lookup while it holds the lock');
     await assert.rejects(f.send([id]), /Approve/);
@@ -164,11 +164,11 @@ test('wrong/null profiles and URL changes block reconciliation without clearing 
     f.setProfile(null); const searches = f.calls.filter(c => c.action === 'findNotes').length;
     await f.reopen();
     assert.equal(f.snap().cards[0].status, 'sending'); assert.match(f.snap().recoveryError!, /Open a profile/);
-    f.setProfile('Other'); await assert.rejects(f.service.command('reconcile'), /mismatch/);
+    f.setProfile('Other'); await assert.rejects(f.service.command('reconcile'), /Anki has a different profile open\. Open "Throwaway"/);
     await assert.rejects(f.pair(), /original/);
     assert.equal(f.calls.filter(c => c.action === 'findNotes').length, searches);
     await f.service.command('settings', { url: 'http://127.0.0.1:19999' });
-    await assert.rejects(f.service.command('reconcile'), /Pair/);
+    await assert.rejects(f.service.command('reconcile'), /Choose a profile for this address in settings first/);
     assert.equal(f.snap().cards[0].status, 'sending');
     await f.service.command('settings', { url: f.url }); f.setProfile('Throwaway');
     await f.service.command('reconcile'); assert.equal(f.snap().cards[0].status, 'sent');
@@ -179,7 +179,7 @@ test('a profile change during addNote leaves sending and stops subsequent cards'
   const f = await fixture();
   try {
     await f.pair(); const a = await f.draft(), b = await f.draft('Another front'); await f.approve([a, b]); f.switchAfterAdd();
-    await assert.rejects(f.send([a, b]), /mismatch/);
+    await assert.rejects(f.send([a, b]), /Anki has a different profile open\. Open "Throwaway"/);
     assert.equal(f.notes.length, 1); assert.deepEqual(f.snap().cards.map(c => c.status), ['sending', 'approved']);
     f.setProfile('Throwaway'); await f.service.command('reconcile'); assert.equal(f.snap().cards[0].status, 'sent');
   } finally { await f.close(); }
@@ -219,9 +219,28 @@ test('a send fences competing sends, edits, pairing and settings', async () => {
     await f.pair(); const id = await f.draft(); await f.approve([id]);
     const gate = new Promise<void>(r => { release = r; }); f.gate(gate);
     const sending = f.send([id]);
-    for (const [name, input] of [['send', { ids: [id], deck: 'Elsewhere' }], ['settings', { apiKey: 'test-secret' }], ['pair', { confirmed: true }], ['edit', { id, front: 'x', back: 'y' }]] as const) await assert.rejects(f.service.command(name, input), /busy/);
+    await Promise.race([f.addEntered, sending.then(() => assert.fail('send completed without reaching the gated addNote'))]);
+    for (const [name, input] of [['send', { ids: [id], deck: 'Elsewhere' }], ['settings', { apiKey: 'test-secret' }], ['pair', { confirmed: true }], ['edit', { id, front: 'x', back: 'y' }]] as const) await assert.rejects(f.service.command(name, input), /Busy\. Wait for the current action to finish/);
     release(); await sending; assert.equal(f.notes.length, 1);
   } finally { release?.(); await f.close(); }
+});
+
+test('edit errors distinguish unconfirmed, confirmed and dropped cards', async () => {
+  const f = await fixture();
+  try {
+    await f.pair();
+    const id = await f.draft(); await f.approve([id]);
+    const dropped = await f.draft('Another front');
+    await f.service.command('drop', { ids: [dropped] });
+    const edit = (id: string) => f.service.command('edit', { id, front: 'Overwrite', back: 'New answer' });
+    await assert.rejects(edit(dropped), { message: 'Dropped cards cannot be edited.' });
+
+    f.dropAfterAdd(); await assert.rejects(f.send([id]));
+    await assert.rejects(edit(id), { message: 'Cards with an unconfirmed send cannot be edited. Check unconfirmed sends first.' });
+    await f.service.command('reconcile');
+    await assert.rejects(edit(id), { message: 'This card was sent and cannot be edited here. Edit it in Anki.' });
+    assert.deepEqual(f.snap().cards.map(c => c.status), ['sent', 'dropped']);
+  } finally { await f.close(); }
 });
 
 test('editing invalidates approval and API key is not exposed in snapshots', async () => {
@@ -239,9 +258,9 @@ test('editing invalidates approval and API key is not exposed in snapshots', asy
 test('pairing rejects a profile or endpoint different from the confirmed dialog', async () => {
   const f = await fixture();
   try {
-    await assert.rejects(f.service.command('pair', { confirmed: true, expectedDestination: { url: f.url, profile: 'Other' } }), /changed while pairing/);
+    await assert.rejects(f.service.command('pair', { confirmed: true, expectedDestination: { url: f.url, profile: 'Other' } }), /Destination changed while confirming\. Test the connection and confirm again/);
     assert.equal(f.snap().destination, null);
-    await assert.rejects(f.service.command('pair', { confirmed: true, expectedDestination: { url: 'http://127.0.0.1:19999', profile: 'Throwaway' } }), /changed while pairing/);
+    await assert.rejects(f.service.command('pair', { confirmed: true, expectedDestination: { url: 'http://127.0.0.1:19999', profile: 'Throwaway' } }), /Destination changed while confirming\. Test the connection and confirm again/);
     assert.equal(f.snap().destination, null);
     await f.service.command('pair', { confirmed: true, expectedDestination: { url: f.url, profile: 'Throwaway' } });
     assert.equal(f.snap().destination?.profile, 'Throwaway');
@@ -379,7 +398,7 @@ test('a stale lock from a dead backend is replaced by exactly one of two concurr
     const results = await Promise.allSettled([StateStore.open(directory), StateStore.open(directory)]);
     const opened = results.filter(r => r.status === 'fulfilled');
     assert.equal(opened.length, 1);
-    assert.match(String((results.find(r => r.status === 'rejected') as PromiseRejectedResult).reason), /Another Anki Bridge backend/);
+    assert.match(String((results.find(r => r.status === 'rejected') as PromiseRejectedResult).reason), /Another backend is recovering the state lock/);
     const owner = JSON.parse(await readFile(lock, 'utf8'));
     assert.equal(owner.pid, process.pid); assert.notEqual(owner.token, 'dead-owner');
     await (opened[0] as PromiseFulfilledResult<StateStore>).value.close();

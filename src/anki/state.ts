@@ -67,15 +67,15 @@ export function validateState(value: unknown): asserts value is State {
   validateStateFormat(value, 7);
 }
 function validateStateFormat(value: unknown, version: 6 | 7): void {
-  if (!object(value) || value.schemaVersion !== version) throw new Error('Unsupported state format. Keep state.json intact and use a compatible Anki Bridge version.');
+  if (!object(value) || value.schemaVersion !== version) throw new Error('Unsupported state format. Keep state.json and use a compatible Anki Bridge version.');
   validateGenerations(value.generationSettings, value.generations);
   validateFlags(value.flags);
   validateDismissals(value.dismissals);
   const settings = value.settings;
-  if (!object(settings) || !['url', 'apiKey', 'lastDeck'].every(k => text(settings[k])) || settings.tagTemplate !== undefined && !text(settings.tagTemplate) || settings.systemTags !== undefined && typeof settings.systemTags !== 'boolean' || !(value.destination === null || destination(value.destination)) || !Array.isArray(value.cards)) throw new Error('Invalid Anki Bridge state. The file has not been reset.');
+  if (!object(settings) || !['url', 'apiKey', 'lastDeck'].every(k => text(settings[k])) || settings.tagTemplate !== undefined && !text(settings.tagTemplate) || settings.systemTags !== undefined && typeof settings.systemTags !== 'boolean' || !(value.destination === null || destination(value.destination)) || !Array.isArray(value.cards)) throw new Error('Invalid Anki Bridge state.');
   const ids = new Set<string>();
   for (const card of value.cards) {
-    if (!object(card) || !['id', 'nodeId', 'statementHash', 'sessionId', 'nodeName', 'sessionName', 'front', 'back', 'extra'].every(k => text(card[k])) || !/^[\da-f]{8}-(?:[\da-f]{4}-){3}[\da-f]{12}$/i.test(card.id as string) || ids.has(card.id as string) || !isStoredKind(card.kind) || !['draft', 'approved', 'sending', 'sent', 'failed', 'dropped'].includes(card.status as string)) throw new Error('Invalid card state. The file has not been reset.');
+    if (!object(card) || !['id', 'nodeId', 'statementHash', 'sessionId', 'nodeName', 'sessionName', 'front', 'back', 'extra'].every(k => text(card[k])) || !/^[\da-f]{8}-(?:[\da-f]{4}-){3}[\da-f]{12}$/i.test(card.id as string) || ids.has(card.id as string) || !isStoredKind(card.kind) || !['draft', 'approved', 'sending', 'sent', 'failed', 'dropped'].includes(card.status as string)) throw new Error('Invalid card state.');
     ids.add(card.id as string);
     if (card.sourceSnapshot !== undefined && !validSource(card.sourceSnapshot) || card.generationId !== undefined && !text(card.generationId) || card.requestId !== undefined && !text(card.requestId)) throw new Error('Invalid generation card metadata.');
     if (card.destination !== undefined && !destination(card.destination)) throw new Error('Invalid card destination.');
@@ -98,7 +98,7 @@ export function migrateState(raw: unknown): State {
   if (object(value) && value.schemaVersion === 3) value = { ...value, schemaVersion: 4, dismissals: [] };
   if (object(value) && value.schemaVersion === 4) {
     const old = value.generationSettings;
-    if (!validLegacyGenerationSettings(old)) throw new Error('Invalid generation state. The file has not been reset.');
+    if (!validLegacyGenerationSettings(old)) throw new Error('Invalid generation state.');
     // The old kinds were on by default, so they don't represent an opt-in. Leave
     // task inputs and historical settings byte-for-byte equivalent for worker recovery.
     value = { ...value, schemaVersion: 5, generationSettings: { cardsPerNode: old.cardsPerNode, enabledKinds: [...DEFAULT_KINDS], constantValues: false, model: old.model } };
@@ -108,7 +108,7 @@ export function migrateState(raw: unknown): State {
     // A batch in a file 0.7.2 wrote has 0.7.2 or older settings; anything else is malformed, not current.
     const history = object(raw) && raw.schemaVersion === 5 && Array.isArray(value.generations) ? value.generations : [];
     if (!validV072GenerationSettings(old) || history.some(g => !object(g) || !(validV072GenerationSettings(g.settings) || validLegacyGenerationSettings(g.settings))))
-      throw new Error('Invalid generation state. The file has not been reset.');
+      throw new Error('Invalid generation state.');
     // #37 removed the constant-values toggle and #38 stopped drafting compose. Only the
     // current settings change; generation history keeps its 0.7.2 settings and inputs.
     value = { ...value, schemaVersion: 6, generationSettings: fromV072Settings(old) };
@@ -143,7 +143,7 @@ async function backUpBeforeMigration(directory: string, version: number, origina
     catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
       if (!original.equals(await readFile(backup))) {
-        throw new Error(`The existing state.v${version}.bak differs from state.json. Move that backup to a safe place before upgrading. Neither file was changed.`);
+        throw new Error(`state.v${version}.bak differs from state.json. Move the backup somewhere safe before upgrading.`);
       }
     }
     await syncDirectory(directory);
@@ -250,7 +250,7 @@ export class StateStore {
       let marker;
       try { marker = await open(recovery, 'wx', 0o600); }
       catch (e) {
-        if ((e as NodeJS.ErrnoException).code === 'EEXIST') throw new Error('Another Anki Bridge backend is recovering the state lock. If none is running, quit LearnHarness and remove state.lock.recovery from the plugin data folder.');
+        if ((e as NodeJS.ErrnoException).code === 'EEXIST') throw new Error('Another backend is recovering the state lock. If none is running, quit LearnHarness and remove state.lock.recovery from the plugin data folder.');
         throw e;
       }
       try {

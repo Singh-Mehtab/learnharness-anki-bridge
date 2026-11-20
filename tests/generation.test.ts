@@ -666,6 +666,9 @@ for (const mode of ['retry', 'retry with post-commit warning', 'reactivate', 'po
         assert.equal(pending.generations[0].tasks[0].resultPending, true);
         await assert.rejects(first.call('preflight', { nodeIds: ['n_a'] }), /generating/);
         if (mode === 'retry' || mode === 'retry with post-commit warning') {
+          await assert.rejects(first.call('dismissNode', { nodeId: 'n_a', statementHash: statementHash(host.nodes[0].statement) }), {
+            message: 'Use Retry saving before dismissing this idea. If the result is unavailable, use Abandon unavailable result.',
+          });
           await withReviewBanner(name => first.call(name), async refresh => {
             assert.match(await refresh(), /Card generation needs checking: Stop writing/);
             await assert.rejects(first.call('abandonGenerationResult', { id: p.preflightId, confirmed: true }), /No pending result is unavailable/);
