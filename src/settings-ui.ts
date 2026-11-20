@@ -155,6 +155,7 @@ export function mountSettings(ctx: PluginFrontendContext, container: HTMLElement
       if (alive()) syncButtons();
       // A tag change made during another save is saved now, with the latest values.
       if (tagsQueued && alive()) { tagsQueued = false; void saveTags(); }
+      else if (reloadQueued && alive()) { reloadQueued = false; void load(); }
     }
   }
   async function apply(name: string, value?: unknown): Promise<void> {
@@ -272,7 +273,9 @@ export function mountSettings(ctx: PluginFrontendContext, container: HTMLElement
     try { const next = await ctx.call<SettingsSnapshot>("snapshot"); if (alive()) render(next); }
     catch (error) { if (alive()) connectionStatus.show(`Couldn't load settings: ${message(error)}`, "error"); }
   }
-  function refreshFromPeer(): void { if (!busy) void load(); }
+  let reloadQueued = false;
+  // A change made elsewhere during a save here is loaded once that save ends.
+  function refreshFromPeer(): void { if (busy) reloadQueued = true; else void load(); }
   peers.add(refreshFromPeer);
   const unsubscribe = ctx.onResync(() => { void load(); });
   void load();

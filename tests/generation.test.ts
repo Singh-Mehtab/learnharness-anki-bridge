@@ -92,6 +92,13 @@ test('defaults carry the cheap slot’s thinking through confirmation, worker st
 test('overlapping card-type toggles from Write and Settings both survive', () => withHost(async (host, directory) => {
   const c = host.context(directory), close = await activate(c.ctx);
   try {
+    // Write and Settings save at the same moment: the second toggle waits for the first instead of failing busy.
+    await Promise.all([
+      c.call('generationSettings', { toggleKind: { kind: 'steps', enabled: true } }),
+      c.call('generationSettings', { toggleKind: { kind: 'discriminate', enabled: true } }),
+    ]);
+    assert.deepEqual((await c.call('generationStatus')).generationSettings.enabledKinds, ['fact', 'equation', 'steps', 'discriminate']);
+    await Promise.all(['steps', 'discriminate'].map(kind => c.call('generationSettings', { toggleKind: { kind, enabled: false } })));
     // Write and Settings both last read [fact, equation]. Each sends only its own change, which the backend applies to the saved set.
     await c.call('generationSettings', { toggleKind: { kind: 'apply', enabled: true } });
     await c.call('generationSettings', { toggleKind: { kind: 'why', enabled: true } });

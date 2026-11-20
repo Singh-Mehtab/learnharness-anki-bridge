@@ -311,7 +311,9 @@ export class GenerationService {
         await this.delivery.save(s => { s.generations.find(x => x.id === g.id)!.hidden = true; });
       } else throw new Error('Unknown generation operation.');
       return this.delivery.snapshot(false);
-    });
+      // A card-type toggle is a short merge, so it queues behind the current writer
+      // instead of failing busy when Write and Settings save at the same moment.
+    }, name === 'generationSettings' && !!input && typeof input === 'object' && 'toggleKind' in input);
   }
   private drive(id: string): void {
     const driver = this.run(id).catch(async error => {

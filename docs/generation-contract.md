@@ -9,7 +9,7 @@ All calls use `ctx.call`. In 0.3.0, no call silently selects a model and no sess
 | Operation | Input | Output |
 | --- | --- | --- |
 | `generationContext` | `{}` | `{nodes: [{id, name, statement}], catalog}`; catalog is the host's current model catalog |
-| `generationSettings` | Partial `{cardsPerNode, enabledKinds, model}`, or `toggleKind: {kind, enabled}` instead of `enabledKinds` | Snapshot; cap is an integer 1–4, kinds are a nonempty distinct subset of `fact`, `equation`, `why`, `steps`, `apply`, `discriminate`; model is `{provider,id}`, or `null` for the host's cheap slot. `toggleKind` switches one kind against the saved set inside the mutation fence, so Write and Settings can't undo each other's changes; turning off the last kind is refused |
+| `generationSettings` | Partial `{cardsPerNode, enabledKinds, model}`, or `toggleKind: {kind, enabled}` instead of `enabledKinds` | Snapshot; cap is an integer 1–4, kinds are a nonempty distinct subset of `fact`, `equation`, `why`, `steps`, `apply`, `discriminate`; model is `{provider,id}`, or `null` for the host's cheap slot. `toggleKind` switches one kind against the saved set inside the mutation fence, so Write and Settings can't undo each other's changes; it queues behind the current writer instead of failing busy, and turning off the last kind is refused |
 | `preflight` | `{nodeIds: string[]}` | Preflight described below; selected IDs must be distinct, present, 1–1000 nodes |
 | `generate` | `{preflightId}` | Snapshot after durable acceptance, not completion |
 | `generationStatus` | `{}` | Snapshot, including durable task states |

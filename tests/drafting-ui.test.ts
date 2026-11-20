@@ -45,6 +45,7 @@ function setup(options: { catalogUnavailable?: boolean; initialGraphFailure?: bo
       if (name === "generationSettings") {
         // Like the backend: a toggle applies to the saved types at the moment it arrives.
         const { toggleKind, ...rest } = input;
+        if (toggleKind && state.failToggle) throw new Error("Anki Bridge is busy. Wait for the current operation to finish.");
         Object.assign(state.generationSettings, rest);
         if (toggleKind) state.generationSettings.enabledKinds = ["fact", "equation", "why", "steps", "apply", "discriminate"].filter(k => k === toggleKind.kind ? toggleKind.enabled : state.generationSettings.enabledKinds.includes(k));
       }
@@ -204,6 +205,24 @@ test("card types and cap save as soon as they change, keep Settings types, and t
     f.peers.forEach(peer => peer()); await tick();
     assert.equal(toggles()[0]!.disabled, true, "the only remaining type cannot be turned off");
     assert.doesNotMatch(f.text(), /Also on in Settings/);
+  } finally { await f.close(); }
+});
+
+test("a rejected card-type toggle puts the checkbox back and tells Settings nothing changed", async () => {
+  const f = setup();
+  try {
+    await f.panel.setScope(undefined); await tick();
+    const why = () => ([...f.write.querySelectorAll(".ab-chips input[type=checkbox]")] as unknown as HTMLInputElement[])[2]!;
+    let notified = 0; f.peers.add(() => { notified++; });
+    f.state.failToggle = true;
+    why().checked = true; why().dispatchEvent(f.event("change")); await tick();
+    assert.equal(why().checked, false, "the saved state is shown again");
+    assert.match(f.text(), /busy/);
+    assert.equal(notified, 0);
+    f.state.failToggle = false;
+    why().checked = true; why().dispatchEvent(f.event("change")); await tick();
+    assert.equal(why().checked, true);
+    assert.equal(notified, 1, "Settings hears about a saved Write change");
   } finally { await f.close(); }
 });
 

@@ -294,7 +294,12 @@ export function mountDrafting(ctx: PluginFrontendContext, ideasHost: HTMLElement
         invalidate();
         const wanted = box.checked;
         // Send only this change; the backend applies it to the saved types, so it can't undo one made in Settings.
-        void run(async () => { await snapshot("generationSettings", { toggleKind: { kind, enabled: wanted } }); });
+        void run(async () => {
+          try { await snapshot("generationSettings", { toggleKind: { kind, enabled: wanted } }); }
+          catch (error) { box.checked = !wanted; throw error; }
+          // An open Settings panel shows Apply and Contrast, and whether the last type is locked on.
+          for (const peer of peers ?? []) if (peer !== reloadFromPeer) peer();
+        });
       };
       chip.append(box, el("span", KIND_NAMES[kind]));
       chips.append(chip);

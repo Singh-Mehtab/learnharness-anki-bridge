@@ -146,6 +146,17 @@ test("Settings switch Apply and Contrast on for drafting, with examples, and Wri
     assert.deepEqual(f.state.generationSettings.enabledKinds, ["fact", "equation", "why"]);
     assert.doesNotMatch(write(), /Also on in Settings/);
 
+    // A Write change reaches an open Settings panel: with Contrast alone it is locked on, until Write turns Fact on.
+    f.state.generationSettings.enabledKinds = ["discriminate"];
+    const open = await f.mountSettings();
+    const contrast = () => Array.from(Array.from(open.host.querySelectorAll(".ab-panel") as ArrayLike<HTMLElement>).find(p => /More card types/.test(p.textContent!))!.querySelectorAll("input[type=checkbox]") as ArrayLike<HTMLInputElement>)[1]!;
+    assert.equal(contrast().disabled, true);
+    const fact = f.container.querySelector(".ab-chips input[type=checkbox]") as unknown as HTMLInputElement;
+    fact.checked = true; fact.dispatchEvent(f.event("change")); await tick();
+    assert.deepEqual(f.state.generationSettings.enabledKinds, ["fact", "discriminate"]);
+    assert.equal(contrast().disabled, false, "Settings now lets Contrast go off");
+    open.close();
+
     f.state.generationSettings.enabledKinds = ["discriminate"];
     s.close();
     const again = await f.mountSettings();
