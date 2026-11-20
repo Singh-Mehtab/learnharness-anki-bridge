@@ -7,7 +7,8 @@ export const STYLE_REVISION = "/* learnharness-anki style v1 */";
 const LEGACY_MARKER = "/* learnharness-anki v1 */";
 
 // Keep the old marker as an alias so rolling back to 0.6.0 can still send.
-const CSS = `${MARKER}
+// The .apkg export (apkg.ts) reuses the CSS and templates so both routes carry the same note type.
+export const CSS = `${MARKER}
 ${STYLE_REVISION}
 ${LEGACY_MARKER}
 .card { font-family: sans-serif; font-size: 20px; text-align: left; }
@@ -16,13 +17,13 @@ ${LEGACY_MARKER}
 pre { white-space: pre-wrap; tab-size: 4; }
 code { font-family: monospace; }
 `;
-const FRONT = "{{Front}}";
-const BACK = `{{FrontSide}}
+export const FRONT = "{{Front}}";
+export const BACK = `{{FrontSide}}
 <hr id="answer">
 {{Back}}
 {{#Extra}}<div class="lh-extra">{{Extra}}</div>{{/Extra}}
 {{#Source}}<div class="lh-source">{{Source}}</div>{{/Source}}`;
-const TEMPLATE_NAME = "Card 1";
+export const TEMPLATE_NAME = "Card 1";
 
 function fail(message: string): never {
   throw new AnkiError("api", message);

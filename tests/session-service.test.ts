@@ -123,7 +123,7 @@ test('a flag waits for extraction, then reports no nodes or matched nodes, and s
   const h = host(), c = context(dir, h.learning);
   let close = await activate(c.ctx);
   try {
-    assert.equal(c.handlers.size, 29);
+    assert.equal(c.handlers.size, 30);
     const waiting = await c.call<FlagView>('flag', { sessionId: 's1', messageIds: ['a3'] });
     assert.equal(waiting.status, 'waiting');
     assert.equal((waiting as FlagView & { created: boolean }).created, true);

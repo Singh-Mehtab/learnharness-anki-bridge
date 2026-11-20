@@ -15,6 +15,7 @@ Anki Bridge turns what you learn in [LearnHarness](https://github.com/amosblomqv
 - Tags cards to match your collection. A template such as `{deck}::Lecture_01` tags each card by deck and lecture, and you can change the tags before each send.
 - Shows what you have already covered. Each idea says whether it has cards in Anki, cards waiting for review, or none, so you can fill the gaps.
 - Only adds notes. It never edits or deletes existing Anki notes, and Anki keeps your reviews and scheduling.
+- Saves approved cards as an Anki package (`.apkg`) when AnkiConnect isn't an option. The download works with Anki closed and needs no profile.
 
 ## How it works
 
@@ -42,11 +43,15 @@ Write cards shows the size and estimated cost of the run before anything starts.
 
 Each card shows Front, Back and Extra side by side with the maths rendered. Edit opens the TeX source with a live preview underneath. Approve the cards you're happy with, check the deck and tags, then send. The deck field suggests your Anki decks and tells you when a name is new. The tags field suggests tags already in your collection as you type. After a send, a panel says how many cards went to which deck and tags, with a button to show them in Anki.
 
+Download .apkg, next to Send to Anki, saves the approved cards as a package file instead. It needs a deck name but no profile, and Anki can be closed. Open the file with Anki, or use File > Import, to add the cards. The package carries the same fields, formatting, tags and note type as a send, and each note's ID inside Anki (its GUID) is the card's Anki Bridge ID. Download again saves the same file a second time.
+
+A download is not a send. The cards stay approved, they don't count as in Anki, and Send to Anki still works for them. Anki decides how to match an imported package with your collection. Importing can add duplicates of cards you already sent, or update notes from an earlier package, and Anki Bridge can't check which will happen.
+
 ![Editing a card. The front and back text boxes hold TeX source, the rendered preview sits under each one, and the idea the card was written from is folded away below.](docs/images/0.7.0-edit.png)
 
 ## Install
 
-You need LearnHarness 0.6.1 or later, Anki Desktop 26.08 or later with [AnkiConnect](https://git.sr.ht/~foosoft/anki-connect), and a model set up in LearnHarness. Writing cards uses that model provider's quota. Estimates make no model calls.
+You need LearnHarness 0.6.1 or later, Anki Desktop 26.08 or later with [AnkiConnect](https://git.sr.ht/~foosoft/anki-connect), and a model set up in LearnHarness. Download .apkg works without AnkiConnect. Writing cards uses that model provider's quota. Estimates make no model calls.
 
 There is no download yet. Build the install zip from a checkout of this repository with Node.js 23.6 or later:
 
@@ -98,6 +103,7 @@ The Anki Bridge settings hold the AnkiConnect address and optional key, the Anki
 
 - Writing cards sends the chosen ideas to the active model provider, along with their linked ideas, an excerpt of the session reply each idea came from (flagged or not), your flag notes and any existing cards for those ideas. The Write cards dialog lists this before anything is sent.
 - From Anki, the bridge reads the open profile's name, its deck names and its tag names, for the deck and tag suggestions. It only looks up notes it sent itself, to check they still exist. Anki returns those notes' fields with the answer, and the bridge doesn't use them. It doesn't read your other notes or your review history.
+- A downloaded package is an ordinary file holding the cards, the session and idea names they came from, and their Anki Bridge IDs. Downloading reads nothing from Anki and sends nothing anywhere.
 - The optional AnkiConnect key is stored in plain text in the plugin's `data/` folder. Never share that folder. Use AnkiConnect on your own machine.
 - Community plugins run local code with LearnHarness's permissions. Install builds you trust.
 - Adding missing fields and resetting styling and templates only change the bridge's own note type, and both ask you to confirm first.
@@ -107,6 +113,7 @@ The Anki Bridge settings hold the AnkiConnect address and optional key, the Anki
 - The new writer was tuned using one lecture. In the scored run, 36 of 39 cards were kept as written or with small edits. That's feedback on one set of cards, not a benchmark on new subjects. See [0.7.2 verification](docs/0.7.2-verification.md).
 - The 0.7.2 interface was checked in Chromium with synthetic data in a scratch LearnHarness. The new writer has not been tested end to end with a live model and a real Anki profile.
 - Tested only on macOS with LearnHarness 0.6.1.
+- Downloaded packages have been checked with SQLite and zip readers, not yet imported into Anki. See [the .apkg export note](docs/fi-9-apkg-export.md).
 
 ## Roadmap
 
@@ -130,4 +137,4 @@ npm run build
 
 [AGPL-3.0-only](LICENSE).
 
-The writer adapts card-design guidance from [LearnHarness core Flashcards](https://github.com/amosblomqvist/learnharness/tree/v0.6.1/plugins/flashcards), [Twig](https://github.com/amoghu1s1/twig) and the [LearnHarness recall cards proposal](https://github.com/amosblomqvist/learnharness/pull/447), under AGPL-3.0. Anki Bridge uses a different approval-first, one-way delivery design. [AnkiConnect](https://git.sr.ht/~foosoft/anki-connect) provides the local Anki API.
+The writer adapts card-design guidance from [LearnHarness core Flashcards](https://github.com/amosblomqvist/learnharness/tree/v0.6.1/plugins/flashcards), [Twig](https://github.com/amoghu1s1/twig) and the [LearnHarness recall cards proposal](https://github.com/amosblomqvist/learnharness/pull/447), under AGPL-3.0. Anki Bridge uses a different approval-first, one-way delivery design. [AnkiConnect](https://git.sr.ht/~foosoft/anki-connect) provides the local Anki API. The `.apkg` layout follows [genanki](https://github.com/kerrickstaley/genanki) (MIT).
