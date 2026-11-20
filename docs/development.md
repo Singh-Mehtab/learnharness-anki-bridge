@@ -52,6 +52,10 @@ The optional API key is stored in plain text in the plugin's `data/` directory. 
 
 The opt-in [live integration test](0.2.0-verification.md) requires an isolated profile named `Anki Bridge Test`, leaves notes in that collection, and refuses ports 8765 and 8766. It does not start or stop Anki. The core Flashcards plugin is independent and can remain enabled.
 
+## .apkg export
+
+`src/anki/apkg.ts` writes the package with `node:sqlite` and `node:zlib`, so it needs no npm dependency. Its tests in `tests/apkg.test.ts` read packages back with `node:sqlite`. A real Anki import has not been run; the [.apkg export note](fi-9-apkg-export.md) lists what was tested and a throwaway-profile test to run with approval.
+
 ## Card-quality evidence
 
 The original core bench failed the zero-answer-leak criterion. The 0.1.1 follow-up produced 32 cards from previously unused QM target nodes in the same lecture. Sol provisionally kept 24 of 32 as-is or with small edits, with no flagged leaks or factual errors among the kept cards. Five rejected cards had factual-error flags.

@@ -17,11 +17,23 @@ test('backend activation registers public operations without graph, model or net
   const directory = await mkdtemp(path.join(os.tmpdir(), 'anki-backend-'));
   const c = context(directory); const close = await activate(c.ctx);
   try {
-    assert.equal(c.handlers.size, 32);
+    assert.equal(c.handlers.size, 33);
     const added = await c.call('draft', { front: 'Prompt', back: 'Answer' });
     assert.equal(added.cards[0].status, 'draft');
     await c.call('approve', { ids: [added.cards[0].id] });
     await assert.rejects(c.call('send', { ids: [added.cards[0].id], deck: 'Scratch' }), /Pair/);
+    // Unpaired and with no Anki at all, a download still works and changes nothing.
+    const before = await readFile(path.join(directory, 'state.json'), 'utf8');
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (() => { throw new Error('Downloading must not touch the network.'); }) as typeof fetch;
+    try {
+      const exported = await c.handlers.get('exportPackage')!({ ids: [added.cards[0].id], deck: 'Scratch' }) as { fileName: string; data: string; ids: string[] };
+      assert.equal(exported.fileName, 'anki-bridge-scratch.apkg');
+      assert.deepEqual(exported.ids, [added.cards[0].id]);
+      assert.equal(Buffer.from(exported.data, 'base64').readUInt32LE(0), 0x04034b50, 'a zip file');
+    } finally { globalThis.fetch = realFetch; }
+    assert.equal(await readFile(path.join(directory, 'state.json'), 'utf8'), before, 'state is not written');
+    assert.equal((await c.call('snapshot')).cards[0].status, 'approved');
     await assert.rejects(c.call('settings', { unexpected: 'setting' }), /Unsupported/);
     const lateDraft = c.handlers.get('draft')!;
     await close();

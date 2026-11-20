@@ -715,3 +715,61 @@ test("an older deck lookup that finishes last can't replace a newer one's sugges
     assert.deepEqual(options(), ["Newer"]);
   } finally { await f.dispose(); }
 });
+
+test("Download .apkg works unpaired, saves the package, keeps cards approved and can save the same file again", async () => {
+  const { exportPackage } = await import("../src/anki/apkg.ts");
+  const { initialState } = await import("../src/anki/state.ts");
+  const state = fixture(); state.destination = null;
+  state.cards = [card("0b6f7c1e-0000-4000-8000-00000000000a", { status: "approved", front: "Synthetic **front**" }), card("0b6f7c1e-0000-4000-8000-00000000000b"), card("0b6f7c1e-0000-4000-8000-00000000000c", { status: "failed" })];
+  const backend = { ...initialState(), cards: structuredClone(state.cards) } as unknown as Parameters<typeof exportPackage>[0];
+  backend.settings.tagTemplate = state.settings.tagTemplate;
+  const saved: { name: string; bytes: Buffer }[] = [];
+  const blobs = new Map<string, Blob>();
+  const realCreate = URL.createObjectURL, realRevoke = URL.revokeObjectURL;
+  URL.createObjectURL = (blob: Blob) => { const url = `blob:test/${blobs.size}`; blobs.set(url, blob); return url; };
+  URL.revokeObjectURL = () => {};
+  const f = await setup({ state, handler: (name, input) => name === "exportPackage" ? exportPackage(backend, input, 1_795_000_000_000) : undefined });
+  const pending: Promise<void>[] = [];
+  (f.window as any).HTMLAnchorElement.prototype.click = function (this: HTMLAnchorElement) {
+    pending.push(blobs.get(this.href)!.arrayBuffer().then(b => { saved.push({ name: this.download, bytes: Buffer.from(b) }); }));
+  };
+  // The export writes a real SQLite file, so wait for the save rather than a fixed number of ticks.
+  const settle = async (saves = saved.length) => {
+    for (let i = 0; i < 400 && pending.length < saves; i++) await new Promise(resolve => setTimeout(resolve, 5));
+    await tick(); await Promise.all(pending);
+  };
+  try {
+    assert.equal(f.button(/^Send 2 cards to Anki/).disabled, false);
+    assert.match(f.button(/^Send 2 cards/).title, /Choose an Anki profile/);
+    const download = f.button("Download .apkg");
+    assert.equal(download.disabled, false, "no profile or running Anki needed");
+    f.type(f.deck(), "");
+    assert.equal(f.button("Download .apkg").title, "Choose a deck first.");
+    f.button("Download .apkg").click(); await settle();
+    assert.equal(f.calls.some(c => c.name === "exportPackage"), false);
+    assert.match(f.status()!, /Choose a deck first\./);
+    f.type(f.deck(), "Synthetic::Deck");
+    f.button("Download .apkg").click(); await settle(1);
+    assert.deepEqual(f.calls.find(c => c.name === "exportPackage")!.input,
+      { ids: ["0b6f7c1e-0000-4000-8000-00000000000a", "0b6f7c1e-0000-4000-8000-00000000000c"], deck: "Synthetic::Deck", tags: ["Synthetic::Deck::Lecture_01"] });
+    assert.equal(saved.length, 1);
+    assert.equal(saved[0].name, "anki-bridge-synthetic-deck.apkg");
+    assert.equal(saved[0].bytes.readUInt32LE(0), 0x04034b50, "the saved file is the zip package");
+    const panel = f.container.querySelector(".ab-sent")!;
+    assert.equal(panel.getAttribute("data-kind"), "download");
+    assert.match(panel.textContent!, /Download of 2 cards requested as anki-bridge-synthetic-deck\.apkg/);
+    assert.match(panel.textContent!, /Not sent\. These cards stay approved and don't count as in Anki/);
+    assert.match(panel.textContent!, /Importing can add duplicates of cards already in Anki, or update notes from an earlier package/);
+    assert.doesNotMatch(panel.textContent!, /sent to Anki/);
+    assert.equal(f.calls.some(c => c.name === "send"), false, "a download never sends");
+    assert.deepEqual(Array.from(f.review().querySelectorAll(".ab-card")).map(c => c.getAttribute("data-status")), ["approved", "draft", "failed"], "nothing marked sent");
+    f.button("Download again", panel).click(); await settle(2);
+    assert.equal(saved.length, 2);
+    assert.equal(f.calls.filter(c => c.name === "exportPackage").length, 1, "the same file again, without a new export");
+    assert.deepEqual(saved[1], saved[0]);
+    f.button("Download .apkg").click(); await settle(3);
+    assert.equal(saved.length, 3, "the button stays available for the same approved batch");
+    f.button("Dismiss", f.container.querySelector(".ab-sent")!).click();
+    assert.equal((f.container.querySelector(".ab-sent") as unknown as HTMLElement).hidden, true);
+  } finally { URL.createObjectURL = realCreate; URL.revokeObjectURL = realRevoke; await f.dispose(); }
+});
