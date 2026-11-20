@@ -118,6 +118,37 @@ test("the plugin registers a sidebar action, the view and a settings page", asyn
   } finally { await f.dispose(); }
 });
 
+test("a Settings refresh from Write cannot overwrite a newer card-type save", async () => {
+  const state = fixture();
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  let held = 0, hold = false;
+  const f = await setup({ state, handler: async name => {
+    if (name === "snapshot" && hold) {
+      held++;
+      const old = structuredClone(state);
+      await gate;
+      return old;
+    }
+  } });
+  try {
+    const s = await f.mountSettings();
+    const why = [...f.container.querySelectorAll(".ab-kinds label")].find(label => label.textContent === "Why")!.querySelector("input")!;
+    const apply = Array.from(s.host.querySelectorAll("label") as ArrayLike<HTMLLabelElement>).find(label => label.textContent?.startsWith("Apply:"))!.querySelector("input")!;
+    assert.equal(apply.checked, false);
+    hold = true;
+    why.click(); await tick();
+    hold = false;
+    assert.equal(held, 2, "held the Review and Settings reloads from Write before saving Apply");
+    apply.click(); await tick();
+    assert.equal(apply.checked, true);
+    assert.ok(state.generationSettings.enabledKinds.includes("apply"));
+    release(); await tick();
+    assert.equal(apply.checked, true, "older state did not turn Apply back off");
+    s.close();
+  } finally { release(); await f.dispose(); }
+});
+
 test("Settings switch Apply and Contrast on for drafting, with examples, and Write shows it", async () => {
   const f = await setup();
   try {

@@ -68,7 +68,11 @@ export class ReviewService {
     const allowed = name === 'checkReviews' ? ['expectedDestination'] : [];
     if (Object.keys(input).some(k => !allowed.includes(k))) throw new Error('Unsupported review check input.');
     if (name === 'lastReviewCheck') return { check: this.current(), running: this.running };
-    if (name === 'clearReviewCheck') { this.last = undefined; return { check: null, running: this.running }; }
+    if (name === 'clearReviewCheck') {
+      if (this.running) throw new Error('Wait for the review check to finish before clearing the results.');
+      this.last = undefined;
+      return { check: null, running: false };
+    }
     if (name !== 'checkReviews') throw new Error('Unknown review check operation.');
     if (this.running) throw new Error('A review check is already running. Wait for it to finish.');
     this.running = true;

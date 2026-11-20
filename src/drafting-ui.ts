@@ -267,10 +267,14 @@ export function mountDrafting(ctx: PluginFrontendContext, ideasHost: HTMLElement
     const modelBox = el("div", undefined, "ab-model"), modelRow = el("div", undefined, "ab-model-row");
     modelRow.append(modelBox);
     modelField.append(el("span", "Model to write cards", "ab-label"), modelRow);
-    widgets.push(ctx.ui.mountModelPicker(modelBox, { value: settings.model ?? undefined, onChange: value => {
-      invalidate();
-      return run(async () => { await snapshot("generationSettings", { model: { provider: value.provider, id: value.id } }); });
-    } }, { signal }));
+    try {
+      widgets.push(ctx.ui.mountModelPicker(modelBox, { value: settings.model ?? undefined, onChange: value => {
+        invalidate();
+        return run(async () => { await snapshot("generationSettings", { model: { provider: value.provider, id: value.id } }); });
+      } }, { signal }));
+    } catch {
+      modelBox.textContent = settings.model ? "Model picker unavailable. The saved choice is still active." : "Model picker unavailable. Writing uses the cheap model.";
+    }
     // The host picker has no empty choice, so Clear is how a chosen model goes back to blank.
     if (settings.model) widgets.push(button(ctx, modelRow, signal, { label: "Clear", variant: "ghost", size: "sm", title: "Use the cheap model", onClick: () => {
       invalidate();

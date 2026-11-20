@@ -38,7 +38,7 @@ export function mountSettings(ctx: PluginFrontendContext, container: HTMLElement
   const root = el("div", undefined, "anki-bridge ab-settings");
   container.append(root);
   let state: SettingsSnapshot | undefined;
-  let disposed = false, busy = false, tagsQueued = false;
+  let disposed = false, busy = false, tagsQueued = false, loads = 0;
   const keyScope = new RenderScope(signal);
   const alive = () => !disposed && !signal.aborted && !ctx.signal.aborted;
 
@@ -159,7 +159,10 @@ export function mountSettings(ctx: PluginFrontendContext, container: HTMLElement
     }
   }
   async function apply(name: string, value?: unknown): Promise<void> {
-    const next = await ctx.call<SettingsSnapshot>(name, value);
+    loads++; // A read started before this mutation must not overwrite its result.
+    let next: SettingsSnapshot;
+    try { next = await ctx.call<SettingsSnapshot>(name, value); }
+    catch (error) { reloadQueued = true; throw error; }
     for (const peer of peers) if (peer !== refreshFromPeer) peer();
     if (alive()) render(next);
   }
@@ -270,14 +273,19 @@ export function mountSettings(ctx: PluginFrontendContext, container: HTMLElement
     syncKinds(); urlAdvice(); syncButtons();
   }
   async function load(): Promise<void> {
-    try { const next = await ctx.call<SettingsSnapshot>("snapshot"); if (alive()) render(next); }
-    catch (error) { if (alive()) connectionStatus.show(`Couldn't load settings: ${message(error)}`, "error"); }
+    const sequence = ++loads;
+    try {
+      const next = await ctx.call<SettingsSnapshot>("snapshot");
+      if (alive() && sequence === loads) render(next);
+    } catch (error) {
+      if (alive() && sequence === loads) connectionStatus.show(`Couldn't load settings: ${message(error)}`, "error");
+    }
   }
   let reloadQueued = false;
   // A change made elsewhere during a save here is loaded once that save ends.
   function refreshFromPeer(): void { if (busy) reloadQueued = true; else void load(); }
   peers.add(refreshFromPeer);
-  const unsubscribe = ctx.onResync(() => { void load(); });
+  const unsubscribe = ctx.onResync(refreshFromPeer);
   void load();
   return () => { disposed = true; peers.delete(refreshFromPeer); unsubscribe(); keyScope.dispose(); root.remove(); };
 }

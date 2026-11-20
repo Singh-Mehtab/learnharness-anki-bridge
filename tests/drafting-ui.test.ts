@@ -361,6 +361,26 @@ test("idea rows need neither a model nor a catalog, and never mount the native k
   }
 });
 
+test("Write still offers drafting controls when the optional model picker cannot mount", async () => {
+  for (const model of [false, true]) {
+    const f = setup({ catalogUnavailable: true, model });
+    const clear = () => [...f.write.querySelectorAll(".ab-model-row button")].find(b => b.textContent === "Clear") as unknown as HTMLButtonElement | undefined;
+    try {
+      await f.panel.setScope(undefined); await tick();
+      assert.match(f.write.textContent!, /Model picker unavailable/);
+      assert.equal(f.write.querySelectorAll(".ab-kinds input").length, 4);
+      assert.ok(f.write.querySelector("select"));
+      f.box().click();
+      assert.ok(f.has("Write cards for 1 idea"));
+      if (model) {
+        assert.ok(clear()); clear()!.click(); await tick();
+        assert.equal(f.state.generationSettings.model, null);
+        assert.equal(clear(), undefined);
+      } else assert.equal(clear(), undefined);
+    } finally { await f.close(); }
+  }
+});
+
 test("dismiss and restore send the current hash and refresh eligibility without reticking", async () => {
   const f = setup();
   try {

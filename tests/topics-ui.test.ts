@@ -277,6 +277,39 @@ test("round 4 S1: a superseded reload that fails does not replace newer feedback
   } finally { await t.cleanup(); }
 });
 
+test("Clear cannot report success while a check started in a previous mount is running", async () => {
+  const t = await setup();
+  let release!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  try {
+    const dispose = await t.mount();
+    await t.click("Check Anki reviews");
+    await settle(() => !!t.container.querySelector(".ab-topic"));
+    assert.ok(t.find("Clear"));
+    t.anki.state.after = action => action === "version" ? held : undefined;
+    await t.click("Check Anki reviews");
+    assert.equal((await t.service.command("lastReviewCheck")).running, true);
+    if (typeof dispose === "function") dispose();
+    await t.mount();
+
+    const confirmClear = async () => {
+      await t.click("Clear");
+      const confirm = Array.from(t.doc.querySelectorAll(".ab-dialog button") as ArrayLike<HTMLButtonElement>).find(b => b.textContent === "Clear")!;
+      confirm.click(); await tick();
+    };
+    await confirmClear();
+    assert.match(t.text(), /Wait for the review check to finish before clearing/);
+    assert.ok((await t.service.command("lastReviewCheck")).check, "nothing was cleared during the check");
+
+    release();
+    for (let i = 0; i < 100 && (await t.service.command("lastReviewCheck")).running; i++) await tick();
+    assert.equal((await t.service.command("lastReviewCheck")).running, false, "the held check finished");
+    await confirmClear();
+    assert.match(t.text(), /Cleared\./);
+    assert.equal((await t.service.command("lastReviewCheck")).check, null);
+  } finally { release(); await t.cleanup(); }
+});
+
 test("round 4 S2: a reload begun before Clear cannot bring the cleared result back", async () => {
   const t = await setup();
   try {
