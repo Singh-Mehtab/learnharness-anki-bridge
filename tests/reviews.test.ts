@@ -306,3 +306,62 @@ test('the client rejects malformed review replies as not AnkiConnect', async () 
     assert.equal((await client.call<unknown[]>('cardsInfo', { cards: [9, 1] })).length, 2);
   } finally { await anki.close(); }
 });
+
+// Sol review round 1 regressions.
+
+test('S1: a note without a profile, or with a padded LH_ID, never reaches a card read', async () => {
+  const t = await setup([{ node: 'node-a' }, { node: 'node-b' }], ids => [
+    { noteId: 1000, lhId: ids[0]!, cards: [{ cardId: 2000, lapses: 4 }] },
+    { noteId: 1001, lhId: ids[1]!, cards: [{ cardId: 2001, lapses: 4 }] },
+  ]);
+  try {
+    const note = (i: number, extra: Record<string, unknown>) => ({ noteId: 1000 + i, modelName: 'LearnHarness Basic', tags: [], fields: { LH_ID: { value: t.ids[i], order: 4 } }, cards: [2000 + i], ...extra });
+    t.anki.state.raw.set('notesInfo', [note(0, { profile: 'Throwaway' }), note(1, {})]);
+    await assert.rejects(t.call('checkReviews'), /answered from the profile "undefined"/);
+    t.anki.state.raw.set('notesInfo', [note(0, { profile: 'Throwaway' }), note(1, { profile: 'Throwaway', fields: { LH_ID: { value: ` ${t.ids[1]} `, order: 4 } } })]);
+    const { check } = await t.call('checkReviews');
+    assert.equal(check!.counts.changed, 1);
+    const cards = t.anki.state.requests.filter(r => r.action === 'cardsInfo' || r.action === 'getReviewsOfCards').flatMap(r => r.params.cards);
+    assert.ok(!cards.includes(2001), 'neither the profile-less nor the padded note had its cards read');
+  } finally { await t.cleanup(); }
+});
+
+test('S2: a retry re-checks the profile before reading again', async () => {
+  const t = await setup([{ node: 'node-a' }], ids => [{ noteId: 1000, lhId: ids[0]!, cards: [{ cardId: 2000, lapses: 4 }] }]);
+  try {
+    t.anki.state.errorsOnce.set('notesInfo', 'staleCursor: collection changed');
+    t.anki.state.after = (action) => { if (action === 'notesInfo') t.anki.state.profile = 'Someone else'; };
+    await assert.rejects(t.call('checkReviews'), /"Someone else" open/);
+    assert.deepEqual(t.anki.actions(), ['version', 'getActiveProfile', 'notesInfo', 'getActiveProfile']);
+  } finally { await t.cleanup(); }
+});
+
+test('S2: a pairing change during the last profile check is not published', async () => {
+  const t = await setup([{ node: 'node-a' }], ids => [{ noteId: 1000, lhId: ids[0]!, cards: [{ cardId: 2000, lapses: 4 }] }]);
+  try {
+    let reviewsDone = false;
+    t.anki.state.after = async (action) => {
+      if (action === 'getReviewsOfCards') reviewsDone = true;
+      else if (action === 'getActiveProfile' && reviewsDone) await t.store.replace({ ...t.store.snapshot(), destination: { url: t.anki.url, profile: 'Another' } });
+    };
+    await assert.rejects(t.call('checkReviews'), /pairing changed during the check/);
+    assert.equal((await t.call('lastReviewCheck')).check, null);
+  } finally { await t.cleanup(); }
+});
+
+test('S3: a card deleted after cardsInfo drops out instead of failing the check', async () => {
+  const t = await setup([{ node: 'node-a' }, { node: 'node-b' }], ids => [
+    { noteId: 1000, lhId: ids[0]!, cards: [{ cardId: 2000, lapses: 4 }] },
+    { noteId: 1001, lhId: ids[1]!, cards: [{ cardId: 2001, lapses: 5 }] },
+  ], { strictReviews: true });
+  try {
+    let deleted = false;
+    t.anki.state.after = (action) => { if (action === 'cardsInfo' && !deleted) { deleted = true; t.anki.state.notes[1]!.cards = []; } };
+    const { check } = await t.call('checkReviews');
+    assert.deepEqual(check!.topics.map(x => x.nodeId), ['node-a']);
+    assert.equal(check!.counts.missing, 1);
+    const reviewed = t.anki.state.requests.filter(r => r.action === 'getReviewsOfCards').map(r => r.params.cards);
+    assert.deepEqual(reviewed, [[2000, 2001], [2000]]);
+    allowedOnly(t.anki.actions());
+  } finally { await t.cleanup(); }
+});

@@ -48,12 +48,13 @@ async function setup(options: { paired?: boolean } = {}) {
   const actions = new Map<string, { run: () => void }>();
   const calls: string[] = [], shown: unknown[] = [], sessions: string[] = [];
   let opened = "", settingsOpened = 0;
+  const resyncs: (() => void)[] = [];
   const ctx = {
     signal: new AbortController().signal,
     cleanup: () => {},
     registerView: (v: PluginView) => { views.set(v.id, v); return () => {}; },
     registerAction: (a: { id: string; run: () => void }) => { actions.set(a.id, a); return () => {}; },
-    placeAction: () => () => {}, onAppEvent: () => () => {}, onResync: () => () => {}, registerSettings: () => () => {},
+    placeAction: () => () => {}, onAppEvent: () => () => {}, onResync: (f: () => void) => { resyncs.push(f); return () => {}; }, registerSettings: () => () => {},
     app: { openView: (id: string) => { opened = id; }, openSettings: () => { settingsOpened++; }, openSession: (id: string) => { sessions.push(id); } },
     call: async (name: string, input: any) => {
       calls.push(name);
@@ -77,7 +78,7 @@ async function setup(options: { paired?: boolean } = {}) {
   const click = async (label: string | RegExp) => { const b = find(label); assert.ok(b, `button ${label}`); assert.equal(b.disabled, false, `button ${label} is enabled`); b.click(); await tick(); };
   const text = () => container.textContent as string;
   const cleanup = async () => { scope.abort(); service.close(); await store.close(); await anki.close(); await rm(directory, { recursive: true, force: true }); };
-  return { anki, store, service, views, actions, calls, shown, sessions, opened: () => opened, settingsOpened: () => settingsOpened, doc, container, mount, find, click, text, cleanup };
+  return { resyncs, destination, anki, store, service, views, actions, calls, shown, sessions, opened: () => opened, settingsOpened: () => settingsOpened, doc, container, mount, find, click, text, cleanup };
 }
 
 test("Topics to revisit reads nothing until Check Anki reviews, then groups cards by node with evidence and links", async () => {
@@ -188,5 +189,28 @@ test("step 3's More menu opens Topics to revisit without reading Anki", async ()
     assert.equal(t.opened(), "topics");
     assert.ok(!t.calls.includes("checkReviews"));
     assert.equal(t.anki.state.requests.length, 0);
+  } finally { await t.cleanup(); }
+});
+
+test("S5: after the pairing changes elsewhere, the page re-reads it so the next check uses the new profile", async () => {
+  const t = await setup();
+  try {
+    await t.mount();
+    await t.store.replace({ ...t.store.snapshot(), destination: { url: t.destination.url, profile: "Second" } });
+    await t.click("Check Anki reviews");
+    await settle(() => /paired Anki profile changed/.test(t.text()));
+    await settle(() => /profile "Second"/.test(t.text()));
+    assert.match(t.text(), /paired Anki profile "Second"/);
+    assert.equal(t.anki.state.requests.length, 0);
+    t.anki.state.profile = "Second";
+    await t.click("Check Anki reviews");
+    await settle(() => /Checked at/.test(t.text()));
+    assert.match(t.text(), /in profile "Second"/);
+
+    // A host resync also re-reads the pairing.
+    await t.store.replace({ ...t.store.snapshot(), destination: { url: t.destination.url, profile: "Third" } });
+    for (const f of t.resyncs) f();
+    await settle(() => /paired Anki profile "Third"/.test(t.text()));
+    assert.match(t.text(), /paired Anki profile "Third"/);
   } finally { await t.cleanup(); }
 });

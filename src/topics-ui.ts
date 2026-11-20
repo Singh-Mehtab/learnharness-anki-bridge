@@ -145,7 +145,11 @@ export function mountTopics(ctx: PluginFrontendContext, container: HTMLElement, 
       if (!alive()) return;
       feedback.show(message(error), "error");
       // A failed check keeps an earlier result only if the backend still has it for this profile.
-      try { const last = await ctx.call<Answer>("lastReviewCheck", {}); if (alive()) { check = last.check; stale = !!check; } } catch { check = null; }
+      // Re-read the pairing too, so a change made elsewhere is shown before the next press.
+      try {
+        const [snap, last] = await Promise.all([ctx.call<Snapshot>("snapshot"), ctx.call<Answer>("lastReviewCheck", {})]);
+        if (alive()) { snapshot = snap; check = last.check; stale = !!check; }
+      } catch { check = null; }
     } finally {
       busy = false;
       if (alive()) { renderBar(); render(); }
@@ -172,5 +176,6 @@ export function mountTopics(ctx: PluginFrontendContext, container: HTMLElement, 
     if (alive()) { renderBar(); render(); }
   }
   void load();
-  return () => { disposed = true; scope.dispose(); barScope.dispose(); root.remove(); };
+  const unsubscribe = ctx.onResync(() => { if (!busy) void load(); });
+  return () => { disposed = true; unsubscribe(); scope.dispose(); barScope.dispose(); root.remove(); };
 }

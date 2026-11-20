@@ -19,6 +19,7 @@ const chunks = <T>(items: readonly T[], size: number): T[][] => Array.from({ len
 
 /** The paired profile is not the open one, so any earlier result no longer applies. */
 class ProfileMismatch extends Error {}
+const retryable = (error: unknown) => error instanceof AnkiError && error.kind === 'api' && /stale ?cursor|not ?found/i.test(error.message);
 
 export class ReviewService {
   private last: ReviewCheck | undefined;
@@ -39,6 +40,8 @@ export class ReviewService {
     this.lifetime.abort();
     this.options.signal?.removeEventListener('abort', this.abort);
   }
+  /** Called by the backend after a pair or a settings change commits, so an A→B→A switch still forgets. */
+  forget(): void { this.last = undefined; }
   private active(): void {
     if (this.closed || this.lifetime.signal.aborted) throw new Error('Anki Bridge is disabled.');
   }
@@ -87,12 +90,12 @@ export class ReviewService {
     return text;
   }
 
-  /** Retry a batch once when the collection changed under a paged read. */
-  private async retry<T>(read: () => Promise<T>): Promise<T> {
+  /** Retry a batch once when the collection changed under a paged read. `before` re-checks the profile first. */
+  private async retry<T>(read: () => Promise<T>, before: () => Promise<void>): Promise<T> {
     try { return await read(); }
     catch (error) {
-      if (!(error instanceof AnkiError && error.kind === 'api' && /stale ?cursor|not ?found/i.test(error.message))) throw error;
-      this.active();
+      if (!retryable(error)) throw error;
+      await before();
       return read();
     }
   }
@@ -113,14 +116,18 @@ export class ReviewService {
     if (!local.length) return { checkedAt: now, destination: { ...paired }, rules: REVIEW_RULES, topics: [], counts: empty };
 
     const reader = new ReviewReader(new AnkiClient({ url: paired.url, apiKey, timeoutMs: this.options.timeoutMs, signal: this.lifetime.signal }));
-    const guard = async () => {
+    const saved = () => {
       this.active();
       const current = this.store.snapshot();
       if (!sameDestination(current.destination, paired) || current.settings.url !== paired.url || current.settings.apiKey !== apiKey) {
         throw new ProfileMismatch('The Anki connection or pairing changed during the check. Nothing was kept. Check again.');
       }
+    };
+    const guard = async () => {
+      saved();
       const profile = await reader.call<string | null>('getActiveProfile');
-      this.active();
+      // Settings can change while getActiveProfile is in flight.
+      saved();
       if (profile === null) throw new ProfileMismatch(`Open the paired profile "${paired.profile}" in Anki, then check again.`);
       if (profile !== paired.profile) throw new ProfileMismatch(`Anki has the profile "${profile}" open. Open the paired profile "${paired.profile}" or re-pair in Settings.`);
     };
@@ -133,21 +140,22 @@ export class ReviewService {
     const owned: { card: Card & { noteId: number }; tags: string[]; cardIds: number[] }[] = [];
     for (const batch of chunks(local, REVIEW_BATCH.notes)) {
       const ids = [...new Set(batch.map(c => c.noteId))];
-      const notes = await this.retry(() => reader.call<Record<string, unknown>[]>('notesInfo', { notes: ids }));
+      const notes = await this.retry(() => reader.call<Record<string, unknown>[]>('notesInfo', { notes: ids }), guard);
       await guard();
       if (notes.length !== ids.length) throw new Error('AnkiConnect returned an unexpected number of notes. Nothing was kept.');
       const byId = new Map<number, Record<string, unknown>>();
       for (const note of notes) {
         if (!Object.keys(note).length) continue;
         if (!ids.includes(note.noteId as number)) throw new Error('AnkiConnect returned a note that was not asked for. Nothing was kept.');
-        if (note.profile !== undefined && note.profile !== paired.profile) throw new ProfileMismatch(`AnkiConnect answered from the profile "${String(note.profile)}". Open the paired profile "${paired.profile}" or re-pair in Settings.`);
+        // Both supported AnkiConnect builds return the profile with each note; a note without one is not trusted.
+        if (note.profile !== paired.profile) throw new ProfileMismatch(`AnkiConnect answered from the profile "${String(note.profile)}". Open the paired profile "${paired.profile}" or re-pair in Settings.`);
         byId.set(note.noteId as number, note);
       }
       for (const card of batch) {
         const note = byId.get(card.noteId);
         if (!note) { missing++; continue; }
         const lh = record(note.fields) ? note.fields.LH_ID : undefined;
-        const lhValue = record(lh) && typeof lh.value === 'string' ? lh.value.trim() : undefined;
+        const lhValue = record(lh) && typeof lh.value === 'string' ? lh.value : undefined;
         // The note must still be the bridge's note type and carry this card's delivery ID.
         if (note.modelName !== MODEL_NAME || lhValue !== card.id) { changed++; continue; }
         owned.push({ card, tags: note.tags as string[], cardIds: note.cards as number[] });
@@ -156,26 +164,40 @@ export class ReviewService {
 
     // Cards of owned notes only.
     const wanted = [...new Set(owned.flatMap(o => o.cardIds))];
-    const infos = new Map<number, CardInfo & { note: number }>();
-    for (const batch of chunks(wanted, REVIEW_BATCH.cards)) {
-      const result = await this.retry(() => reader.call<Record<string, unknown>[]>('cardsInfo', { cards: batch }));
+    const ownerOf = new Map(owned.flatMap(o => o.cardIds.map(id => [id, o.card.noteId] as const)));
+    /** cardsInfo for one batch, keeping only cards that still exist and belong to the note that listed them. */
+    const readCards = async (batch: number[]) => {
+      const result = await this.retry(() => reader.call<Record<string, unknown>[]>('cardsInfo', { cards: batch }), guard);
       await guard();
       if (result.length !== batch.length) throw new Error('AnkiConnect returned an unexpected number of cards. Nothing was kept.');
+      const found: (CardInfo & { note: number })[] = [];
       for (const info of result) {
         if (!Object.keys(info).length) continue;
         const cardId = info.cardId as number;
         if (!batch.includes(cardId)) throw new Error('AnkiConnect returned a card that was not asked for. Nothing was kept.');
-        infos.set(cardId, { cardId, note: info.note as number, lapses: info.lapses as number, reps: info.reps as number, queue: info.queue as number, deckName: info.deckName as string });
+        if (info.note !== ownerOf.get(cardId)) continue;
+        found.push({ cardId, note: info.note as number, lapses: info.lapses as number, reps: info.reps as number, queue: info.queue as number, deckName: info.deckName as string });
       }
-    }
-    const present = owned.map(o => ({ ...o, cards: o.cardIds.map(id => infos.get(id)).filter((c): c is CardInfo & { note: number } => !!c && c.note === o.card.noteId) }));
-    const readable = present.filter(o => o.cards.length);
-    missing += present.length - readable.length;
+      return found;
+    };
+    const infos = new Map<number, CardInfo & { note: number }>();
+    for (const batch of chunks(wanted, REVIEW_BATCH.cards)) for (const info of await readCards(batch)) infos.set(info.cardId, info);
 
-    // Review logs, only for cards cardsInfo just confirmed.
+    // Review logs, only for cards cardsInfo just confirmed. A card deleted since then (notFound on
+    // 26.10.11.0) drops out: re-read cardsInfo for the batch and retry history for what is left.
     const reviews = new Map<number, ReviewRow[]>();
-    for (const batch of chunks(readable.flatMap(o => o.cards.map(c => c.cardId)), REVIEW_BATCH.reviews)) {
-      const result = await this.retry(() => reader.call<Record<string, ReviewRow[]>>('getReviewsOfCards', { cards: batch }));
+    const confirmed = owned.flatMap(o => o.cardIds.filter(id => infos.has(id)));
+    for (let batch of chunks(confirmed, REVIEW_BATCH.reviews)) {
+      let result: Record<string, ReviewRow[]>;
+      try { result = await reader.call<Record<string, ReviewRow[]>>('getReviewsOfCards', { cards: batch }); }
+      catch (error) {
+        if (!retryable(error)) throw error;
+        await guard();
+        const still = new Set((await readCards(batch)).map(c => c.cardId));
+        for (const id of batch) if (!still.has(id)) infos.delete(id);
+        batch = batch.filter(id => still.has(id));
+        result = batch.length ? await reader.call<Record<string, ReviewRow[]>>('getReviewsOfCards', { cards: batch }) : {};
+      }
       await guard();
       for (const [id, rows] of Object.entries(result)) {
         const cardId = Number(id);
@@ -183,6 +205,10 @@ export class ReviewService {
         reviews.set(cardId, rows.map(r => ({ id: r.id, ease: r.ease, type: r.type })));
       }
     }
+
+    const present = owned.map(o => ({ ...o, cards: o.cardIds.map(id => infos.get(id)).filter((c): c is CardInfo & { note: number } => !!c) }));
+    const readable = present.filter(o => o.cards.length);
+    missing += present.length - readable.length;
 
     const readings: NoteReading[] = readable.map(({ card, tags, cards }) => ({
       lhId: card.id, noteId: card.noteId, nodeId: card.nodeId, nodeName: card.nodeName, sessionId: card.sessionId, sessionName: card.sessionName,

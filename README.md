@@ -72,7 +72,7 @@ Open Topics to revisit from the sidebar, or from More in step 3, and press Check
 
 Each topic shows its cards with their lapses, review count, recent Again dates, leech and suspended status and deck, plus buttons to open the sessions the idea came from and to show a card in Anki. The list is a suggestion to look again, not proof that you don't know something: a card you keep missing may be badly worded, or the miss may be an ordinary slip. The thresholds are starting points and may change.
 
-Cards edited in Anki so they no longer match (a different note type or delivery ID) and cards deleted in Anki are skipped and counted under the list. Results stay in memory until you press Clear, re-pair, or close LearnHarness.
+Cards edited in Anki so they no longer match (a different note type or delivery ID) and cards deleted in Anki are skipped and counted under the list. Results stay in memory until you press Clear, re-pair, change the AnkiConnect address or key, or close LearnHarness.
 
 ## Flag replies during a lesson
 

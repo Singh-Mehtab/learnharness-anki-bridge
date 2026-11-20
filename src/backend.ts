@@ -31,9 +31,15 @@ export async function activate(ctx: PluginBackendContext): Promise<() => Promise
     await service.activate();
     if (ctx.signal.aborted) throw new Error('Anki Bridge activation was cancelled.');
     for (const name of ['snapshot', 'settings', 'connection', 'pair', 'draft', 'edit', 'approve', 'send', 'reconcile', 'presence', 'show', 'repairFields', 'updateStyling', 'drop']) {
-      handlers.push(ctx.handle(name, input => {
+      handlers.push(ctx.handle(name, async input => {
         if (name === 'settings' || name === 'pair') generation.invalidatePreflights();
-        return service.command(name, input ?? {});
+        if (name !== 'settings' && name !== 'pair') return service.command(name, input ?? {});
+        const connection = () => { const s = store.snapshot(); return JSON.stringify([s.settings.url, s.settings.apiKey, s.destination]); };
+        const before = connection();
+        const result = await service.command(name, input ?? {});
+        // Review results belong to one connection: forget them on any re-pair or address/key change.
+        if (name === 'pair' || connection() !== before) reviews.forget();
+        return result;
       }));
     }
     for (const name of GENERATION_OPERATIONS) handlers.push(ctx.handle(name, input => generation.command(name, input ?? {})));

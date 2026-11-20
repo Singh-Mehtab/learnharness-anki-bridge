@@ -22,7 +22,7 @@ The frontend calls these names through `ctx.call`. Inputs and outputs are JSON-c
 | `repairFields` | none | Adds missing fields only; never reorders fields or replaces templates |
 | `updateStyling` | `{confirmed: true}` | Replaces owned styling/templates after the UI's explicit warning |
 | `checkReviews` | `{expectedDestination?: {url, profile}}` | `{check, running}`; reads review results for bridge-sent notes in the paired profile. Runs only when the user presses Check Anki reviews. |
-| `lastReviewCheck` | none | `{check, running}` from memory; no Anki request. `check` is null after re-pairing or an address change |
+| `lastReviewCheck` | none | `{check, running}` from memory; no Anki request. `check` is null after re-pairing or an address or API key change |
 | `clearReviewCheck` | none | `{check: null, running}`; forgets the in-memory result |
 
 A snapshot contains `settings: {url, lastDeck, hasApiKey}`, `destination`, `cards` and an optional activation `recoveryError`. It never returns the stored API key. Each card records its source identifiers, kind, Markdown content, status, target deck, destination and Anki note ID when available.

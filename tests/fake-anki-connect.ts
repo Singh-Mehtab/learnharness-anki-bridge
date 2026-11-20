@@ -18,7 +18,7 @@ export async function fakeAnkiConnect(options: { profile?: string | null; notes?
     /** Errors to return for every call to an action. */
     errors: new Map<string, string>(),
     /** Called after each answered request, e.g. to switch profile mid-check. */
-    after: undefined as ((action: string, params: any) => void) | undefined,
+    after: undefined as ((action: string, params: any) => void | Promise<void>) | undefined,
     delay: 0,
     requests: [] as { action: string; params: any }[],
     /** Actions outside the read-only allowlist that reached the fake. Must stay empty. */
@@ -65,7 +65,7 @@ export async function fakeAnkiConnect(options: { profile?: string | null; notes?
     if (state.errors.has(action)) error = state.errors.get(action)!;
     if (state.raw.has(action) && !error) result = state.raw.get(action);
     if (error) result = null;
-    state.after?.(action, params);
+    await state.after?.(action, params);
     res.setHeader('content-type', 'application/json');
     res.end(JSON.stringify({ result, error }));
   });
