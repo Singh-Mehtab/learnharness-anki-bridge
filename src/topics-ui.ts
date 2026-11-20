@@ -46,7 +46,7 @@ export function mountTopics(ctx: PluginFrontendContext, container: HTMLElement, 
   root.append(head, intro, privacy, actions, feedback, summary, list, footer);
   container.append(root);
 
-  let disposed = false, busy = false, stale = false, refreshPending = false;
+  let disposed = false, busy = false, stale = false, refreshPending = false, loads = 0;
   let snapshot: Snapshot | undefined, check: ReviewCheck | null = null;
   const alive = () => !disposed && !signal.aborted && !ctx.signal.aborted;
   const scope = new RenderScope(signal), barScope = new RenderScope(signal);
@@ -136,7 +136,7 @@ export function mountTopics(ctx: PluginFrontendContext, container: HTMLElement, 
   async function runCheck(): Promise<void> {
     const destination = paired();
     if (!alive() || busy || !destination) return;
-    busy = true; renderBar(); feedback.show("Reading review results from Anki…");
+    busy = true; loads++; renderBar(); feedback.show("Reading review results from Anki…");
     try {
       const answer = await ctx.call<Answer>("checkReviews", { expectedDestination: destination });
       if (!alive()) return;
@@ -147,10 +147,11 @@ export function mountTopics(ctx: PluginFrontendContext, container: HTMLElement, 
       feedback.show(message(error), "error");
       // A failed check keeps an earlier result only if the backend still has it for this profile.
       // Re-read the pairing too, so a change made elsewhere is shown before the next press.
+      const sequence = ++loads;
       try {
         const [snap, last] = await Promise.all([ctx.call<Snapshot>("snapshot"), ctx.call<Answer>("lastReviewCheck", {})]);
-        if (alive()) { snapshot = snap; check = last.check; stale = !!check; }
-      } catch { check = null; }
+        if (alive() && sequence === loads) { snapshot = snap; check = last.check; stale = !!check; }
+      } catch { if (sequence === loads) check = null; }
     } finally {
       busy = false;
       if (alive()) { renderBar(); render(); }
@@ -168,11 +169,13 @@ export function mountTopics(ctx: PluginFrontendContext, container: HTMLElement, 
   }
 
   async function load(): Promise<void> {
+    const sequence = ++loads;
     renderBar(); render();
     try {
       // Both reads are local: the saved pairing and any result already in memory. No Anki request.
       const [snap, last] = await Promise.all([ctx.call<Snapshot>("snapshot"), ctx.call<Answer>("lastReviewCheck", {})]);
-      if (!alive()) return;
+      // Overlapping reloads (resync and a Settings save) apply only the newest answer.
+      if (!alive() || sequence !== loads) return;
       snapshot = snap; check = last.check;
       if (last.running) feedback.show("A check is already running. Press Check Anki reviews again when it finishes.");
     } catch (error) { if (alive()) feedback.show(message(error), "error"); }

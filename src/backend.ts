@@ -36,7 +36,10 @@ export async function activate(ctx: PluginBackendContext): Promise<() => Promise
         if (name !== 'pair') return service.command(name, input ?? {});
         // Address, key and pairing changes clear review results at the commit (ReviewService.onCommit).
         // Re-pairing to the same profile commits no change, so forget explicitly as the README promises.
-        try { return await service.command(name, input ?? {}); } finally { reviews.forget(); }
+        // A failed pairing changed nothing, so the result and any running check are left alone.
+        const result = await service.command(name, input ?? {});
+        reviews.forget();
+        return result;
       }));
     }
     for (const name of GENERATION_OPERATIONS) handlers.push(ctx.handle(name, input => generation.command(name, input ?? {})));

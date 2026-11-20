@@ -85,5 +85,8 @@ test('S4: changing the address or API key forgets the review result, even when c
     await c.call('checkReviews');
     await c.call('settings', { url: anki.url });
     assert.ok(await last(), 'saving the same settings keeps it');
+    // Round 3 S1: a pairing attempt that fails before saving changes nothing.
+    await assert.rejects(c.call('pair', { confirmed: true, expectedDestination: destination }));
+    assert.ok(await last(), 'a failed pairing keeps the result');
   } finally { await close(); await anki.close(); await rm(directory, { recursive: true, force: true }); }
 });

@@ -50,6 +50,7 @@ async function setup(options: { paired?: boolean } = {}) {
   const calls: string[] = [], shown: unknown[] = [], sessions: string[] = [];
   let opened = "", settingsOpened = 0;
   const resyncs: (() => void)[] = [];
+  let hold: Promise<void> | undefined;
   const ctx = {
     signal: new AbortController().signal,
     cleanup: () => {},
@@ -60,7 +61,7 @@ async function setup(options: { paired?: boolean } = {}) {
     call: async (name: string, input: any) => {
       calls.push(name);
       if (["checkReviews", "lastReviewCheck", "clearReviewCheck"].includes(name)) return service.command(name, input ?? {});
-      if (name === "snapshot") { const s = store.snapshot(); return { settings: { url: s.settings.url, lastDeck: s.settings.lastDeck, hasApiKey: false, tagTemplate: "", systemTags: true }, destination: s.destination, cards: s.cards, generationSettings: s.generationSettings, generations: [] }; }
+      if (name === "snapshot") { const s = store.snapshot(); const wait = hold; if (wait) await wait; return { settings: { url: s.settings.url, lastDeck: s.settings.lastDeck, hasApiKey: false, tagTemplate: "", systemTags: true }, destination: s.destination, cards: s.cards, generationSettings: s.generationSettings, generations: [] }; }
       if (name === "show") { shown.push(input); return; }
       if (name === "coverageContext") return { nodes: [], missing: [], cardsPerNode: 2, paired: true, pairingKey: "", pairingWarning: false };
       if (name === "generationStatus") return { generationSettings: { cardsPerNode: 2, enabledKinds: ["fact"], constantValues: false, model: null }, generations: [] };
@@ -79,7 +80,7 @@ async function setup(options: { paired?: boolean } = {}) {
   const click = async (label: string | RegExp) => { const b = find(label); assert.ok(b, `button ${label}`); assert.equal(b.disabled, false, `button ${label} is enabled`); b.click(); await tick(); };
   const text = () => container.textContent as string;
   const cleanup = async () => { scope.abort(); service.close(); await store.close(); await anki.close(); await rm(directory, { recursive: true, force: true }); };
-  return { ctx, scope, resyncs, destination, anki, store, service, views, actions, calls, shown, sessions, opened: () => opened, settingsOpened: () => settingsOpened, doc, container, mount, find, click, text, cleanup };
+  return { setHold: (p: Promise<void> | undefined) => { hold = p; }, ctx, scope, resyncs, destination, anki, store, service, views, actions, calls, shown, sessions, opened: () => opened, settingsOpened: () => settingsOpened, doc, container, mount, find, click, text, cleanup };
 }
 
 test("Topics to revisit reads nothing until Check Anki reviews, then groups cards by node with evidence and links", async () => {
@@ -238,5 +239,23 @@ test("F5: a Settings save in another pane re-reads the pairing, even during a ch
     assert.match(t.text(), /paired Anki profile "Later"/);
     dispose();
     assert.equal(peers.size, 0);
+  } finally { await t.cleanup(); }
+});
+
+test("round 3 S2: an older reload that answers last does not bring back the previous pairing", async () => {
+  const t = await setup();
+  try {
+    await t.mount();
+    let release!: () => void;
+    t.setHold(new Promise<void>(resolve => { release = resolve; }));
+    for (const f of t.resyncs) f();            // reload 1 reads profile "Throwaway", then waits
+    await tick();
+    t.setHold(undefined);
+    await t.store.replace({ ...t.store.snapshot(), destination: { url: t.destination.url, profile: "Second" } });
+    for (const f of t.resyncs) f();            // reload 2 reads "Second" and answers first
+    await settle(() => /paired Anki profile "Second"/.test(t.text()));
+    release(); await tick();                   // reload 1 answers last
+    assert.match(t.text(), /paired Anki profile "Second"/);
+    assert.doesNotMatch(t.text(), /paired Anki profile "Throwaway"/);
   } finally { await t.cleanup(); }
 });
