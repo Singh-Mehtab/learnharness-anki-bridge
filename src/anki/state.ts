@@ -110,6 +110,14 @@ export function migrateState(raw: unknown): State {
   return value;
 }
 
+/** Flush a rename or link to disk. Windows refuses fsync on a directory handle
+ * (EPERM), so skip it there, as LearnHarness does for its own stores. */
+export async function syncDirectory(directory: string, platform: NodeJS.Platform = process.platform): Promise<void> {
+  if (platform === 'win32') return;
+  const dir = await open(directory, 'r');
+  try { await dir.sync(); } finally { await dir.close(); }
+}
+
 /** Keep the original bytes before upgrading. Never replace an earlier backup. */
 async function backUpBeforeMigration(directory: string, version: number, original: Buffer): Promise<void> {
   const backup = path.join(directory, `state.v${version}.bak`);
@@ -125,8 +133,7 @@ async function backUpBeforeMigration(directory: string, version: number, origina
         throw new Error(`The existing state.v${version}.bak differs from state.json. Move that backup to a safe place before upgrading. Neither file was changed.`);
       }
     }
-    const dir = await open(directory, 'r');
-    try { await dir.sync(); } finally { await dir.close(); }
+    await syncDirectory(directory);
   } finally { await unlink(temporary); }
 }
 
@@ -227,8 +234,7 @@ export class StateStore {
       // Rename is the commit point. Never use the old in-memory state after it.
       this.value = next;
       for (const listener of this.commits) listener(next);
-      const dir = await open(this.directory, 'r');
-      try { await dir.sync(); } finally { await dir.close(); }
+      await syncDirectory(this.directory);
     } finally { await unlink(temporary).catch((e: NodeJS.ErrnoException) => { if (e.code !== 'ENOENT') throw e; }); }
   }
   async close(): Promise<void> {
