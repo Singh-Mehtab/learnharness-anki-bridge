@@ -2,7 +2,7 @@
 // Nothing is read from Anki until the user presses Check Anki reviews.
 import type { Peers } from "./settings-ui.ts";
 import type { PluginFrontendContext } from "../sdk/index.d.ts";
-import type { CardEvidence, ReviewCheck, Topic } from "./reviews/signals.ts";
+import type { CardEvidence, ReviewCheck, Topic, TopicSession } from "./reviews/signals.ts";
 import type { Destination } from "./settings-ui.ts";
 import { button, confirmDialog, el, pill, plural, RenderScope, status } from "./ui.ts";
 
@@ -32,6 +32,27 @@ export function cardEvidence(c: CardEvidence): string {
 
 const REASON: Record<CardEvidence["reasons"][number], string> = { lapses: "3+ lapses", again: "2+ Again in 30 days", leech: "Leech" };
 
+/** Count distinct destinations across the whole results list, not repeated links to the same session. */
+function sessionButtonName(topics: Topic[]): (session: TopicSession) => string {
+  const byTitle = new Map<string, Map<string, string>>();
+  const title = (session: TopicSession) => session.name.trim().replace(/\s+/g, " ") || "Session";
+  for (const { sessions } of topics) for (const session of sessions) {
+    const name = title(session);
+    const dates = byTitle.get(name) ?? new Map<string, string>();
+    const created = new Date(session.createdAt ?? "");
+    dates.set(session.id, Number.isNaN(created.getTime()) ? "" : created.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" }));
+    byTitle.set(name, dates);
+  }
+  return session => {
+    const name = title(session), dates = byTitle.get(name)!;
+    const label = `Open session: ${name}`;
+    if (dates.size < 2) return label;
+    const created = dates.get(session.id);
+    const unique = created && [...dates.values()].filter(date => date === created).length === 1;
+    return `${label} (${unique ? `created ${created}` : `ID ${session.id}`})`;
+  };
+}
+
 export function mountTopics(ctx: PluginFrontendContext, container: HTMLElement, signal: AbortSignal, peers: Peers = new Set(), actions: HTMLElement = el("div")): () => void {
   const root = el("div", undefined, "ab-topics");
   const intro = el("p", undefined, "ab-muted ab-topics-intro");
@@ -54,8 +75,9 @@ export function mountTopics(ctx: PluginFrontendContext, container: HTMLElement, 
     const s = barScope.reset();
     actions.replaceChildren();
     const destination = paired();
-    const criteria = "Ideas whose cards have 3+ lapses, 2+ Again presses in 30 days, or a leech tag.";
-    intro.textContent = `${criteria} ${destination ? `Checks profile "${destination.profile}".` : "Connect to Anki in settings first."}`;
+    const criteria = "Checks only cards sent by Bridge. Lists cards with 3+ lapses, 2+ Again presses in 30 days, or a leech tag. Again counts in review and relearning, not initial learning. Results are kept in memory only.";
+    const profile = destination ? (check ? "" : ` Paired profile: "${destination.profile}".`) : " Pair an Anki profile in Settings first.";
+    intro.textContent = criteria + profile;
     if (check) button(ctx, actions, s, { label: "Clear", variant: "ghost", disabled: busy, onClick: () => void clear() });
     if (!destination) button(ctx, actions, s, { label: "Open settings", onClick: () => ctx.app.openSettings() });
     button(ctx, actions, s, { label: busy ? "Checking…" : "Check Anki reviews", variant: "default", disabled: busy || !destination, onClick: () => void runCheck() });
@@ -69,7 +91,8 @@ export function mountTopics(ctx: PluginFrontendContext, container: HTMLElement, 
     summary.textContent = `${stale ? "Last checked" : "Checked"} at ${time(check.checkedAt)} in "${check.destination.profile}". ${plural(c.checked, "card")} read.${stale ? " May be out of date." : ""}`;
     if (!c.sent) list.append(el("p", "No cards sent to this profile yet.", "ab-empty"));
     else if (!check.topics.length) list.append(el("p", c.checked ? "No review signals found." : "No cards could be checked.", "ab-empty"));
-    for (const topic of check.topics) list.append(renderTopic(topic, s));
+    const sessionName = sessionButtonName(check.topics);
+    for (const topic of check.topics) list.append(renderTopic(topic, s, sessionName));
     const notes: string[] = [];
     if (c.quietTopics) notes.push(`Nothing flagged in ${plural(c.quietTopics, "other topic")}.`);
     if (c.notReviewed) notes.push(`${plural(c.notReviewed, "card")} not reviewed yet.`);
@@ -78,7 +101,7 @@ export function mountTopics(ctx: PluginFrontendContext, container: HTMLElement, 
     footer.textContent = notes.join(" ");
   }
 
-  function renderTopic(topic: Topic, s: AbortSignal): HTMLElement {
+  function renderTopic(topic: Topic, s: AbortSignal, sessionName: (session: TopicSession) => string): HTMLElement {
     const section = el("section", undefined, "ab-card ab-topic");
     section.dataset.nodeId = topic.nodeId;
     const headRow = el("header", undefined, "ab-card-head");
@@ -95,7 +118,16 @@ export function mountTopics(ctx: PluginFrontendContext, container: HTMLElement, 
     for (const session of topic.sessions) {
       const row = el("div", undefined, "ab-actions ab-topic-sessions");
       row.append(el("span", `From ${session.name}`, "ab-muted"));
-      button(ctx, row, s, { label: "Open session", variant: "default", onClick: () => ctx.app.openSession(session.id) });
+      const { root } = button(ctx, row, s, { label: "Open session", variant: "default", onClick: () => ctx.app.openSession(session.id) });
+      // The host only supports a separate accessible label for icon-only buttons.
+      // Its visible button may be committed asynchronously, so watch this wrapper.
+      const name = sessionName(session);
+      const nameButton = () => root.querySelector("button")?.setAttribute("aria-label", name);
+      const Observer = root.ownerDocument.defaultView!.MutationObserver;
+      const observer = new Observer(nameButton);
+      observer.observe(root, { childList: true, subtree: true });
+      s.addEventListener("abort", () => observer.disconnect(), { once: true });
+      nameButton();
       body.append(row);
     }
     for (const card of topic.cards) body.append(renderCard(card, s));

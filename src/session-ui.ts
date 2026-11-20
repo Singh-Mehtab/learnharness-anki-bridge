@@ -172,6 +172,7 @@ export function registerSessionActions(ctx: PluginFrontendContext, requests: Ses
 export interface SourceOptions {
   requests: SessionRequests;
   drafting: Pick<DraftingHandle, "setScope" | "refresh">;
+  onRequested?: () => void;
 }
 export interface SourceHandle {
   (): void;
@@ -285,7 +286,12 @@ export function mountSources(ctx: PluginFrontendContext, container: HTMLElement,
   }
 
   const unsubscribers = [
-    options.requests.subscribe(id => { options.requests.take(); if (busy) refreshPending = true; choose(id); }),
+    options.requests.subscribe(id => {
+      if (!alive()) return;
+      options.requests.take();
+      options.onRequested?.();
+      choose(id);
+    }),
     ctx.onResync(() => { if (busy) refreshPending = true; else void run(load, true); }),
     // Extraction has no completion event. Phase changes are a hint to re-check
     // waiting flags; Refresh remains the reliable path.
@@ -294,7 +300,10 @@ export function mountSources(ctx: PluginFrontendContext, container: HTMLElement,
       if (list?.unresolved.some(f => f.status === "waiting") || flow?.flags.some(f => f.status === "waiting")) scheduleRefresh();
     }),
   ];
-  if (sessionId) void options.drafting.setScope({ sessionId });
+  if (sessionId !== undefined) {
+    options.onRequested?.();
+    void options.drafting.setScope({ sessionId });
+  }
   void run(load);
   return Object.assign(() => { disposed = true; clearTimeout(refreshTimer); noteScope.abort(); for (const u of unsubscribers) u(); root.remove(); }, {
     refresh: async () => {

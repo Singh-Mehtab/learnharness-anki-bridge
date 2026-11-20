@@ -23,7 +23,7 @@ export interface CardEvidence {
   lapses: number; reps: number; recentAgain: number[]; leech: boolean; suspended: boolean; decks: string[];
   reasons: Reason[];
 }
-export interface TopicSession { id: string; name: string }
+export interface TopicSession { id: string; name: string; createdAt?: string }
 export interface Topic {
   nodeId: string; nodeName: string;
   /** null when the graph could not be read. */

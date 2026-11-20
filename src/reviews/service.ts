@@ -13,7 +13,10 @@ export const REVIEW_OPERATIONS = ['checkReviews', 'lastReviewCheck', 'clearRevie
 /** Unmeasured guesses. cardsInfo is the heaviest call on 26.10.11.0, which renders each card. */
 export const REVIEW_BATCH = { notes: 50, cards: 25, reviews: 50 } as const;
 
-interface GraphSource { graph(): { propositions: readonly { id: string }[]; nodeSessions: Record<string, string[]>; sessions: Record<string, string> } }
+interface GraphSource {
+  graph(): { propositions: readonly { id: string }[]; nodeSessions: Record<string, string[]>; sessions: Record<string, string> };
+  listSessions?(): readonly { id: string; createdAt: string }[];
+}
 const record = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 const chunks = <T>(items: readonly T[], size: number): T[][] => Array.from({ length: Math.ceil(items.length / size) }, (_, i) => items.slice(i * size, i * size + size));
 
@@ -244,6 +247,24 @@ export class ReviewService {
       graph = { nodes: new Set(g.propositions.map(n => n.id)), nodeSessions: g.nodeSessions ?? {}, sessions: g.sessions ?? {} };
     } catch { graph = null; }
     const built = buildTopics(readings, now, graph);
+    const links = built.topics.flatMap(t => t.sessions);
+    const linksByTitle = new Map<string, string>();
+    const sameTitle = links.some(({ id, name }) => {
+      const title = name.trim().replace(/\s+/g, ' ') || 'Session';
+      const previous = linksByTitle.get(title);
+      linksByTitle.set(title, id);
+      return previous !== undefined && previous !== id;
+    });
+    if (sameTitle) {
+      // Only same-title links need local session dates to avoid relying on raw IDs.
+      try {
+        const dates = new Map(this.learning.listSessions?.().map(s => [s.id, s.createdAt]));
+        for (const link of links) {
+          const createdAt = dates.get(link.id);
+          if (createdAt) link.createdAt = createdAt;
+        }
+      } catch { /* Session links still work without dates. */ }
+    }
     this.active();
     const destination: Destination = { ...paired };
     return { checkedAt: now, destination, rules: REVIEW_RULES, topics: built.topics,

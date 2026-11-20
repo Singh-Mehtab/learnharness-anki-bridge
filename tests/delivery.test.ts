@@ -225,6 +225,24 @@ test('a send fences competing sends, edits, pairing and settings', async () => {
   } finally { release?.(); await f.close(); }
 });
 
+test('edit errors distinguish unconfirmed, confirmed and dropped cards', async () => {
+  const f = await fixture();
+  try {
+    await f.pair();
+    const id = await f.draft(); await f.approve([id]);
+    const dropped = await f.draft('Another front');
+    await f.service.command('drop', { ids: [dropped] });
+    const edit = (id: string) => f.service.command('edit', { id, front: 'Overwrite', back: 'New answer' });
+    await assert.rejects(edit(dropped), { message: 'Dropped cards cannot be edited.' });
+
+    f.dropAfterAdd(); await assert.rejects(f.send([id]));
+    await assert.rejects(edit(id), { message: 'Cards with an unconfirmed send cannot be edited. Check unconfirmed sends first.' });
+    await f.service.command('reconcile');
+    await assert.rejects(edit(id), { message: 'This card was sent and cannot be edited here. Edit it in Anki.' });
+    assert.deepEqual(f.snap().cards.map(c => c.status), ['sent', 'dropped']);
+  } finally { await f.close(); }
+});
+
 test('editing invalidates approval and API key is not exposed in snapshots', async () => {
   const f = await fixture();
   try {

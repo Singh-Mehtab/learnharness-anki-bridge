@@ -588,11 +588,14 @@ test("approving all drafts and dropping all unsent cards need confirmation", asy
   const f = await setup({ state });
   try {
     f.button("Approve all drafts (2)").click(); await tick();
+    assert.match(f.dialog()!.textContent!, /Check the answers before approving these 2 drafts\./);
+    assert.match(f.dialog()!.textContent!, /Approving does not send cards to Anki\./);
     f.button("Cancel", f.dialog()!).click(); await tick();
     assert.equal(f.calls.some(c => c.name === "approve"), false);
     f.button("Approve all drafts (2)").click(); await tick();
     f.button("Approve", f.dialog()!).click(); await tick();
     assert.deepEqual(f.calls.find(c => c.name === "approve")!.input, { ids: ["a", "b"] });
+    assert.equal(f.calls.some(c => c.name === "send"), false);
     await f.more("Drop all unsent cards (2)"); await tick();
     f.button("Drop cards", f.dialog()!).click(); await tick();
     assert.deepEqual(f.calls.find(c => c.name === "drop")!.input, { ids: ["a", "b"] });
@@ -1028,11 +1031,13 @@ test("Download .apkg works unpaired, saves the package, keeps cards approved and
     const panel = f.container.querySelector(".ab-sent")!;
     assert.equal(panel.getAttribute("data-kind"), "download");
     assert.match(panel.textContent!, /Download requested: anki-bridge-synthetic-deck\.apkg, 2 cards/);
-    assert.match(panel.textContent!, /Saved, not sent\. Open the file in Anki to import it/);
+    assert.match(panel.textContent!, /Cards stay approved in Bridge and can still be sent\. Open the file in Anki to import it/);
+    assert.doesNotMatch(panel.textContent!, /\bSaved\b/);
     assert.match(panel.textContent!, /Importing may duplicate cards already in Anki or update notes from an earlier package/);
     assert.doesNotMatch(panel.textContent!, /sent to Anki/);
     assert.equal(f.calls.some(c => c.name === "send"), false, "a download never sends");
     assert.deepEqual(Array.from(f.review().querySelectorAll(".ab-card")).map(c => c.getAttribute("data-status")), ["approved", "draft", "failed"], "nothing marked sent");
+    assert.equal(f.button(/^Send 2 cards to Anki/).disabled, false, "the same cards remain available for sending once paired");
     f.button("Download again", panel).click(); await settle(2);
     assert.equal(saved.length, 2);
     assert.equal(f.calls.filter(c => c.name === "exportPackage").length, 1, "the same file again, without a new export");

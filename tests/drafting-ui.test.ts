@@ -130,6 +130,8 @@ test("writing needs a selection, defaults to the cheap model, confirms the estim
     f.button("Write cards for 1 idea").click(); await tick();
     assert.ok(f.dialog(), "estimate dialog opens");
     assert.match(f.dialog()!.textContent!, /Up to 2.*writer \(cheap model\).*Model calls1, up to 3 with fixes.*CostNo estimate/s);
+    const sent = [...f.dialog()!.querySelectorAll("dt")].find(term => term.textContent === "Sent to the model");
+    assert.equal(sent?.nextElementSibling?.textContent, "Ideas, linked ideas, excerpts from source session messages, flag notes, and existing cards for these ideas");
     assert.equal(f.calls.some(c => c.name === "generate"), false);
     f.button("Start writing").click(); await tick();
     assert.deepEqual(f.calls.filter(c => c.name === "generate").map(c => c.input), [{ preflightId: "p1" }]);

@@ -234,7 +234,9 @@ export class DeliveryService {
         await this.save(s => { s.cards.push(card); });
       } else if (name === 'edit') {
         const card = this.card(value.id);
-        if (card.noteId || ['sent', 'sending', 'dropped'].includes(card.status)) throw new Error('Sent cards cannot be edited here. Edit them in Anki.');
+        if (card.status === 'sending') throw new Error('Cards with an unconfirmed send cannot be edited. Check unconfirmed sends first.');
+        if (card.status === 'dropped') throw new Error('Dropped cards cannot be edited.');
+        if (card.status === 'sent' || card.noteId !== undefined) throw new Error('This card was sent and cannot be edited here. Edit it in Anki.');
         const front = requiredText(value.front, 'Front'), back = requiredText(value.back, 'Back'), extra = optionalText(value.extra, 'Extra');
         renderMarkdown(front); renderMarkdown(back); renderMarkdown(extra);
         await this.patchCard(card.id, { front, back, extra, status: 'draft', lastError: undefined });

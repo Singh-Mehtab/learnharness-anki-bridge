@@ -13,7 +13,7 @@ import { REVIEW_READ_ACTIONS } from "../src/anki/review-reader.ts";
 import { ReviewService } from "../src/reviews/service.ts";
 import type { PluginAction, PluginActionContext, PluginFrontendContext, PluginView } from "../sdk/index.d.ts";
 import { fakeAnkiConnect } from "./fake-anki-connect.ts";
-import { fakeUi } from "./fake-ui.ts";
+import { delayedButtons, fakeUi } from "./fake-ui.ts";
 
 const DAY = 86_400_000;
 const NOW = Date.UTC(2026, 10, 20, 12);
@@ -21,7 +21,7 @@ const tick = async () => { for (let i = 0; i < 8; i++) await new Promise<void>(r
 const settle = async (until: () => boolean) => { for (let i = 0; i < 200 && !until(); i++) await new Promise<void>(r => setTimeout(r, 5)); };
 
 /** Real ReviewService and a fake AnkiConnect behind a fake host, so the page drives the actual backend. */
-async function setup(options: { paired?: boolean } = {}) {
+async function setup(options: { paired?: boolean; deferSessionButtons?: boolean; duplicateSessionTitles?: boolean } = {}) {
   const directory = await mkdtemp(path.join(os.tmpdir(), "anki-bridge-topics-ui-"));
   const ids = [randomUUID(), randomUUID(), randomUUID(), randomUUID()];
   const anki = await fakeAnkiConnect({ notes: [
@@ -40,8 +40,16 @@ async function setup(options: { paired?: boolean } = {}) {
   const state: State = { ...initialState(), settings: { url: anki.url, apiKey: "", lastDeck: "Scratch" }, destination: options.paired === false ? null : destination,
     cards: [card(0, "node-r", "Nuclear radius", "What is $R_0$?"), card(1, "node-f", "Femto prefix", "What does femto denote?", "chat-2"), card(2, "node-x", "Gone", "Deleted"), card(3, "node-y", "Changed", "Edited")] };
   await store.replace(state);
-  const graph = () => ({ propositions: [{ id: "node-r" }, { id: "node-f" }], nodeSessions: { "node-r": ["chat-1"] }, sessions: { "chat-1": "Nuclear lecture", "chat-2": "Prefixes workshop" } });
-  const service = new ReviewService({ graph }, store, { timeoutMs: 1500, now: () => NOW });
+  const graph = () => ({
+    propositions: [{ id: "node-r" }, { id: "node-f" }],
+    nodeSessions: { "node-r": options.duplicateSessionTitles ? ["chat-1", "chat-3", "chat-4"] : ["chat-1"], "node-f": options.duplicateSessionTitles ? ["chat-5"] : [] },
+    sessions: { "chat-1": "Nuclear lecture", "chat-2": options.duplicateSessionTitles ? "Nuclear lecture" : "Prefixes workshop", "chat-3": "Nuclear  lecture" },
+  });
+  const listSessions = () => [
+    { id: "chat-1", createdAt: "2026-11-18T09:00:00Z" },
+    { id: "chat-2", createdAt: "2026-11-19T09:00:00Z" },
+  ];
+  const service = new ReviewService({ graph, listSessions }, store, { timeoutMs: 1500, now: () => NOW });
 
   const window = new Window();
   Object.assign(globalThis, { document: window.document });
@@ -49,19 +57,32 @@ async function setup(options: { paired?: boolean } = {}) {
   const actions = new Map<string, PluginAction>();
   const calls: string[] = [], shown: unknown[] = [], sessions: string[] = [], sessionReads: string[] = [];
   let opened = "", settingsOpened = 0;
+  let mountSettings: PluginView["mount"];
+  let tagTemplate = "";
   const resyncs: (() => void)[] = [];
   let hold: Promise<void> | undefined;
+  const buttons = delayedButtons();
+  const ui = fakeUi();
+  const mountButton = ui.mountButton as PluginFrontendContext["ui"]["mountButton"];
+  if (options.deferSessionButtons) {
+    ui.mountButton = ((container, props, options) => (props.label === "Open session" ? buttons.mountButton : mountButton)(container, props, options)) satisfies typeof mountButton;
+  }
   const ctx = {
     signal: new AbortController().signal,
     cleanup: () => {},
     registerView: (v: PluginView) => { views.set(v.id, v); return () => {}; },
     registerAction: (a: PluginAction) => { actions.set(a.id, a); return () => {}; },
-    placeAction: () => () => {}, onAppEvent: () => () => {}, onResync: (f: () => void) => { resyncs.push(f); return () => {}; }, registerSettings: () => () => {},
+    placeAction: () => () => {}, onAppEvent: () => () => {}, onResync: (f: () => void) => { resyncs.push(f); return () => { resyncs.splice(resyncs.indexOf(f), 1); }; },
+    registerSettings: (mount: PluginView["mount"]) => { mountSettings = mount; return () => {}; },
     app: { openView: (id: string) => { opened = id; }, openSettings: () => { settingsOpened++; }, openSession: (id: string) => { sessions.push(id); } },
     call: async (name: string, input: any) => {
       calls.push(name);
       if (["checkReviews", "lastReviewCheck", "clearReviewCheck"].includes(name)) return service.command(name, input ?? {});
-      if (name === "snapshot") { const s = store.snapshot(); const wait = hold; if (wait) await wait; return { settings: { url: s.settings.url, lastDeck: s.settings.lastDeck, hasApiKey: false, tagTemplate: "", systemTags: true }, destination: s.destination, cards: s.cards, generationSettings: s.generationSettings, generations: [] }; }
+      if (name === "snapshot" || name === "settings") {
+        if (name === "settings") tagTemplate = input.tagTemplate;
+        const s = store.snapshot(); const wait = hold; if (wait) await wait;
+        return { settings: { url: s.settings.url, lastDeck: s.settings.lastDeck, hasApiKey: false, tagTemplate, systemTags: true }, destination: s.destination, cards: s.cards, generationSettings: s.generationSettings, generations: [] };
+      }
       if (name === "show") { shown.push(input); return; }
       if (name === "coverageContext") return { nodes: [], missing: [], cardsPerNode: 2, paired: true, pairingKey: "", pairingWarning: false };
       if (name === "generationStatus") return { generationSettings: { cardsPerNode: 2, enabledKinds: ["fact"], constantValues: false, model: null }, generations: [] };
@@ -72,10 +93,13 @@ async function setup(options: { paired?: boolean } = {}) {
           { id: "node-r", name: "Nuclear radius", statement: "Nuclear radius varies with mass number.", flagged: true, cards: { waiting: 0, sent: 0, sentElsewhere: 0 } },
         ], flags: [{ status: "matched", note: "Review the scaling law", flaggedAt: "2026-11-20T08:00:00Z", nodeIds: ["node-r"] }], cardsPerNode: 2, paired: true };
       }
-      if (name === "connection") return { profile: "Throwaway", decks: ["Scratch"], tags: [] };
+      if (name === "connection") {
+        const profile = store.snapshot().destination?.profile ?? null;
+        return { profile, decks: [profile === "Throwaway" ? "Scratch" : `${profile} deck`], tags: ["study"] };
+      }
       throw new Error(`unexpected call ${name}`);
     },
-    ui: fakeUi(),
+    ui,
   } as unknown as PluginFrontendContext;
   activate(ctx);
   const doc = window.document as any;
@@ -84,18 +108,30 @@ async function setup(options: { paired?: boolean } = {}) {
   const tab = (label: string) => Array.from(container.querySelectorAll('[role="tab"]') as ArrayLike<HTMLButtonElement>).find(b => b.textContent === label)!;
   const panel = (label: string) => doc.getElementById(tab(label).getAttribute("aria-controls")) as HTMLElement;
   const openReviews = async () => { tab("Check Anki reviews").click(); await tick(); };
-  const mount = async () => { const dispose = await views.get("bridge")!.mount(container, scope.signal); await tick(); return dispose; };
+  const mount = async () => {
+    const viewScope = new AbortController();
+    const dispose = await views.get("bridge")!.mount(container, AbortSignal.any([scope.signal, viewScope.signal]));
+    await tick();
+    return () => { viewScope.abort(); dispose?.(); };
+  };
   const mountReviews = async () => { const dispose = await mount(); await openReviews(); return dispose; };
+  const openSettings = async () => {
+    const host = doc.createElement("div") as HTMLElement;
+    doc.body.append(host);
+    const dispose = await mountSettings(host, scope.signal);
+    await tick();
+    return { host, dispose: () => { dispose?.(); host.remove(); } };
+  };
   const reviewRoot = () => tab("Check Anki reviews") ? panel("Check Anki reviews") : container as HTMLElement;
   const find = (label: string | RegExp) => Array.from(reviewRoot().querySelectorAll("button")).find(b => typeof label === "string" ? b.textContent === label : label.test(b.textContent ?? ""));
   const click = async (label: string | RegExp) => { const b = find(label); assert.ok(b, `button ${label}`); assert.equal(b.disabled, false, `button ${label} is enabled`); b.click(); await tick(); };
   const text = () => reviewRoot().textContent!;
   const cleanup = async () => { scope.abort(); service.close(); await store.close(); await anki.close(); await rm(directory, { recursive: true, force: true }); };
-  return { setHold: (p: Promise<void> | undefined) => { hold = p; }, ctx, scope, resyncs, destination, anki, store, service, views, actions, calls, shown, sessions, sessionReads, opened: () => opened, settingsOpened: () => settingsOpened, doc, container, window, tab, panel, openReviews, mount, mountReviews, find, click, text, cleanup };
+  return { commitButtons: buttons.commitButtons, setHold: (p: Promise<void> | undefined) => { hold = p; }, ctx, scope, resyncs, destination, anki, store, service, views, actions, calls, shown, sessions, sessionReads, opened: () => opened, settingsOpened: () => settingsOpened, doc, container, window, tab, panel, openReviews, openSettings, mount, mountReviews, find, click, text, cleanup };
 }
 
 test("Topics to revisit reads nothing until Check Anki reviews, then groups cards by node with evidence and links", async () => {
-  const t = await setup();
+  const t = await setup({ deferSessionButtons: true });
   try {
     assert.deepEqual([...t.views.keys()], ["bridge"]);
     assert.equal(t.actions.has("open-topics"), false);
@@ -108,8 +144,11 @@ test("Topics to revisit reads nothing until Check Anki reviews, then groups card
     assert.equal(t.panel("Make cards").hidden, true);
     assert.equal(t.panel("Check Anki reviews").hidden, false);
     assert.match(t.text(), /Not checked yet\./);
-    assert.match(t.text(), /Checks profile "Throwaway"/);
-    assert.match(t.text(), /3\+ lapses, 2\+ Again presses in 30 days, or a leech tag/);
+    assert.match(t.text(), /Paired profile: "Throwaway"/);
+    assert.match(t.text(), /Checks only cards sent by Bridge\./);
+    assert.match(t.text(), /Lists cards with 3\+ lapses, 2\+ Again presses in 30 days, or a leech tag/);
+    assert.match(t.text(), /Again counts in review and relearning, not initial learning/);
+    assert.match(t.text(), /Results are kept in memory only/);
     assert.equal(t.anki.state.requests.length, 0, "switching tabs sends no review read");
     assert.ok(!t.calls.includes("checkReviews"));
 
@@ -130,11 +169,16 @@ test("Topics to revisit reads nothing until Check Anki reviews, then groups card
     assert.match(t.text(), /Skipped 1 card with a different note type or delivery ID\./);
     assert.match(t.text(), /Checked at .* in "Throwaway"\. 2 cards read\./);
 
+    assert.doesNotMatch(t.text(), /Paired profile:/, "the checked profile already appears in the summary");
+
+    assert.equal(t.find("Open session"), undefined, "the host has not committed these buttons yet");
+    t.commitButtons(); await tick();
     for (const [topic, session] of [[topics[1]!, "Nuclear lecture"], [topics[0]!, "Prefixes workshop"]] as const) {
       const row = topic.querySelector(".ab-topic-sessions")!;
       assert.equal(row.querySelector("span")!.textContent, `From ${session}`);
       const open = row.querySelector("button")!;
       assert.equal(open.textContent, "Open session");
+      assert.equal(open.getAttribute("aria-label"), `Open session: ${session}`);
       open.click(); await tick();
     }
     assert.deepEqual(t.sessions, ["chat-1", "chat-2"]);
@@ -156,6 +200,29 @@ test("Topics to revisit reads nothing until Check Anki reviews, then groups card
     confirm.click(); await settle(() => !t.container.querySelector(".ab-topic"));
     assert.match(t.text(), /Not checked yet/);
     assert.equal((await t.service.command("lastReviewCheck")).check, null);
+  } finally { await t.cleanup(); }
+});
+
+test("asynchronously mounted session buttons distinguish same-title and untitled destinations", async () => {
+  const t = await setup({ duplicateSessionTitles: true, deferSessionButtons: true });
+  try {
+    await t.mountReviews();
+    await t.click("Check Anki reviews");
+    await settle(() => t.container.querySelectorAll(".ab-topic-sessions").length === 5);
+    const rows = Array.from(t.container.querySelectorAll(".ab-topic-sessions") as ArrayLike<HTMLElement>);
+    assert.deepEqual(rows.map(row => row.querySelector("span")?.textContent), [
+      "From Nuclear lecture", "From Session", "From Nuclear lecture", "From Nuclear  lecture", "From Session",
+    ]);
+    assert.equal(t.find("Open session"), undefined, "the host has not mounted the actual buttons");
+    t.commitButtons(); await tick();
+    const buttons = rows.map(row => row.querySelector("button")!);
+    const date = (day: number) => new Date(Date.UTC(2026, 10, day, 9)).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+    assert.deepEqual(buttons.map(b => b.getAttribute("aria-label")), [
+      `Open session: Nuclear lecture (created ${date(19)})`, "Open session: Session (ID chat-5)",
+      `Open session: Nuclear lecture (created ${date(18)})`, "Open session: Nuclear lecture (ID chat-3)", "Open session: Session (ID chat-4)",
+    ]);
+    for (const b of buttons) { assert.equal(b.textContent, "Open session"); b.click(); }
+    assert.deepEqual(t.sessions, ["chat-2", "chat-5", "chat-1", "chat-3", "chat-4"]);
   } finally { await t.cleanup(); }
 });
 
@@ -219,7 +286,7 @@ test("without a pairing the check is unavailable and points to settings", async 
   try {
     await t.mountReviews();
     assert.equal(t.find("Check Anki reviews")!.disabled, true);
-    assert.match(t.text(), /Connect to Anki in settings first/);
+    assert.match(t.text(), /Pair an Anki profile in Settings first/);
     await t.click("Open settings");
     assert.equal(t.settingsOpened(), 1);
     assert.equal(t.anki.state.requests.length, 0);
@@ -278,6 +345,87 @@ test("switching tabs preserves card filters and review results without another r
   } finally { await t.cleanup(); }
 });
 
+test("restoring Check Anki reviews defers Make cards' connection reads through resync and Settings saves", async () => {
+  const t = await setup();
+  const reads = () => t.calls.filter(call => call === "connection").length;
+  try {
+    const unmountFirst = await t.mountReviews();
+    assert.equal(reads(), 1, "the default Make cards tab is initially visible");
+    unmountFirst();
+    t.calls.length = 0;
+    const unmount = await t.mount();
+    const cards = t.panel("Make cards");
+    assert.equal(cards.hidden, true);
+    assert.equal(reads(), 0, "restoring the reviews tab does not read decks or tags");
+
+    const setProfile = (profile: string) => t.store.replace({ ...t.store.snapshot(), destination: { url: t.destination.url, profile } });
+    const resyncAs = async (profile: string) => {
+      await setProfile(profile);
+      for (const resync of t.resyncs) resync();
+      await tick();
+    };
+    await resyncAs("Second");
+    assert.match(t.text(), /Paired profile: "Second"/);
+    assert.equal(reads(), 0, "hidden resync defers a lookup even when the pairing changes");
+
+    const settings = await t.openSettings();
+    await setProfile("Latest");
+    const template = [...settings.host.querySelectorAll("label")].find(label => label.textContent?.startsWith("Tags for new cards"))!.querySelector("input")!;
+    template.value = "new-tag";
+    template.dispatchEvent(new t.window.Event("change", { bubbles: true }) as never);
+    await tick();
+    assert.ok(t.calls.includes("settings"));
+    assert.match(t.text(), /Paired profile: "Latest"/);
+    assert.equal(reads(), 0, "a Settings peer refresh also defers the lookup");
+    settings.dispose();
+
+    t.tab("Make cards").click(); await tick();
+    assert.equal(cards.hidden, false);
+    assert.equal(reads(), 1);
+    const optionValues = (id: string) => [...cards.querySelectorAll<HTMLOptionElement>(`#${id} option`)].map(o => o.value);
+    assert.deepEqual(optionValues("anki-bridge-decks"), ["Latest deck"]);
+    const tags = cards.querySelector<HTMLInputElement>('input[list="anki-bridge-tags"]')!;
+    tags.value = "stu";
+    tags.dispatchEvent(new t.window.Event("input", { bubbles: true }) as never);
+    assert.deepEqual(optionValues("anki-bridge-tags"), ["study"]);
+
+    await resyncAs("Third");
+    assert.equal(reads(), 2, "a visible resync still refreshes the changed pairing");
+    assert.deepEqual(optionValues("anki-bridge-decks"), ["Third deck"]);
+    assert.equal(t.anki.state.requests.length, 0, "only mocked connection reads ran");
+    unmount();
+  } finally { await t.cleanup(); }
+});
+
+test("Bridge restores the chosen tab on remount, but a pending session Make cards request takes precedence", async () => {
+  const t = await setup();
+  try {
+    const unmountFirst = await t.mountReviews();
+    unmountFirst();
+
+    const unmountSecond = await t.mount();
+    assert.equal(t.tab("Check Anki reviews").getAttribute("aria-selected"), "true");
+    assert.equal(t.panel("Check Anki reviews").hidden, false);
+    assert.equal(t.panel("Make cards").hidden, true);
+    assert.equal(t.anki.state.requests.length, 0, "restoring the tab does not run a check");
+    unmountSecond();
+
+    assert.equal(t.sessionReads.length, 0);
+    const context = { surface: "session", placement: "top-bar", sessionId: "chat-1", kind: "teaching" } as PluginActionContext;
+    await t.actions.get("make-cards")!.run(context);
+    assert.equal(t.opened(), "bridge");
+    assert.equal(t.sessionReads.length, 0, "the view has not mounted yet");
+    t.calls.length = 0;
+    const unmountCards = await t.mount();
+    assert.equal(t.calls.filter(call => call === "connection").length, 1, "the pending request activates Make cards and loads its deck and tag suggestions");
+    assert.equal(t.tab("Make cards").getAttribute("aria-selected"), "true");
+    assert.equal(t.panel("Check Anki reviews").hidden, true);
+    assert.equal(t.panel("Make cards").querySelector<HTMLSelectElement>('select[aria-label="Ideas from"]')!.value, "chat-1");
+    assert.match(t.panel("Make cards").textContent!, /Review the scaling law/);
+    unmountCards();
+  } finally { await t.cleanup(); }
+});
+
 test("a session Make cards action selects the cards tab, transfers focus if needed and scopes the ideas", async () => {
   const t = await setup();
   try {
@@ -324,7 +472,7 @@ test("S5: after the pairing changes elsewhere, the page re-reads it so the next 
     await t.click("Check Anki reviews");
     await settle(() => /Paired profile changed/.test(t.text()));
     await settle(() => /profile "Second"/.test(t.text()));
-    assert.match(t.text(), /Checks profile "Second"/);
+    assert.match(t.text(), /Paired profile: "Second"/);
     assert.equal(t.anki.state.requests.length, 0);
     t.anki.state.profile = "Second";
     await t.click("Check Anki reviews");
@@ -334,8 +482,8 @@ test("S5: after the pairing changes elsewhere, the page re-reads it so the next 
     // A host resync also re-reads the pairing.
     await t.store.replace({ ...t.store.snapshot(), destination: { url: t.destination.url, profile: "Third" } });
     for (const f of t.resyncs) f();
-    await settle(() => /Checks profile "Third"/.test(t.text()));
-    assert.match(t.text(), /Checks profile "Third"/);
+    await settle(() => /Paired profile: "Third"/.test(t.text()));
+    assert.match(t.text(), /Paired profile: "Third"/);
   } finally { await t.cleanup(); }
 });
 
@@ -350,15 +498,15 @@ test("F5: a Settings save in another pane re-reads the pairing, even during a ch
     await t.store.replace({ ...t.store.snapshot(), destination: { ...t.destination } });
     for (const peer of peers) peer();
     await settle(() => t.find("Check Anki reviews")?.disabled === false);
-    assert.match(t.text(), /Checks profile "Throwaway"/);
+    assert.match(t.text(), /Paired profile: "Throwaway"/);
 
     // A save during a check is held until the check ends, then applied.
     t.anki.state.delay = 40;
     await t.click("Check Anki reviews");
     await t.store.replace({ ...t.store.snapshot(), destination: { url: t.destination.url, profile: "Later" } });
     for (const peer of peers) peer();
-    await settle(() => /Checks profile "Later"/.test(t.text()));
-    assert.match(t.text(), /Checks profile "Later"/);
+    await settle(() => /Paired profile: "Later"/.test(t.text()));
+    assert.match(t.text(), /Paired profile: "Later"/);
     dispose();
     assert.equal(peers.size, 0);
   } finally { await t.cleanup(); }
@@ -375,10 +523,10 @@ test("round 3 S2: an older reload that answers last does not bring back the prev
     t.setHold(undefined);
     await t.store.replace({ ...t.store.snapshot(), destination: { url: t.destination.url, profile: "Second" } });
     for (const f of t.resyncs) f();            // reload 2 reads "Second" and answers first
-    await settle(() => /Checks profile "Second"/.test(t.text()));
+    await settle(() => /Paired profile: "Second"/.test(t.text()));
     release(); await tick();                   // reload 1 answers last
-    assert.match(t.text(), /Checks profile "Second"/);
-    assert.doesNotMatch(t.text(), /Checks profile "Throwaway"/);
+    assert.match(t.text(), /Paired profile: "Second"/);
+    assert.doesNotMatch(t.text(), /Paired profile: "Throwaway"/);
   } finally { await t.cleanup(); }
 });
 
@@ -411,8 +559,10 @@ test("Clear cannot report success while a check started in a previous mount is r
     t.anki.state.after = action => action === "version" ? held : undefined;
     await t.click("Check Anki reviews");
     assert.equal((await t.service.command("lastReviewCheck")).running, true);
-    if (typeof dispose === "function") dispose();
-    await t.mountReviews();
+    dispose();
+    await t.mount();
+    assert.equal(t.panel("Check Anki reviews").hidden, false);
+    assert.ok(t.find("Clear"), "the prior result is restored from memory");
 
     const confirmClear = async () => {
       await t.click("Clear");

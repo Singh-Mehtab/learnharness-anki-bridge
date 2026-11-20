@@ -28,10 +28,15 @@ const STATUS: Record<Card["status"], { text: string; tone: "neutral" | "good" | 
   sent: { text: "In Anki", tone: "good" }, failed: { text: "Send failed", tone: "bad" }, dropped: { text: "Dropped", tone: "neutral" },
 };
 
-export interface ReviewHandle { refresh(): Promise<void>; showWaiting(nodeId: string): Promise<void>; dispose(): void }
+export interface ReviewHandle {
+  refresh(): Promise<void>;
+  showWaiting(nodeId: string): Promise<void>;
+  setVisible(visible: boolean): void;
+  dispose(): void;
+}
 
 export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signal: AbortSignal, options: {
-  peers: Peers; onChanged: () => Promise<void>; headerAside: HTMLElement;
+  peers: Peers; onChanged: () => Promise<void>; headerAside: HTMLElement; visible?: boolean;
 }): ReviewHandle {
   const banner = el("div", undefined, "ab-banners");
   const sendBar = el("div", undefined, "ab-send-bar");
@@ -101,7 +106,7 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
     sentPanel.classList.remove("ab-sent-enter"); void sentPanel.offsetWidth; sentPanel.classList.add("ab-sent-enter");
     sentPanel.scrollIntoView?.({ block: "nearest", behavior: "smooth" });
   }
-  /** After a download. The cards are still approved, not in Anki, so this says so plainly. */
+  /** Requesting a download leaves approval and delivery unchanged. */
   function showDownloaded(result: PackageResult, bytes: Uint8Array<ArrayBuffer>): void {
     const s = sentScope.reset();
     sentPanel.dataset.kind = "download";
@@ -111,7 +116,7 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
     text.append(el("p", `Download requested: ${result.fileName}, ${plural(result.ids.length, "card")}`, "ab-sent-title"), el("p", `Deck ${result.deck}`, "ab-sent-detail"));
     if (result.tags.length) text.append(el("p", `Tags ${result.tags.join(" ")}`, "ab-sent-detail"));
     text.append(
-      el("p", "Saved, not sent. Open the file in Anki to import it.", "ab-sent-detail"),
+      el("p", "Cards stay approved in Bridge and can still be sent. Open the file in Anki to import it.", "ab-sent-detail"),
       el("p", "Importing may duplicate cards already in Anki or update notes from an earlier package.", "ab-sent-detail ab-warning"));
     const actionsBox = el("div", undefined, "ab-actions");
     // The same file again, byte for byte, without asking the backend.
@@ -183,6 +188,7 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
   /** Decks are looked up only while the saved address is the paired one, as the backend requires for sending. */
   const lookupKey = () => state?.destination && state.settings.url === state.destination.url ? destinationKey(state.destination) : "";
   let decksFor = "", lookups = 0;
+  let visible = options.visible ?? true, lookupDeferred = false;
   /** Deck names shown for the profile in Anki, or none while that profile isn't the paired one. */
   const knownDecks = () => connection && lookupKey() && connection.profile === state?.destination?.profile ? connection.decks : undefined;
   /** Tag names in that profile, for suggestions and matching the collection's casing. */
@@ -194,6 +200,10 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
     tagOptions.replaceChildren(...next.map(value => { const o = el("option"); o.value = value; return o; }));
   }
   async function loadDecks(): Promise<void> {
+    if (!alive()) return;
+    // Local snapshots may refresh in the background, but only Make cards needs Anki's decks and tags.
+    if (!visible) { lookupDeferred = true; return; }
+    lookupDeferred = false;
     const asked = lookupKey();
     if (!asked) {
       // No pairing, or the address changed since pairing: offer nothing until it is paired again.
@@ -324,7 +334,7 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
       if (!drafts.length) return;
       if ([...editing].some(id => drafts.some(c => c.id === id))) throw new Error("Save or cancel your edits first.");
       const ok = await confirmDialog(ctx, signal, { title: "Approve all drafts", confirm: "Approve",
-        body: `Approve ${plural(drafts.length, "draft")}?` });
+        body: `Check the answers before approving these ${plural(drafts.length, "draft")}. Approving does not send cards to Anki.` });
       if (!ok || !alive()) return;
       await call("approve", { ids: drafts.map(c => c.id) });
       return `Approved ${plural(drafts.length, "card")}.`;
@@ -654,6 +664,10 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
   void run(async () => { await call("snapshot"); void loadDecks(); });
   return {
     refresh: backgroundRefresh,
+    setVisible: next => {
+      visible = next;
+      if (visible && lookupDeferred) void loadDecks();
+    },
     showWaiting: async nodeId => {
       const focus = () => {
         const row = [...list.querySelectorAll<HTMLElement>("[data-waiting-node]")].find(r => r.dataset.waitingNode === nodeId);
