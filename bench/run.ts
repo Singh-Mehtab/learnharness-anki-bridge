@@ -42,7 +42,6 @@ const { values } = parseArgs({
     "timeout-min": { type: "string", default: "10" },
     model: { type: "string", default: "sonnet" },
     effort: { type: "string", default: "medium" },
-    constants: { type: "boolean", default: false },
     cap: { type: "string", default: "2" },
     sets: { type: "string" },
     "trial-targets": { type: "string", default: "4" },
@@ -204,7 +203,7 @@ for (const set of sets) {
       source: sourcePassage(byId.get(id)!, (chatId) => set.chats[chatId]),
       ...(set.flags?.[id] ? { flagged: true, flagNote: set.flags[id].note } : {}),
     }),
-    { maxCardsPerNode: cap, enabledKinds: kinds, constantValues: values.constants },
+    { maxCardsPerNode: cap, enabledKinds: kinds },
   );
   for (const s of skipped) {
     const n = byId.get(s.nodeId);

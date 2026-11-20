@@ -99,14 +99,21 @@
 /* Step 2: write */
 .anki-bridge .ab-write-settings { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 16px 24px; }
 .anki-bridge .ab-model { min-height: 32px; display: flex; align-items: center; }
+.anki-bridge .ab-model-row { display: flex; align-items: center; gap: 6px; }
+.anki-bridge .ab-model-field .ab-hint { font-size: 12px; margin-top: 4px; }
 .anki-bridge .ab-field-inline { display: flex; flex-direction: column; }
 .anki-bridge .ab-kinds legend { padding: 0; }
 .anki-bridge .ab-chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .anki-bridge .ab-chip { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 10px; border: 1px solid var(--ab-border); border-radius: 6px; cursor: pointer; font-size: 13px; }
 .anki-bridge .ab-chip:has(input:checked) { border-color: color-mix(in srgb, var(--primary, #888) 60%, var(--ab-border)); background: color-mix(in srgb, var(--primary, #888) 9%, transparent); }
 .anki-bridge .ab-chip:has(input:disabled) { cursor: default; }
-.anki-bridge .ab-kind-help { display: flex; flex-wrap: wrap; gap: 2px 16px; margin: 10px 0 16px; }
-.anki-bridge .ab-kind-help strong { font-weight: 600; color: var(--foreground, inherit); }
+.anki-bridge .ab-kind-help { display: grid; gap: 6px; margin: 10px 0 16px; }
+.anki-bridge .ab-kind-lines { display: flex; flex-wrap: wrap; gap: 2px 16px; }
+.anki-bridge .ab-kind-help strong, .anki-bridge .ab-kind-example strong { font-weight: 600; color: var(--foreground, inherit); }
+.anki-bridge .ab-kind-examples > summary { cursor: pointer; width: fit-content; }
+.anki-bridge .ab-kind-examples[open] { display: grid; gap: 8px; }
+.anki-bridge .ab-kind-example { display: grid; gap: 2px; padding: 8px 10px; border-left: 2px solid var(--ab-border); font-size: 13px; }
+.anki-bridge .ab-settings .ab-kind-example { margin: 4px 0 10px 26px; color: var(--ab-muted); }
 .anki-bridge .ab-write-bar { margin-bottom: 8px; }
 .anki-bridge .ab-activity { display: grid; gap: 10px; margin-top: 12px; }
 .anki-bridge .ab-activity:empty { display: none; }
@@ -171,6 +178,10 @@
 .anki-bridge .ab-sent-title { margin: 0; font-size: 15px; font-weight: 600; }
 .anki-bridge .ab-sent-detail { margin: 0; font-size: 12px; color: var(--ab-muted); overflow-wrap: anywhere; }
 .anki-bridge .ab-sent > .ab-actions { flex: none; }
+/* A download is not a send: info tone, not the green "in Anki" one. */
+.anki-bridge .ab-sent[data-kind="download"] { border-color: color-mix(in srgb, var(--ab-info) 45%, var(--ab-border)); background: color-mix(in srgb, var(--ab-info) 8%, transparent); }
+.anki-bridge .ab-sent[data-kind="download"] .ab-sent-icon { color: var(--ab-info); background: color-mix(in srgb, var(--ab-info) 18%, transparent); }
+.anki-bridge .ab-sent[data-kind="download"] .ab-sent-detail.ab-warning { color: var(--ab-warn); }
 @media (prefers-reduced-motion: no-preference) {
   .anki-bridge .ab-sent-enter { animation: ab-sent-in 260ms ease-out; }
   .anki-bridge .ab-sent-enter .ab-sent-icon { animation: ab-sent-pop 420ms cubic-bezier(.2, 1.4, .4, 1); }
@@ -200,3 +211,18 @@
 .anki-bridge .ab-panel-title { font-size: 14px; font-weight: 600; margin: 0; }
 .anki-bridge .ab-panel-intro { margin-top: -8px; }
 .anki-bridge .ab-destination { font-size: 13px; }
+
+/* Topics to revisit */
+.anki-bridge .ab-topics-head { margin-bottom: 8px; }
+.anki-bridge .ab-topics-privacy { margin: 0 0 12px; max-width: 72ch; }
+.anki-bridge .ab-topics-summary { margin: 12px 0; }
+.anki-bridge .ab-topic-list { display: grid; gap: 16px; }
+.anki-bridge .ab-topic h3 { font-size: 14px; font-weight: 600; margin: 0; }
+.anki-bridge .ab-topic-body { display: grid; gap: 12px; padding: 12px 14px; }
+.anki-bridge .ab-topic-summary { margin: 0; font-size: 13px; }
+.anki-bridge .ab-topic-sessions { align-items: center; flex-wrap: wrap; }
+.anki-bridge .ab-topic-card { border: 1px solid var(--ab-border); border-radius: 8px; overflow: hidden; }
+.anki-bridge .ab-topic-card > .ab-card-title { padding: 8px 14px 0; }
+.anki-bridge .ab-topic-card .ab-card-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 14px; border-top: 1px solid var(--ab-border); }
+.anki-bridge .ab-topic-evidence { margin: 0; }
+.anki-bridge .ab-topics-footer { margin: 16px 0 0; padding-left: 18px; }

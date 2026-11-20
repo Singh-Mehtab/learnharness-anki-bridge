@@ -16,6 +16,7 @@ function fixture() {
     settings: { url: "http://127.0.0.1:8765/", lastDeck: "Scratch", hasApiKey: true, tagTemplate: "{deck}::Lecture_01", systemTags: true },
     destination: paired() as { url: string; profile: string } | null,
     cards: [] as Card[],
+    generationSettings: { cardsPerNode: 2, enabledKinds: ["fact", "equation"] as string[], model: null },
   };
 }
 const tick = async () => { for (let i = 0; i < 6; i++) await new Promise<void>(resolve => setTimeout(resolve, 0)); };
@@ -34,7 +35,7 @@ async function setup(options: { handler?: (name: string, input: any) => unknown;
   const ctx = {
     signal: activation.signal,
     cleanup: (fn: () => void) => cleanups.push(fn),
-    registerView: (value: PluginView) => { view = value; return () => {}; },
+    registerView: (value: PluginView) => { if (value.id === "bridge") view = value; return () => {}; },
     registerAction: (value: { id: string; run: () => void }) => { actions.set(value.id, value); return () => {}; },
     placeAction: (value: { actionId: string; location: string }) => { placements.push(value); return () => {}; },
     onAppEvent: () => () => {},
@@ -44,7 +45,7 @@ async function setup(options: { handler?: (name: string, input: any) => unknown;
     call: async (name: string, input: any) => {
       if (name === "coverageContext") coverageReads++;
       if (name === "coverageContext") return { nodes: [], missing: [], cardsPerNode: 2, paired: true, pairingWarning: false };
-      if (name === "generationStatus") return { generationSettings: { cardsPerNode: 2, enabledKinds: ["fact", "equation"], constantValues: false, model: null }, generations: [] };
+      if (name === "generationStatus") return { generationSettings: structuredClone(state.generationSettings), generations: [] };
       if (name === "sessions") return { sessions: [], unresolved: [] };
       calls.push({ name, input });
       const handled = await options.handler?.(name, input);
@@ -52,6 +53,11 @@ async function setup(options: { handler?: (name: string, input: any) => unknown;
       if (name === "connection") return options.connection ? options.connection() : { profile: "Throwaway", decks: ["Scratch", "New::Deck"] };
       if (name === "settings") Object.assign(state.settings, input.apiKey === undefined ? {} : { hasApiKey: !!input.apiKey }, input.url ? { url: input.url } : {}, input.tagTemplate === undefined ? {} : { tagTemplate: input.tagTemplate }, input.systemTags === undefined ? {} : { systemTags: input.systemTags });
       if (name === "pair") state.destination = input.expectedDestination;
+      if (name === "generationSettings") {
+        const { toggleKind, ...rest } = input;
+        Object.assign(state.generationSettings, rest);
+        if (toggleKind) state.generationSettings.enabledKinds = ["fact", "equation", "why", "steps", "apply", "discriminate"].filter(k => k === toggleKind.kind ? toggleKind.enabled : state.generationSettings.enabledKinds.includes(k));
+      }
       if (name === "edit") Object.assign(state.cards.find(c => c.id === input.id)!, { front: input.front, back: input.back, extra: input.extra, status: "draft" });
       if (name === "approve") state.cards.filter(c => input.ids.includes(c.id)).forEach(c => { c.status = "approved"; });
       if (name === "drop") state.cards.filter(c => input.ids.includes(c.id)).forEach(c => { c.status = "dropped"; });
@@ -89,7 +95,7 @@ async function setup(options: { handler?: (name: string, input: any) => unknown;
     status: () => container.querySelector(".ab-send-bar + .ab-status")!.textContent,
     more: async (label: string | RegExp) => { button("More", container).click(); await chooseMenu(label); },
     openSidebar: () => {
-      assert.deepEqual(placements.map(p => [p.actionId, p.location]), [["flag-for-anki", "top-bar"], ["make-cards", "top-bar"], ["open-bridge", "sidebar"]]);
+      assert.deepEqual(placements.map(p => [p.actionId, p.location]), [["flag-for-anki", "top-bar"], ["make-cards", "top-bar"], ["open-bridge", "sidebar"], ["open-topics", "sidebar"]]);
       actions.get("open-bridge")?.run(); return openedView;
     },
     settingsOpened: () => settingsOpened,
@@ -106,9 +112,89 @@ test("the plugin registers a sidebar action, the view and a settings page", asyn
     for (const step of ["Choose ideas", "Write cards", "Review and send"]) assert.match(f.container.textContent!, new RegExp(step));
     assert.equal(f.container.querySelector("fieldset"), null, "no raw fieldset forms");
     const s = await f.mountSettings();
-    for (const panel of ["Connect to Anki", "Anki profile", "Tags", "Note type"]) assert.match(s.host.textContent!, new RegExp(panel));
+    for (const panel of ["Connect to Anki", "Anki profile", "Tags", "More card types", "Note type"]) assert.match(s.host.textContent!, new RegExp(panel));
     assert.doesNotMatch(f.container.textContent!, /Add missing fields|AnkiConnect address/, "upkeep lives only in settings");
     s.close();
+  } finally { await f.dispose(); }
+});
+
+test("a Settings refresh from Write cannot overwrite a newer card-type save", async () => {
+  const state = fixture();
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  let held = 0, hold = false;
+  const f = await setup({ state, handler: async name => {
+    if (name === "snapshot" && hold) {
+      held++;
+      const old = structuredClone(state);
+      await gate;
+      return old;
+    }
+  } });
+  try {
+    const s = await f.mountSettings();
+    const why = [...f.container.querySelectorAll(".ab-kinds label")].find(label => label.textContent === "Why")!.querySelector("input")!;
+    const apply = Array.from(s.host.querySelectorAll("label") as ArrayLike<HTMLLabelElement>).find(label => label.textContent?.startsWith("Apply:"))!.querySelector("input")!;
+    assert.equal(apply.checked, false);
+    hold = true;
+    why.click(); await tick();
+    hold = false;
+    assert.equal(held, 2, "held the Review and Settings reloads from Write before saving Apply");
+    apply.click(); await tick();
+    assert.equal(apply.checked, true);
+    assert.ok(state.generationSettings.enabledKinds.includes("apply"));
+    release(); await tick();
+    assert.equal(apply.checked, true, "older state did not turn Apply back off");
+    s.close();
+  } finally { release(); await f.dispose(); }
+});
+
+test("Settings switch Apply and Contrast on for drafting, with examples, and Write shows it", async () => {
+  const f = await setup();
+  try {
+    const s = await f.mountSettings();
+    const panel = Array.from(s.host.querySelectorAll(".ab-panel") as ArrayLike<HTMLElement>).find(p => /More card types/.test(p.textContent!))!;
+    assert.ok(panel, "card types panel");
+    const boxes = () => Array.from(panel.querySelectorAll("input[type=checkbox]")) as unknown as HTMLInputElement[];
+    assert.deepEqual(Array.from(panel.querySelectorAll("label") as ArrayLike<HTMLElement>).map(l => l.textContent), [
+      "Apply: pick the rule or method that fits a new situation.", "Contrast: tell apart two ideas that are easy to mix up."]);
+    assert.deepEqual(boxes().map(b => b.checked), [false, false], "off by default");
+    assert.match(panel.textContent!, /Front: You know an electron beam's momentum.*Front: A proton speeds up/s);
+    assert.doesNotMatch(s.host.textContent!, /Compose/);
+    const write = () => f.container.querySelector(".ab-kind-help")!.textContent!;
+    assert.doesNotMatch(write(), /Also on in Settings/);
+
+    // Write changed after Settings loaded; the Settings toggle must keep that change.
+    f.state.generationSettings.enabledKinds = ["fact", "equation", "why"];
+    boxes()[0]!.checked = true; boxes()[0]!.dispatchEvent(f.event("change")); await tick();
+    assert.deepEqual(f.calls.filter(c => c.name === "generationSettings").map(c => c.input), [{ toggleKind: { kind: "apply", enabled: true } }]);
+    assert.deepEqual(f.state.generationSettings.enabledKinds, ["fact", "equation", "why", "apply"]);
+    assert.match(panel.textContent!, /Apply on\./);
+    assert.deepEqual(boxes().map(b => b.checked), [true, false]);
+    assert.match(write(), /Also on in Settings: Apply\./, "the open Write step updates");
+
+    boxes()[0]!.checked = false; boxes()[0]!.dispatchEvent(f.event("change")); await tick();
+    assert.deepEqual(f.state.generationSettings.enabledKinds, ["fact", "equation", "why"]);
+    assert.doesNotMatch(write(), /Also on in Settings/);
+
+    // A Write change reaches an open Settings panel: with Contrast alone it is locked on, until Write turns Fact on.
+    f.state.generationSettings.enabledKinds = ["discriminate"];
+    const open = await f.mountSettings();
+    const contrast = () => Array.from(Array.from(open.host.querySelectorAll(".ab-panel") as ArrayLike<HTMLElement>).find(p => /More card types/.test(p.textContent!))!.querySelectorAll("input[type=checkbox]") as ArrayLike<HTMLInputElement>)[1]!;
+    assert.equal(contrast().disabled, true);
+    const fact = f.container.querySelector(".ab-chips input[type=checkbox]") as unknown as HTMLInputElement;
+    fact.checked = true; fact.dispatchEvent(f.event("change")); await tick();
+    assert.deepEqual(f.state.generationSettings.enabledKinds, ["fact", "discriminate"]);
+    assert.equal(contrast().disabled, false, "Settings now lets Contrast go off");
+    open.close();
+
+    f.state.generationSettings.enabledKinds = ["discriminate"];
+    s.close();
+    const again = await f.mountSettings();
+    const kindsPanel = Array.from(again.host.querySelectorAll(".ab-panel") as ArrayLike<HTMLElement>).find(p => /More card types/.test(p.textContent!))!;
+    const checked = Array.from(kindsPanel.querySelectorAll("input[type=checkbox]") as ArrayLike<HTMLInputElement>).filter(b => b.checked);
+    assert.equal(checked.length, 1); assert.equal(checked[0]!.disabled, true, "the only remaining type stays on");
+    again.close();
   } finally { await f.dispose(); }
 });
 
@@ -362,6 +448,8 @@ test("a hand-written card is added through a dialog", async () => {
     await f.more("Write a card by hand"); await tick();
     const dialog = f.dialog()!;
     const [front, back] = Array.from(dialog.querySelectorAll("textarea")) as unknown as HTMLTextAreaElement[];
+    const kinds = Array.from(dialog.querySelectorAll("option") as ArrayLike<HTMLOptionElement>).map(o => o.textContent);
+    assert.deepEqual(kinds, ["Fact", "Equation", "Why", "Steps", "Apply", "Contrast"], "no Compose for new cards");
     front.value = "Front text"; back.value = "Back text";
     f.button("Add card", dialog).click(); await tick();
     assert.deepEqual(f.calls.find(c => c.name === "draft")!.input, { front: "Front text", back: "Back text", extra: "", kind: "fact" });
@@ -657,4 +745,62 @@ test("an older deck lookup that finishes last can't replace a newer one's sugges
     older!({ profile: "Throwaway", decks: ["Older"] }); await tick();
     assert.deepEqual(options(), ["Newer"]);
   } finally { await f.dispose(); }
+});
+
+test("Download .apkg works unpaired, saves the package, keeps cards approved and can save the same file again", async () => {
+  const { exportPackage } = await import("../src/anki/apkg.ts");
+  const { initialState } = await import("../src/anki/state.ts");
+  const state = fixture(); state.destination = null;
+  state.cards = [card("0b6f7c1e-0000-4000-8000-00000000000a", { status: "approved", front: "Synthetic **front**" }), card("0b6f7c1e-0000-4000-8000-00000000000b"), card("0b6f7c1e-0000-4000-8000-00000000000c", { status: "failed" })];
+  const backend = { ...initialState(), cards: structuredClone(state.cards) } as unknown as Parameters<typeof exportPackage>[0];
+  backend.settings.tagTemplate = state.settings.tagTemplate;
+  const saved: { name: string; bytes: Buffer }[] = [];
+  const blobs = new Map<string, Blob>();
+  const realCreate = URL.createObjectURL, realRevoke = URL.revokeObjectURL;
+  URL.createObjectURL = (blob: Blob) => { const url = `blob:test/${blobs.size}`; blobs.set(url, blob); return url; };
+  URL.revokeObjectURL = () => {};
+  const f = await setup({ state, handler: (name, input) => name === "exportPackage" ? exportPackage(backend, input, 1_795_000_000_000) : undefined });
+  const pending: Promise<void>[] = [];
+  (f.window as any).HTMLAnchorElement.prototype.click = function (this: HTMLAnchorElement) {
+    pending.push(blobs.get(this.href)!.arrayBuffer().then(b => { saved.push({ name: this.download, bytes: Buffer.from(b) }); }));
+  };
+  // The export writes a real SQLite file, so wait for the save rather than a fixed number of ticks.
+  const settle = async (saves = saved.length) => {
+    for (let i = 0; i < 400 && pending.length < saves; i++) await new Promise(resolve => setTimeout(resolve, 5));
+    await tick(); await Promise.all(pending);
+  };
+  try {
+    assert.equal(f.button(/^Send 2 cards to Anki/).disabled, false);
+    assert.match(f.button(/^Send 2 cards/).title, /Choose an Anki profile/);
+    const download = f.button("Download .apkg");
+    assert.equal(download.disabled, false, "no profile or running Anki needed");
+    f.type(f.deck(), "");
+    assert.equal(f.button("Download .apkg").title, "Choose a deck first.");
+    f.button("Download .apkg").click(); await settle();
+    assert.equal(f.calls.some(c => c.name === "exportPackage"), false);
+    assert.match(f.status()!, /Choose a deck first\./);
+    f.type(f.deck(), "Synthetic::Deck");
+    f.button("Download .apkg").click(); await settle(1);
+    assert.deepEqual(f.calls.find(c => c.name === "exportPackage")!.input,
+      { ids: ["0b6f7c1e-0000-4000-8000-00000000000a", "0b6f7c1e-0000-4000-8000-00000000000c"], deck: "Synthetic::Deck", tags: ["Synthetic::Deck::Lecture_01"] });
+    assert.equal(saved.length, 1);
+    assert.equal(saved[0].name, "anki-bridge-synthetic-deck.apkg");
+    assert.equal(saved[0].bytes.readUInt32LE(0), 0x04034b50, "the saved file is the zip package");
+    const panel = f.container.querySelector(".ab-sent")!;
+    assert.equal(panel.getAttribute("data-kind"), "download");
+    assert.match(panel.textContent!, /Download of 2 cards requested as anki-bridge-synthetic-deck\.apkg/);
+    assert.match(panel.textContent!, /Not sent\. These cards stay approved and don't count as in Anki/);
+    assert.match(panel.textContent!, /Importing can add duplicates of cards already in Anki, or update notes from an earlier package/);
+    assert.doesNotMatch(panel.textContent!, /sent to Anki/);
+    assert.equal(f.calls.some(c => c.name === "send"), false, "a download never sends");
+    assert.deepEqual(Array.from(f.review().querySelectorAll(".ab-card")).map(c => c.getAttribute("data-status")), ["approved", "draft", "failed"], "nothing marked sent");
+    f.button("Download again", panel).click(); await settle(2);
+    assert.equal(saved.length, 2);
+    assert.equal(f.calls.filter(c => c.name === "exportPackage").length, 1, "the same file again, without a new export");
+    assert.deepEqual(saved[1], saved[0]);
+    f.button("Download .apkg").click(); await settle(3);
+    assert.equal(saved.length, 3, "the button stays available for the same approved batch");
+    f.button("Dismiss", f.container.querySelector(".ab-sent")!).click();
+    assert.equal((f.container.querySelector(".ab-sent") as unknown as HTMLElement).hidden, true);
+  } finally { URL.createObjectURL = realCreate; URL.revokeObjectURL = realRevoke; await f.dispose(); }
 });

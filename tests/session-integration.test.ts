@@ -38,7 +38,7 @@ test('a session scope reaches writing with flagged and bulk intent, saved caps, 
     const calls: Array<{ name: string; input: any }> = [];
     const ctx = {
       signal: f.c.controller.signal, cleanup: (fn: () => void) => cleanup.push(fn),
-      registerView: (v: PluginView) => { view = v; return () => {}; },
+      registerView: (v: PluginView) => { if (v.id === "bridge") view = v; return () => {}; },
       registerSettings: () => () => {}, registerAction: () => () => {}, placeAction: () => () => {},
       onResync: () => () => {}, onAppEvent: () => () => {}, app: { openSettings: () => {} },
       call: async (name: string, input: any) => { calls.push({ name, input }); return f.c.call(name, input); },
@@ -120,7 +120,7 @@ test('schema 2 migration preserves a completed generation, applied result, and g
     await writeFile(file, JSON.stringify(v2));
     const store = await StateStore.open(f.directory);
     try {
-      assert.deepEqual(store.snapshot(), { ...state, schemaVersion: 5, flags: [], dismissals: [] });
+      assert.deepEqual(store.snapshot(), { ...state, schemaVersion: 6, flags: [], dismissals: [] });
       assert.equal(store.snapshot().generations[0].tasks[0].status, 'applied');
       assert.equal(store.snapshot().cards[0].sourceSnapshot?.statement, f.host.nodes[0].statement);
     } finally { await store.close(); }

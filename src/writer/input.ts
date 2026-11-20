@@ -214,8 +214,6 @@ export function trimToFit(target: WriterTarget, limit: number): WriterTarget | n
 export interface PackOptions {
   maxCardsPerNode: number;
   enabledKinds: CardKind[];
-  /** Card numerical values of physical constants (off by default). */
-  constantValues?: boolean;
   chunkBudget?: number;
   /** Model catalog limits; null or undefined means unknown. */
   contextWindow?: number | null;
@@ -257,7 +255,7 @@ export function pack(
   const flush = () => {
     if (!current.length) return;
     batches.push({
-      input: { version: 1, maxCardsPerNode, enabledKinds: [...enabledKinds], ...(options.constantValues !== undefined ? { constantValues: options.constantValues } : {}), targets: current },
+      input: { version: 1, maxCardsPerNode, enabledKinds: [...enabledKinds], targets: current },
       inputTokens: currentTokens,
       outputAllowance: targetsAllowance(current, maxCardsPerNode),
     });

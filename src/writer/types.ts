@@ -28,15 +28,18 @@ export interface GraphLike {
 
 /** Kinds on by default (0.7.2, #34): plain facts and equations to memorise. */
 export const DEFAULT_KINDS = ["fact", "equation"] as const;
-/** Kinds the learner can switch on. */
-export const OPTIONAL_KINDS = ["steps", "apply", "why", "compose", "discriminate"] as const;
-/** Card kinds that ship. */
-export const CORE_KINDS = [...DEFAULT_KINDS, ...OPTIONAL_KINDS] as const;
+/** Kinds shown on Write (#38): the defaults, then Why and Steps, which start off. */
+export const WRITE_KINDS = [...DEFAULT_KINDS, "why", "steps"] as const;
+/** Kinds switched on in Settings (#38). Off by default. */
+export const SETTINGS_KINDS = ["apply", "discriminate"] as const;
+/** Card kinds new drafts can use. */
+export const CORE_KINDS = [...WRITE_KINDS, ...SETTINGS_KINDS] as const;
 /** Kinds on trial in the bench only. */
 export const TRIAL_KINDS = ["mini-problem", "spot-the-mistake"] as const;
-/** Pre-0.7.2 name for a fresh-situation card; written as apply. Kept so saved
- *  cards and frozen generation inputs stay readable. */
-export const LEGACY_KINDS = ["recall"] as const;
+/** Kinds no longer drafted, kept so saved cards and generation history stay
+ *  readable: recall is the pre-0.7.2 name for apply, and compose was retired
+ *  in #38 because it mostly tested the same thing as why. */
+export const LEGACY_KINDS = ["recall", "compose"] as const;
 export const STORED_KINDS = [...CORE_KINDS, ...LEGACY_KINDS] as const;
 export type StoredCardKind = (typeof STORED_KINDS)[number];
 export type CoreCardKind = (typeof CORE_KINDS)[number];
@@ -99,7 +102,8 @@ export interface WriterInput {
   version: 1;
   maxCardsPerNode: number;
   enabledKinds: CardKind[];
-  /** Card numerical values of physical constants. Off unless the learner opts in. */
+  /** Only on inputs saved before #37 removed the constant-values toggle. New
+   *  inputs omit it: a flag is how a learner asks for a constant's value. */
   constantValues?: boolean;
   targets: WriterTarget[];
 }

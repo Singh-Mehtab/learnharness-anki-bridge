@@ -20,8 +20,10 @@ function setup(options: { catalogUnavailable?: boolean; initialGraphFailure?: bo
     cards: { waiting: 0, sent: 0, sentElsewhere: 0 }, coverage: coverage() }], missing: [], cardsPerNode: 2, paired: false, pairingWarning: false };
   const session: any = { session: { id: "s1", title: "Session one", exists: true }, flags: [], cardsPerNode: 2, paired: false,
     nodes: [{ id: "n_s", name: "Session idea", statement: "Only in the session.", statementHash: "s".repeat(64), cards: { waiting: 0, sent: 0, sentElsewhere: 0 }, coverage: coverage(), flagged: true, flagNotes: [] }] };
-  const state: any = { generationSettings: { cardsPerNode: 2, enabledKinds: ["fact", "equation"], constantValues: false, model: options.model ? { provider: "scratch", id: "writer" } : null }, generations: [] };
+  const state: any = { generationSettings: { cardsPerNode: 2, enabledKinds: ["fact", "equation"], model: options.model ? { provider: "scratch", id: "writer" } : null }, generations: [] };
   let model: ((v: { provider: string; id: string }) => void | Promise<void>) | undefined;
+  let modelValue: { provider: string; id: string } | undefined;
+  const peers = new Set<() => void>();
   let failNextCoverage = options.initialGraphFailure;
   let mutationGate: Promise<void> | undefined, hold: Promise<void> | undefined, graphHold: Promise<void> | undefined;
   let refreshed = 0, modelMounts = 0, knowledgeMounts = 0;
@@ -40,8 +42,14 @@ function setup(options: { catalogUnavailable?: boolean; initialGraphFailure?: bo
           state: dismissed ? "dismissed" : "no-cards", base: dismissed ? "dismissed" : "no-cards" });
         return structuredClone(graph);
       }
-      if (name === "generationSettings") Object.assign(state.generationSettings, input);
-      if (name === "preflight" || name === "retryGeneration") { await hold; return structuredClone(preflight); }
+      if (name === "generationSettings") {
+        // Like the backend: a toggle applies to the saved types at the moment it arrives.
+        const { toggleKind, ...rest } = input;
+        if (toggleKind && state.failToggle) throw new Error("Anki Bridge is busy. Wait for the current operation to finish.");
+        Object.assign(state.generationSettings, rest);
+        if (toggleKind) state.generationSettings.enabledKinds = ["fact", "equation", "why", "steps", "apply", "discriminate"].filter(k => k === toggleKind.kind ? toggleKind.enabled : state.generationSettings.enabledKinds.includes(k));
+      }
+      if (name === "preflight" || name === "retryGeneration") { await hold; return { ...structuredClone(preflight), followsCheapSlot: !state.generationSettings.model }; }
       if (name === "generate") state.generations.push({ id: "p1", status: "running", nodeIds: ["n_a"], skipped: [], settings: {}, createdAt: "", tasks: [
         { requestId: "r1", status: "running", input: {}, outputAllowance: 1200, sources: [{ nodeId: "n_a", name: "Alpha" }] }] });
       if (name === "cancelGeneration") { state.generations[0].status = "cancelled"; state.generations[0].tasks[0].status = "cancelled"; }
@@ -50,15 +58,15 @@ function setup(options: { catalogUnavailable?: boolean; initialGraphFailure?: bo
     },
     ui: fakeUi({
       mountKnowledgePicker: () => { knowledgeMounts++; throw new Error("Native knowledge picker must not be mounted"); },
-      mountModelPicker: (_: HTMLElement, props: { onChange: typeof model }) => {
+      mountModelPicker: (_: HTMLElement, props: { onChange: typeof model; value: typeof modelValue }) => {
         if (options.catalogUnavailable) throw new Error("Catalog unavailable");
-        modelMounts++; model = props.onChange; return { update: () => {}, dispose: () => {} };
+        modelMounts++; model = props.onChange; modelValue = props.value; return { update: () => {}, dispose: () => {} };
       },
     }),
   } as unknown as PluginFrontendContext;
   const ideas = window.document.createElement("div"), write = window.document.createElement("div");
   window.document.body.append(ideas, write);
-  const panel = mountDrafting(ctx, ideas as unknown as HTMLElement, write as unknown as HTMLElement, controller.signal, async () => { refreshed++; });
+  const panel = mountDrafting(ctx, ideas as unknown as HTMLElement, write as unknown as HTMLElement, controller.signal, async () => { refreshed++; }, undefined, peers);
   const doc = window.document;
   const text = () => `${ideas.textContent} ${write.textContent}`;
   const buttons = () => [...doc.querySelectorAll("button")];
@@ -71,7 +79,7 @@ function setup(options: { catalogUnavailable?: boolean; initialGraphFailure?: bo
   const box = () => ideas.querySelector("li input[type=checkbox]") as unknown as HTMLInputElement;
   return { doc, ideas, write, text, calls, state, graph, session, button, has, box, event, panel,
     select: (on: boolean) => { const b = box(); b.checked = on; b.dispatchEvent(event("change")); },
-    pickModel: (v: { provider: string; id: string }) => model!(v),
+    pickModel: (v: { provider: string; id: string }) => model!(v), modelValue: () => modelValue, peers,
     dialog: () => doc.querySelector(".ab-dialog"),
     holdGraphReload: () => {
       let resolve!: () => void, reject!: (error: Error) => void;
@@ -93,24 +101,26 @@ test("writing needs a selection, defaults to the cheap model, confirms the estim
   const f = setup();
   try {
     await f.panel.setScope(undefined); await tick();
-    assert.match(f.text(), /Use the LearnHarness cheap model/);
-    const follow = f.doc.querySelector(".ab-model")!.previousElementSibling!.querySelector("input") as unknown as HTMLInputElement;
-    assert.equal(follow.checked, true, "follows the cheap slot by default");
-    assert.equal((f.doc.querySelector(".ab-model") as unknown as HTMLElement).hidden, true, "override picker hidden");
+    assert.match(f.text(), /Model to write cards.*Leave blank to use the cheap model\./s);
+    assert.doesNotMatch(f.text(), /LearnHarness cheap model/);
+    assert.equal(f.modelValue(), undefined, "the picker starts blank");
+    const clear = () => [...f.write.querySelectorAll(".ab-model-row button")].find(b => b.textContent === "Clear") as unknown as HTMLButtonElement | undefined;
+    assert.equal(clear(), undefined, "nothing to clear while blank");
+    assert.equal(f.write.querySelectorAll(".ab-write-settings input[type=checkbox]").length, 4, "no model checkbox; only the four card types");
     assert.equal(f.button("Write cards").disabled, true);
     f.select(true); await tick();
     assert.match(f.text(), /1 idea selected/);
     assert.equal(f.button("Write cards for 1 idea").disabled, false, "no explicit model needed");
-    follow.checked = false; follow.dispatchEvent(f.event("change")); await tick();
-    assert.equal((f.doc.querySelector(".ab-model") as unknown as HTMLElement).hidden, false, "override picker shown");
-    f.button("Write cards for 1 idea").click(); await tick();
-    assert.match(f.text(), /Choose a model override/);
-    assert.equal(f.calls.some(c => c.name === "preflight"), false, "no silent cheap fallback while choosing an override");
     await f.pickModel({ provider: "scratch", id: "writer" }); await tick();
     assert.deepEqual(f.calls.find(c => c.name === "generationSettings")!.input, { model: { provider: "scratch", id: "writer" } });
+    assert.deepEqual(f.modelValue(), { provider: "scratch", id: "writer" }, "the picker shows the saved choice");
+    clear()!.click(); await tick();
+    assert.deepEqual(f.calls.filter(c => c.name === "generationSettings").at(-1)!.input, { model: null });
+    assert.equal(f.modelValue(), undefined, "Clear returns the picker to blank");
+    assert.equal(clear(), undefined);
     f.button("Write cards for 1 idea").click(); await tick();
     assert.ok(f.dialog(), "estimate dialog opens");
-    assert.match(f.dialog()!.textContent!, /Up to 2.*writer.*1, or up to 3 if answers need fixing.*No estimate for this model/s);
+    assert.match(f.dialog()!.textContent!, /Up to 2.*writer \(cheap model\).*1, or up to 3 if answers need fixing.*No estimate for this model/s);
     assert.equal(f.calls.some(c => c.name === "generate"), false);
     f.button("Start writing").click(); await tick();
     assert.deepEqual(f.calls.filter(c => c.name === "generate").map(c => c.input), [{ preflightId: "p1" }]);
@@ -156,24 +166,74 @@ test("an estimate that returns after the selection changed opens no dialog", asy
   } finally { await f.close(); }
 });
 
-test("card types and cap save as soon as they change, and the last type stays on", async () => {
+test("Write shows four card types with Fact and Equation on, explains them and has no constants toggle", async () => {
+  const f = setup();
+  try {
+    await f.panel.setScope(undefined); await tick();
+    const chips = [...f.write.querySelectorAll(".ab-chips label")].map(l => l.textContent);
+    assert.deepEqual(chips, ["Fact", "Equation", "Why", "Steps"]);
+    const toggles = [...f.write.querySelectorAll(".ab-chips input[type=checkbox]")] as unknown as HTMLInputElement[];
+    assert.deepEqual(toggles.map(box => box.checked), [true, true, false, false]);
+    const help = f.write.querySelector(".ab-kind-lines")!.textContent!;
+    assert.match(help, /Fact Remember a definition, unit, prefix or other fact\..*Equation Recall a formula or relation\..*Why Explain why a result holds\..*Steps Recall the next step in a method you carry out\./s);
+    const examples = f.write.querySelector("details.ab-kind-examples") as unknown as HTMLDetailsElement;
+    assert.equal(examples.open, false);
+    assert.equal(examples.querySelector("summary")!.textContent, "See examples");
+    assert.equal(examples.querySelectorAll(".ab-kind-example").length, 4);
+    assert.match(examples.textContent!, /Front: What power of ten does the prefix femto- represent\?Back: 10⁻¹⁵/);
+    assert.doesNotMatch(f.write.textContent!, /Compose|Apply|Contrast|physical constants|Also on in Settings/);
+  } finally { await f.close(); }
+});
+
+test("card types and cap save as soon as they change, keep Settings types, and the last type stays on", async () => {
   const f = setup();
   try {
     await f.panel.setScope(undefined); await tick();
     const cap = f.write.querySelector(".ab-write-settings select") as unknown as HTMLSelectElement;
     cap.value = "4"; cap.dispatchEvent(f.event("change")); await tick();
     const toggles = () => [...f.write.querySelectorAll(".ab-chips input[type=checkbox]")] as unknown as HTMLInputElement[];
-    assert.deepEqual(toggles().map(box => box.checked), [true, true, false, false, false, false, false]);
-    toggles()[3]!.checked = true; toggles()[3]!.dispatchEvent(f.event("change")); await tick();
-    assert.deepEqual(f.calls.filter(c => c.name === "generationSettings").map(c => c.input), [{ cardsPerNode: 4 }, { enabledKinds: ["fact", "equation", "apply"] }]);
-    assert.match(f.text(), /Contrast Tell the idea apart from a similar one/);
-    for (const i of [1, 3]) { toggles()[i]!.checked = false; toggles()[i]!.dispatchEvent(f.event("change")); await tick(); }
+    // Settings switched Apply on after this view loaded; Write has not seen it yet, and sends only its own change.
+    f.state.generationSettings.enabledKinds = ["fact", "equation", "apply"];
+    toggles()[2]!.checked = true; toggles()[2]!.dispatchEvent(f.event("change")); await tick();
+    assert.deepEqual(f.calls.filter(c => c.name === "generationSettings").map(c => c.input), [{ cardsPerNode: 4 }, { toggleKind: { kind: "why", enabled: true } }]);
+    assert.deepEqual(f.state.generationSettings.enabledKinds, ["fact", "equation", "why", "apply"]);
+    assert.match(f.text(), /Also on in Settings: Apply\./);
+    for (const i of [1, 2]) { toggles()[i]!.checked = false; toggles()[i]!.dispatchEvent(f.event("change")); await tick(); }
+    assert.deepEqual(f.state.generationSettings.enabledKinds, ["fact", "apply"]);
+    assert.equal(toggles()[0]!.disabled, false, "Apply is still on, so Fact can go off");
+    f.state.generationSettings.enabledKinds = ["fact"];
+    f.peers.forEach(peer => peer()); await tick();
     assert.equal(toggles()[0]!.disabled, true, "the only remaining type cannot be turned off");
-    const constants = () => [...f.write.querySelectorAll("label")].find(l => l.textContent!.includes("values of physical constants"))!.querySelector("input") as unknown as HTMLInputElement;
-    assert.equal(constants().checked, false);
-    constants().checked = true; constants().dispatchEvent(f.event("change")); await tick();
-    assert.deepEqual(f.calls.filter(c => c.name === "generationSettings").at(-1)!.input, { constantValues: true });
-    assert.equal(constants().checked, true, "saved toggle survives rendering");
+    assert.doesNotMatch(f.text(), /Also on in Settings/);
+  } finally { await f.close(); }
+});
+
+test("a rejected card-type toggle puts the checkbox back and tells Settings nothing changed", async () => {
+  const f = setup();
+  try {
+    await f.panel.setScope(undefined); await tick();
+    const why = () => ([...f.write.querySelectorAll(".ab-chips input[type=checkbox]")] as unknown as HTMLInputElement[])[2]!;
+    let notified = 0; f.peers.add(() => { notified++; });
+    f.state.failToggle = true;
+    why().checked = true; why().dispatchEvent(f.event("change")); await tick();
+    assert.equal(why().checked, false, "the saved state is shown again");
+    assert.match(f.text(), /busy/);
+    assert.equal(notified, 0);
+    f.state.failToggle = false;
+    why().checked = true; why().dispatchEvent(f.event("change")); await tick();
+    assert.equal(why().checked, true);
+    assert.equal(notified, 1, "Settings hears about a saved Write change");
+  } finally { await f.close(); }
+});
+
+test("a Settings change reaches Write through the shared peers without a reload", async () => {
+  const f = setup();
+  try {
+    await f.panel.setScope(undefined); await tick();
+    assert.doesNotMatch(f.text(), /Also on in Settings/);
+    f.state.generationSettings.enabledKinds = ["fact", "equation", "apply", "discriminate"];
+    f.peers.forEach(peer => peer()); await tick();
+    assert.match(f.text(), /Also on in Settings: Apply and Contrast\./);
   } finally { await f.close(); }
 });
 
@@ -297,6 +357,26 @@ test("idea rows need neither a model nor a catalog, and never mount the native k
       assert.equal(f.calls.some(c => c.name === "generationContext" || c.name === "connection"), false);
       assert.equal(f.box().disabled, false); assert.equal(f.box().checked, false);
       f.box().click(); assert.match(f.text(), /1 idea selected/);
+    } finally { await f.close(); }
+  }
+});
+
+test("Write still offers drafting controls when the optional model picker cannot mount", async () => {
+  for (const model of [false, true]) {
+    const f = setup({ catalogUnavailable: true, model });
+    const clear = () => [...f.write.querySelectorAll(".ab-model-row button")].find(b => b.textContent === "Clear") as unknown as HTMLButtonElement | undefined;
+    try {
+      await f.panel.setScope(undefined); await tick();
+      assert.match(f.write.textContent!, /Model picker unavailable/);
+      assert.equal(f.write.querySelectorAll(".ab-kinds input").length, 4);
+      assert.ok(f.write.querySelector("select"));
+      f.box().click();
+      assert.ok(f.has("Write cards for 1 idea"));
+      if (model) {
+        assert.ok(clear()); clear()!.click(); await tick();
+        assert.equal(f.state.generationSettings.model, null);
+        assert.equal(clear(), undefined);
+      } else assert.equal(clear(), undefined);
     } finally { await f.close(); }
   }
 });

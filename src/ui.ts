@@ -22,6 +22,25 @@ export function button(ctx: PluginFrontendContext, parent: HTMLElement, signal: 
   return Object.assign(handle, { root });
 }
 
+/** Decodes base64 from the call bridge into bytes. */
+export function base64Bytes(data: string): Uint8Array<ArrayBuffer> {
+  const binary = atob(data), bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+
+/** Saves bytes as a browser download, as the host's own artifact downloads do. */
+export function saveFile(name: string, bytes: Uint8Array<ArrayBuffer>, type = "application/octet-stream"): void {
+  const url = URL.createObjectURL(new Blob([bytes], { type }));
+  const link = el("a");
+  link.href = url; link.download = name; link.hidden = true;
+  document.body.append(link); link.click(); link.remove();
+  // Chromium keeps a started download past the revoke; the delay covers browsers that don't.
+  const timer: unknown = setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  // Node timers (tests) would otherwise hold the process open.
+  (timer as { unref?: () => void }).unref?.();
+}
+
 /** Labelled field: small bold label, control, optional muted hint. */
 export function field(text: string, control: HTMLElement, hint?: string): HTMLLabelElement {
   const label = el("label", undefined, "ab-field");

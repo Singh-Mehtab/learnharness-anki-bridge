@@ -1,11 +1,12 @@
-// Step 3: check each card, approve it and send approved cards to a deck.
+// Step 3: check each card, approve it and send approved cards to a deck, or download them as an .apkg file.
 import type { PluginFrontendContext } from "../sdk/index.d.ts";
+import type { PackageResult } from "./anki/apkg.ts";
 import { expandTagTemplate, matchTagCase, systemTags, tagSuggestions, validateTags } from "./anki/tags.ts";
 import { isWaitingCard } from "./coverage/flow.ts";
-import { KIND_NAMES } from "./drafting-ui.ts";
+import { KIND_NAMES } from "./kinds-ui.ts";
 import { CORE_KINDS, isStoredKind } from "./writer/types.ts";
 import type { Connection, Destination, Peers, Settings } from "./settings-ui.ts";
-import { button, confirmDialog, el, field, input, moreMenu, pill, plural, RenderScope, status, textarea } from "./ui.ts";
+import { base64Bytes, button, confirmDialog, el, field, input, moreMenu, pill, plural, RenderScope, saveFile, status, textarea } from "./ui.ts";
 import type { ButtonHandle } from "./ui.ts";
 
 interface Card {
@@ -61,9 +62,9 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
   const saving = new Set<string>();
   const alive = () => !disposed && !signal.aborted && !ctx.signal.aborted;
   const scope = new RenderScope(signal), barScope = new RenderScope(signal), bannerScope = new RenderScope(signal);
-  let approveAll: ButtonHandle | undefined, sendAll: ButtonHandle | undefined;
+  let approveAll: ButtonHandle | undefined, sendAll: ButtonHandle | undefined, downloadAll: ButtonHandle | undefined;
   const sentScope = new RenderScope(signal);
-  function hideSent(): void { sentScope.reset(); sentPanel.replaceChildren(); sentPanel.hidden = true; }
+  function hideSent(): void { sentScope.reset(); sentPanel.replaceChildren(); sentPanel.hidden = true; delete sentPanel.dataset.kind; }
   function showSent(ids: string[], deckSent: string, tagsSent: string[]): void {
     const s = sentScope.reset();
     const icon = el("span", undefined, "ab-sent-icon"); icon.setAttribute("aria-hidden", "true");
@@ -80,11 +81,32 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
       try { await ctx.call("show", { ids }); } catch (error) { if (alive()) feedback.show(message(error), "error"); }
     } });
     button(ctx, actionsBox, s, { label: "Dismiss", variant: "ghost", onClick: hideSent });
-    sentPanel.replaceChildren(icon, text, actionsBox);
+    revealPanel(icon, text, actionsBox);
+  }
+  function revealPanel(...children: HTMLElement[]): void {
+    sentPanel.replaceChildren(...children);
     sentPanel.hidden = false;
     // Restart the entrance animation for a second send in a row.
     sentPanel.classList.remove("ab-sent-enter"); void sentPanel.offsetWidth; sentPanel.classList.add("ab-sent-enter");
     sentPanel.scrollIntoView?.({ block: "nearest", behavior: "smooth" });
+  }
+  /** After a download. The cards are still approved, not in Anki, so this says so plainly. */
+  function showDownloaded(result: PackageResult, bytes: Uint8Array<ArrayBuffer>): void {
+    const s = sentScope.reset();
+    sentPanel.dataset.kind = "download";
+    const icon = el("span", undefined, "ab-sent-icon"); icon.setAttribute("aria-hidden", "true");
+    icon.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11m-5-5 5 5 5-5M5 20h14"/></svg>';
+    const text = el("div", undefined, "ab-sent-text");
+    text.append(el("p", `Download of ${plural(result.ids.length, "card")} requested as ${result.fileName}`, "ab-sent-title"), el("p", `Deck ${result.deck}`, "ab-sent-detail"));
+    if (result.tags.length) text.append(el("p", `Tags ${result.tags.join(" ")}`, "ab-sent-detail"));
+    text.append(
+      el("p", "Not sent. These cards stay approved and don't count as in Anki. Open the file with Anki, or use File > Import, to add them.", "ab-sent-detail"),
+      el("p", "Importing can add duplicates of cards already in Anki, or update notes from an earlier package. Anki decides how to match notes; Anki Bridge can't check what it will do.", "ab-sent-detail ab-warning"));
+    const actionsBox = el("div", undefined, "ab-actions");
+    // The same file again, byte for byte, without asking the backend.
+    button(ctx, actionsBox, s, { label: "Download again", onClick: () => saveFile(result.fileName, bytes) });
+    button(ctx, actionsBox, s, { label: "Dismiss", variant: "ghost", onClick: hideSent });
+    revealPanel(icon, text, actionsBox);
   }
 
   async function run(action: () => Promise<string | void>): Promise<void> {
@@ -217,11 +239,29 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
     if ([...editing].some(id => approvedCards().some(c => c.id === id))) return "Save or cancel your edits first.";
     return undefined;
   }
+  /** Downloading needs a deck and valid tags, but no profile and no running Anki. */
+  function downloadBlocker(): string | undefined {
+    if (!deckName()) return "Choose a deck first.";
+    try { validateTags(tagList()); } catch (error) { return message(error); }
+    if ([...editing].some(id => approvedCards().some(c => c.id === id))) return "Save or cancel your edits first.";
+    return undefined;
+  }
   function syncBar(): void {
     const approved = approvedCards().length, drafts = draftCards().length;
     approveAll?.update({ label: drafts ? `Approve all drafts (${drafts})` : "Approve all drafts", disabled: busy || !drafts });
     const blocked = sendBlocker();
     sendAll?.update({ label: approved ? `Send ${plural(approved, "card")} to Anki` : "Send to Anki", disabled: busy || !approved, title: blocked ?? "" });
+    downloadAll?.update({ disabled: busy || !approved, title: downloadBlocker() ?? "Save the approved cards as an Anki package file. Works with Anki closed. Nothing is sent." });
+  }
+  async function download(ids: string[]): Promise<string> {
+    const blocked = downloadBlocker();
+    if (blocked) throw new Error(blocked);
+    const result = await ctx.call<PackageResult>("exportPackage", { ids, deck: deckName(), tags: validateTags(tagList()) });
+    if (!alive()) return "";
+    const bytes = base64Bytes(result.data);
+    saveFile(result.fileName, bytes);
+    showDownloaded(result, bytes);
+    return "";
   }
   async function send(ids: string[]): Promise<string> {
     const blocked = sendBlocker();
@@ -252,6 +292,7 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
       await call("approve", { ids: drafts.map(c => c.id) });
       return `Approved ${plural(drafts.length, "card")}.`;
     }) });
+    downloadAll = button(ctx, sendActions, s, { label: "Download .apkg", onClick: () => run(() => download(approvedCards().map(c => c.id))) });
     sendAll = button(ctx, sendActions, s, { label: "Send to Anki", variant: "default", onClick: () => run(() => send(approvedCards().map(c => c.id))) });
     menuSlot.replaceChildren();
     moreMenu(ctx, menuSlot, s, "More", () => {
@@ -263,6 +304,8 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
         { key: "reconcile", label: "Check unconfirmed sends", disabled: !(state?.cards ?? []).some(c => c.status === "sending"), onSelect: () => run(async () => { await call("reconcile"); return "Checked unconfirmed sends."; }) },
         { key: "presence", label: "Check which sent cards are still in Anki", disabled: !sent.length, onSelect: () => run(async () => { await call("presence"); return "Checked sent cards."; }) },
         { key: "show", label: "Show sent cards in Anki", disabled: !sent.length, onSelect: () => run(async () => { await ctx.call("show", { ids: sent.map(c => c.id) }); }) },
+        // Opens the page only. Reading reviews waits for Check Anki reviews there.
+        { key: "topics", label: "Topics to revisit", disabled: !sent.length, onSelect: () => ctx.app.openView("topics") },
         { key: "drop", label: `Drop all unsent cards (${drafts.length})`, disabled: !drafts.length, onSelect: () => run(async () => {
           const ok = await confirmDialog(ctx, signal, { title: "Drop all unsent cards", confirm: "Drop cards", destructive: true,
             body: `Drop ${plural(drafts.length, "card")} that you have not sent? Their ideas become available to write again. Sent cards are not affected.` });
@@ -315,7 +358,7 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
       banner.append(box);
     };
     if (state.recoveryError) note(`An earlier send needs checking: ${state.recoveryError}`, "bad");
-    if (!state.destination) note("Choose an Anki profile in settings before sending.", "warn", { label: "Open settings", run: () => ctx.app.openSettings() });
+    if (!state.destination) note("Choose an Anki profile in settings before sending. Download .apkg works without one.", "warn", { label: "Open settings", run: () => ctx.app.openSettings() });
     else if (state.destination.url !== state.settings.url) note("The Anki address changed since you chose a profile. Choose the profile again in settings.", "warn", { label: "Open settings", run: () => ctx.app.openSettings() });
     else if (connectionError) note("Anki isn't reachable. Open Anki to send cards and see your decks.", "warn", { label: "Try again", run: () => { void loadDecks(); } });
     else if (connection && connection.profile !== state.destination.profile) note(`Anki has profile ${connection.profile ?? "none"} open. Cards go to ${state.destination.profile}, so open that profile to send.`, "warn");
