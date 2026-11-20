@@ -1,11 +1,11 @@
 # Install Anki Bridge
 
-Anki Bridge 0.7.2 is a personal-use candidate, not a public release. You need the `anki-bridge-v0.7.2.zip` install archive, not GitHub's automatically generated source zip. The archive contains built plugin code. You don't need Node.js or npm to install it.
+Anki Bridge 0.8.0 is a personal-use candidate, not a public release. You need the `anki-bridge-v0.8.0.zip` install archive, not GitHub's automatically generated source zip. The archive contains built plugin code. You don't need Node.js or npm to install it.
 
 ## Requirements
 
 - LearnHarness 0.6.1 with community plugin support. The manifest permits newer versions, but that isn't a compatibility guarantee.
-- Anki Desktop with [AnkiConnect](https://git.sr.ht/~foosoft/anki-connect) running locally. Earlier scratch tests used Anki 26.08.1 with AnkiConnect 26.10.11.0 and 26.11.15.0. These builds require Anki 26.08 or later. The bridge refuses builds without `getActiveProfile`, which it uses to check the destination before writing.
+- For direct sends and review checks, use Anki Desktop with [AnkiConnect](https://git.sr.ht/~foosoft/anki-connect) running locally. Earlier scratch tests used Anki 26.08.1 with AnkiConnect 26.10.11.0 and 26.11.15.0. These builds require Anki 26.08 or later. The bridge refuses builds without `getActiveProfile`, which it uses to check the destination before writing. Package export doesn't require AnkiConnect.
 - A configured LearnHarness model if you want to generate cards. Estimating is free of model calls. Confirming generation uses your selected provider's quota.
 
 LearnHarness community plugins run local code with your app's permissions. Only install a build you trust.
@@ -24,9 +24,9 @@ LearnHarness community plugins run local code with your app's permissions. Only 
 
 If there is no `dist/` or you find `dist/data/`, stop before moving anything.
 
-Version 0.7.2 backs up the previous state before upgrading it to schema 5. The upgrade preserves drafts, flags, delivery records, the card limit and any model override. Check your card types after upgrading. Fact and Equation replace the previous selection.
+Version 0.8.0 upgrades state to schema 6 and saves a copy of schema 5 as `state.v5.bak` when upgrading from 0.7.2. Your drafts, flags, delivery records, card limit and model override carry over. Apply and Contrast move to Settings. Existing Compose cards stay readable, but Write no longer generates them.
 
-To roll back to 0.7.1, quit LearnHarness and restore both the old `dist/` and the private `data/` backup from before the upgrade. The old plugin cannot read schema 5. Save a private copy of the current data first. Restoring the backup loses newer drafts and delivery records, but it does not undo cards already sent to Anki.
+To roll back to 0.7.2, quit LearnHarness and restore both the old `dist/` and the private `data/` backup from before the upgrade. The old plugin cannot read schema 6. Save a private copy of the current data first. Restoring the backup loses newer drafts and delivery records, but it does not undo cards already sent to Anki.
 
 ## Connect and send a card
 
@@ -54,4 +54,4 @@ npm ci
 npm run package:plugin
 ```
 
-This rebuilds `dist/` and writes `anki-bridge-v0.7.2.zip` at the repo root. The archive contains only the manifest, bundled code, stylesheet and license notices. It excludes plugin data, credentials, bench results and agent files.
+This rebuilds `dist/` and writes `anki-bridge-v0.8.0.zip` at the repo root. The archive contains only the manifest, bundled code, stylesheet and license notices. It excludes plugin data, credentials, bench results and agent files.
