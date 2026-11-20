@@ -8,14 +8,14 @@ Download .apkg saves approved cards as an Anki package. It is a fallback for whe
 - It reads saved state and writes nothing to it. No card is marked sent, so coverage still counts these cards as waiting for review, not in Anki. There is no schema change.
 - It runs inside the delivery writer fence, so a package can't catch a card halfway through a send.
 - The result is the `.apkg` as base64 with the file name, deck, tags and card IDs. The page saves it with a Blob link, as LearnHarness does for its own downloads.
-- After a download, a panel says the cards are not sent and warns about duplicates and updates on import. Download again saves the same bytes without a new export. The button stays available, so the same approved batch can be downloaded again later.
+- After a download, a panel says the download was requested (the page gets no signal that the file was saved, so it doesn't claim it was) and that the cards are not sent and warns about duplicates and updates on import. Download again saves the same bytes without a new export. The button stays available, so the same approved batch can be downloaded again later.
 
 ## Package contents
 
 - A zip with `collection.anki2` (Anki's legacy schema 11 collection) and `media` (`{}`). Current and older Anki versions import this layout. The schema and collection defaults follow genanki (MIT, see `THIRD_PARTY_NOTICES.md`).
 - SQLite comes from `node:sqlite`. No dependency was added. The zip writer uses `node:zlib`.
 - One note type, LearnHarness Basic, with a fixed ID (`1794873600000`) and the same fields, templates and CSS marker as the note type AnkiConnect creates.
-- One deck with an ID derived from its name, plus Anki's Default deck entry.
+- One deck with an ID derived from its name, plus Anki's Default deck entry. A deck named Default, in any case, uses the Default entry (ID 1) instead of a second deck.
 - Per card, one note and one new card. Fields and tags are the values delivery sends with `addNote`. The note GUID is the card's Anki Bridge ID, which is also in `LH_ID`. Cards keep review order in `due`.
 
 ## What Anki may do on import
@@ -47,4 +47,4 @@ Not tested:
 2. Import the same file again. Note whether Anki reports updated, skipped or new notes.
 3. Edit one card in Anki Bridge, approve it, download again and import. Note whether the note updates.
 4. Pair the profile and Send to Anki for an imported card. Check whether it is recorded as sent without adding a note.
-5. Send a new card through AnkiConnect, then import a package containing it. Note whether a duplicate appears.
+5. Download a package with a new approved card, then send that card through AnkiConnect, then import the saved package. Note whether a duplicate appears.

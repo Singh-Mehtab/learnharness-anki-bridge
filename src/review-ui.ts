@@ -97,7 +97,7 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
     const icon = el("span", undefined, "ab-sent-icon"); icon.setAttribute("aria-hidden", "true");
     icon.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11m-5-5 5 5 5-5M5 20h14"/></svg>';
     const text = el("div", undefined, "ab-sent-text");
-    text.append(el("p", `${plural(result.ids.length, "card")} downloaded as ${result.fileName}`, "ab-sent-title"), el("p", `Deck ${result.deck}`, "ab-sent-detail"));
+    text.append(el("p", `Download of ${plural(result.ids.length, "card")} requested as ${result.fileName}`, "ab-sent-title"), el("p", `Deck ${result.deck}`, "ab-sent-detail"));
     if (result.tags.length) text.append(el("p", `Tags ${result.tags.join(" ")}`, "ab-sent-detail"));
     text.append(
       el("p", "Not sent. These cards stay approved and don't count as in Anki. Open the file with Anki, or use File > Import, to add them.", "ab-sent-detail"),

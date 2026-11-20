@@ -700,7 +700,7 @@ test("Download .apkg works unpaired, saves the package, keeps cards approved and
     assert.equal(saved[0].bytes.readUInt32LE(0), 0x04034b50, "the saved file is the zip package");
     const panel = f.container.querySelector(".ab-sent")!;
     assert.equal(panel.getAttribute("data-kind"), "download");
-    assert.match(panel.textContent!, /2 cards downloaded as anki-bridge-synthetic-deck\.apkg/);
+    assert.match(panel.textContent!, /Download of 2 cards requested as anki-bridge-synthetic-deck\.apkg/);
     assert.match(panel.textContent!, /Not sent\. These cards stay approved and don't count as in Anki/);
     assert.match(panel.textContent!, /Importing can add duplicates of cards already in Anki, or update notes from an earlier package/);
     assert.doesNotMatch(panel.textContent!, /sent to Anki/);

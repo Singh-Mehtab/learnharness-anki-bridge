@@ -122,6 +122,8 @@ const LATEX_POST = '\\end{document}';
 
 /** A stable deck ID per name, so downloading the same deck again names the same deck. */
 export function packageDeckId(deck: string): number {
+  // Anki deck names ignore case, and Default always has ID 1.
+  if (deck.toLowerCase() === 'default') return DEFAULT_DECK_ID;
   return 1_000_000_000 + parseInt(createHash('sha256').update(deck).digest('hex').slice(0, 8), 16) % 1_000_000_000;
 }
 
@@ -172,7 +174,7 @@ export async function buildCollection(deck: string, cards: PackageCard[], now: n
   const seconds = Math.floor(now / 1000), deckId = packageDeckId(deck);
   const conf = { activeDecks: [DEFAULT_DECK_ID], curDeck: DEFAULT_DECK_ID, newSpread: 0, collapseTime: 1200, timeLim: 0, estTimes: true, dueCounts: true,
     curModel: String(PACKAGE_MODEL_ID), nextPos: cards.length + 1, sortType: 'noteFld', sortBackwards: false, addToCur: true, newBury: true };
-  const decks = { [DEFAULT_DECK_ID]: deckJson(DEFAULT_DECK_ID, 'Default', seconds), [deckId]: deckJson(deckId, deck, seconds) };
+  const decks = { [DEFAULT_DECK_ID]: deckJson(DEFAULT_DECK_ID, 'Default', seconds), ...(deckId === DEFAULT_DECK_ID ? {} : { [deckId]: deckJson(deckId, deck, seconds) }) };
   const models = { [PACKAGE_MODEL_ID]: modelJson(deckId, seconds) };
   const directory = await mkdtemp(path.join(os.tmpdir(), 'anki-bridge-apkg-'));
   try {

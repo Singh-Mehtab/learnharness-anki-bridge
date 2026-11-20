@@ -14,7 +14,7 @@ Anki Bridge turns what you learn in [LearnHarness](https://github.com/amosblomqv
 - Writes maths for Anki's MathJax, with equations on their own lines.
 - Tags cards to match your collection. A template such as `{deck}::Lecture_01` tags each card by deck and lecture, and you can change the tags before each send.
 - Shows what you have already covered. Each idea says whether it has cards in Anki, cards waiting for review, or none, so you can fill the gaps.
-- Only adds notes. It never edits or deletes existing Anki notes, and Anki keeps your reviews and scheduling.
+- Send to Anki only adds notes. It never edits or deletes existing Anki notes, and Anki keeps your reviews and scheduling.
 - Saves approved cards as an Anki package (`.apkg`) when AnkiConnect isn't an option. The download works with Anki closed and needs no profile.
 
 ## How it works

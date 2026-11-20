@@ -215,10 +215,22 @@ test('package fields and tags match what AnkiConnect delivery sends for the same
   } finally { globalThis.fetch = realFetch; await service.close(); await rm(directory, { recursive: true, force: true }); }
 });
 
+test('exporting to Default uses Anki\'s own Default deck, not a second deck with the same name', async () => {
+  for (const deck of ['Default', 'default']) {
+    const result = await exportPackage(syntheticState(), { ids: [ids.fact, ids.equation], deck }, NOW);
+    await withCollection(Buffer.from(result.data, 'base64'), db => {
+      const decks = Object.values(JSON.parse(contents(db).col.decks)) as { id: number; name: string }[];
+      assert.deepEqual(decks.map(d => d.id), [1], `${deck}: one deck`);
+      assert.equal(decks[0].name.toLowerCase(), 'default');
+      assert.deepEqual([...new Set(contents(db).cards.map(c => c.did))], [1], `${deck}: cards in deck 1`);
+    });
+  }
+});
+
 test('deck IDs and file names are stable, and sort text drops markup', () => {
   assert.equal(packageDeckId('Year 3::Nuclear'), packageDeckId('Year 3::Nuclear'));
   assert.notEqual(packageDeckId('Year 3::Nuclear'), packageDeckId('Year 3::Optics'));
-  assert.ok(packageDeckId('Default') > 1, 'never the Default deck ID');
+  assert.ok(packageDeckId('Default::Sub') > 1, 'subdecks of Default get their own ID');
   assert.equal(packageFileName('Year 3::Nuclear Physics'), 'anki-bridge-year-3-nuclear-physics.apkg');
   assert.equal(packageFileName('Ångström'), 'anki-bridge-angstrom.apkg');
   assert.equal(packageFileName('::'), 'anki-bridge-cards.apkg');
