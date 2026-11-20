@@ -1,6 +1,6 @@
 # Fewer card-type choices on Write
 
-Proposal for [#38](https://github.com/Singh-Mehtab/learnharness-anki-bridge/issues/38). The Write page shows seven checkboxes before the learner drafts anything. Keep the checkboxes, but show the ones people are most likely to change for a given lesson. Keep the current names so the controls, examples, and review labels match.
+Proposal for [#38](https://github.com/Singh-Mehtab/learnharness-anki-bridge/issues/38). The starting proposal below is now implemented in [PR #40](https://github.com/Singh-Mehtab/learnharness-anki-bridge/pull/40), together with #37 and #39; the PR description records what changed. The questions at the end are still open. The Write page shows seven checkboxes before the learner drafts anything. Keep the checkboxes, but show the ones people are most likely to change for a given lesson. Keep the current names so the controls, examples, and review labels match.
 
 ## Starting proposal
 
@@ -38,4 +38,4 @@ These are illustrative physics examples, not exported cards or model results.
 - Look for Compose examples that test something worth reviewing separately from Why. If the distinction matters in practice, keep Compose in Settings instead of removing it from new drafting choices.
 - Check whether the short descriptions are enough to pick a type without opening the examples. Use front-and-back examples for the labels people still confuse.
 
-This PR records the proposal only. It does not change the plugin, prompt, saved data, or version. The numerical constants control ([#37](https://github.com/Singh-Mehtab/learnharness-anki-bridge/issues/37)) is separate.
+The in-app examples are shorter versions of the ones above. No model or bench run has checked how the writer uses these choices.

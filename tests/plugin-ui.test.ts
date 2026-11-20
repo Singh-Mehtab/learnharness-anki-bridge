@@ -16,6 +16,7 @@ function fixture() {
     settings: { url: "http://127.0.0.1:8765/", lastDeck: "Scratch", hasApiKey: true, tagTemplate: "{deck}::Lecture_01", systemTags: true },
     destination: paired() as { url: string; profile: string } | null,
     cards: [] as Card[],
+    generationSettings: { cardsPerNode: 2, enabledKinds: ["fact", "equation"] as string[], model: null },
   };
 }
 const tick = async () => { for (let i = 0; i < 6; i++) await new Promise<void>(resolve => setTimeout(resolve, 0)); };
@@ -44,7 +45,7 @@ async function setup(options: { handler?: (name: string, input: any) => unknown;
     call: async (name: string, input: any) => {
       if (name === "coverageContext") coverageReads++;
       if (name === "coverageContext") return { nodes: [], missing: [], cardsPerNode: 2, paired: true, pairingWarning: false };
-      if (name === "generationStatus") return { generationSettings: { cardsPerNode: 2, enabledKinds: ["fact", "equation"], constantValues: false, model: null }, generations: [] };
+      if (name === "generationStatus") return { generationSettings: structuredClone(state.generationSettings), generations: [] };
       if (name === "sessions") return { sessions: [], unresolved: [] };
       calls.push({ name, input });
       const handled = await options.handler?.(name, input);
@@ -52,6 +53,7 @@ async function setup(options: { handler?: (name: string, input: any) => unknown;
       if (name === "connection") return options.connection ? options.connection() : { profile: "Throwaway", decks: ["Scratch", "New::Deck"] };
       if (name === "settings") Object.assign(state.settings, input.apiKey === undefined ? {} : { hasApiKey: !!input.apiKey }, input.url ? { url: input.url } : {}, input.tagTemplate === undefined ? {} : { tagTemplate: input.tagTemplate }, input.systemTags === undefined ? {} : { systemTags: input.systemTags });
       if (name === "pair") state.destination = input.expectedDestination;
+      if (name === "generationSettings") Object.assign(state.generationSettings, input);
       if (name === "edit") Object.assign(state.cards.find(c => c.id === input.id)!, { front: input.front, back: input.back, extra: input.extra, status: "draft" });
       if (name === "approve") state.cards.filter(c => input.ids.includes(c.id)).forEach(c => { c.status = "approved"; });
       if (name === "drop") state.cards.filter(c => input.ids.includes(c.id)).forEach(c => { c.status = "dropped"; });
@@ -106,9 +108,46 @@ test("the plugin registers a sidebar action, the view and a settings page", asyn
     for (const step of ["Choose ideas", "Write cards", "Review and send"]) assert.match(f.container.textContent!, new RegExp(step));
     assert.equal(f.container.querySelector("fieldset"), null, "no raw fieldset forms");
     const s = await f.mountSettings();
-    for (const panel of ["Connect to Anki", "Anki profile", "Tags", "Note type"]) assert.match(s.host.textContent!, new RegExp(panel));
+    for (const panel of ["Connect to Anki", "Anki profile", "Tags", "More card types", "Note type"]) assert.match(s.host.textContent!, new RegExp(panel));
     assert.doesNotMatch(f.container.textContent!, /Add missing fields|AnkiConnect address/, "upkeep lives only in settings");
     s.close();
+  } finally { await f.dispose(); }
+});
+
+test("Settings switch Apply and Contrast on for drafting, with examples, and Write shows it", async () => {
+  const f = await setup();
+  try {
+    const s = await f.mountSettings();
+    const panel = Array.from(s.host.querySelectorAll(".ab-panel") as ArrayLike<HTMLElement>).find(p => /More card types/.test(p.textContent!))!;
+    assert.ok(panel, "card types panel");
+    const boxes = () => Array.from(panel.querySelectorAll("input[type=checkbox]")) as unknown as HTMLInputElement[];
+    assert.deepEqual(Array.from(panel.querySelectorAll("label") as ArrayLike<HTMLElement>).map(l => l.textContent), [
+      "Apply: pick the rule or method that fits a new situation.", "Contrast: tell apart two ideas that are easy to mix up."]);
+    assert.deepEqual(boxes().map(b => b.checked), [false, false], "off by default");
+    assert.match(panel.textContent!, /Front: You know an electron beam's momentum.*Front: A proton speeds up/s);
+    assert.doesNotMatch(s.host.textContent!, /Compose/);
+    const write = () => f.container.querySelector(".ab-kind-help")!.textContent!;
+    assert.doesNotMatch(write(), /Also on in Settings/);
+
+    // Write changed after Settings loaded; the Settings toggle must keep that change.
+    f.state.generationSettings.enabledKinds = ["fact", "equation", "why"];
+    boxes()[0]!.checked = true; boxes()[0]!.dispatchEvent(f.event("change")); await tick();
+    assert.deepEqual(f.calls.filter(c => c.name === "generationSettings").map(c => c.input), [{ enabledKinds: ["fact", "equation", "why", "apply"] }]);
+    assert.match(panel.textContent!, /Apply on\./);
+    assert.deepEqual(boxes().map(b => b.checked), [true, false]);
+    assert.match(write(), /Also on in Settings: Apply\./, "the open Write step updates");
+
+    boxes()[0]!.checked = false; boxes()[0]!.dispatchEvent(f.event("change")); await tick();
+    assert.deepEqual(f.state.generationSettings.enabledKinds, ["fact", "equation", "why"]);
+    assert.doesNotMatch(write(), /Also on in Settings/);
+
+    f.state.generationSettings.enabledKinds = ["discriminate"];
+    s.close();
+    const again = await f.mountSettings();
+    const kindsPanel = Array.from(again.host.querySelectorAll(".ab-panel") as ArrayLike<HTMLElement>).find(p => /More card types/.test(p.textContent!))!;
+    const checked = Array.from(kindsPanel.querySelectorAll("input[type=checkbox]") as ArrayLike<HTMLInputElement>).filter(b => b.checked);
+    assert.equal(checked.length, 1); assert.equal(checked[0]!.disabled, true, "the only remaining type stays on");
+    again.close();
   } finally { await f.dispose(); }
 });
 
@@ -362,6 +401,8 @@ test("a hand-written card is added through a dialog", async () => {
     await f.more("Write a card by hand"); await tick();
     const dialog = f.dialog()!;
     const [front, back] = Array.from(dialog.querySelectorAll("textarea")) as unknown as HTMLTextAreaElement[];
+    const kinds = Array.from(dialog.querySelectorAll("option") as ArrayLike<HTMLOptionElement>).map(o => o.textContent);
+    assert.deepEqual(kinds, ["Fact", "Equation", "Why", "Steps", "Apply", "Contrast"], "no Compose for new cards");
     front.value = "Front text"; back.value = "Back text";
     f.button("Add card", dialog).click(); await tick();
     assert.deepEqual(f.calls.find(c => c.name === "draft")!.input, { front: "Front text", back: "Back text", extra: "", kind: "fact" });

@@ -2,7 +2,7 @@
 import type { PluginFrontendContext } from "../sdk/index.d.ts";
 import { expandTagTemplate, matchTagCase, systemTags, tagSuggestions, validateTags } from "./anki/tags.ts";
 import { isWaitingCard } from "./coverage/flow.ts";
-import { KIND_NAMES } from "./drafting-ui.ts";
+import { KIND_NAMES } from "./kinds-ui.ts";
 import { CORE_KINDS, isStoredKind } from "./writer/types.ts";
 import type { Connection, Destination, Peers, Settings } from "./settings-ui.ts";
 import { button, confirmDialog, el, field, input, moreMenu, pill, plural, RenderScope, status, textarea } from "./ui.ts";

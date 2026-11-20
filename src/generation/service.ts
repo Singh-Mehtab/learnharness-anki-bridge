@@ -203,7 +203,7 @@ export class GenerationService {
     const notes = this.flagNotes?.();
     const packed = pack(graph, ids, id => ({ source: sources.find(s => s.nodeId === id)?.source, flagged: notes?.has(id), flagNote: notes?.get(id) || undefined,
       existingCards: cards.filter(c => c.nodeId === id).reverse().slice(0, 6).map(c => ({ kind: c.kind, front: c.front, back: c.back })) }),
-    { maxCardsPerNode: settings.cardsPerNode, enabledKinds: settings.enabledKinds, constantValues: settings.constantValues, contextWindow: model.contextWindow, maxTokens: model.maxTokens });
+    { maxCardsPerNode: settings.cardsPerNode, enabledKinds: settings.enabledKinds, contextWindow: model.contextWindow, maxTokens: model.maxTokens });
     const batches: Batch[] = [], skipped = [...packed.skipped];
     // The pure packer budgets source material. Also account for prompt/schema overhead
     // and the growing output reserve when the selected model has known limits.
@@ -250,9 +250,9 @@ export class GenerationService {
         return { ...graphCoverage(this.ctx.learning.graph(), this.store.snapshot()), catalog };
       }
       if (name === 'generationSettings') {
-        keys(value, ['cardsPerNode', 'enabledKinds', 'constantValues', 'model']);
+        keys(value, ['cardsPerNode', 'enabledKinds', 'model']);
         const settings = { ...this.store.snapshot().generationSettings, ...value };
-        if (!validGenerationSettings(settings)) throw new Error('Choose 1–4 cards per node, one or more available card types, a constant-values toggle, and a model override or null.');
+        if (!validGenerationSettings(settings)) throw new Error('Choose 1–4 cards per node, one or more available card types, and a model, or null for the cheap model.');
         await this.delivery.save(s => { s.generationSettings = settings; });
       } else if (name === 'preflight') {
         keys(value, ['nodeIds', 'backfillNodeIds']);

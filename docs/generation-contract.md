@@ -9,7 +9,7 @@ All calls use `ctx.call`. In 0.3.0, no call silently selects a model and no sess
 | Operation | Input | Output |
 | --- | --- | --- |
 | `generationContext` | `{}` | `{nodes: [{id, name, statement}], catalog}`; catalog is the host's current model catalog |
-| `generationSettings` | Partial `{cardsPerNode, enabledKinds, model}` | Snapshot; cap is an integer 1–4, kinds are a nonempty distinct subset of `recall`, `why`, `compose`, `discriminate`; model is `{provider,id}` or `null` |
+| `generationSettings` | Partial `{cardsPerNode, enabledKinds, model}` | Snapshot; cap is an integer 1–4, kinds are a nonempty distinct subset of `fact`, `equation`, `why`, `steps`, `apply`, `discriminate`; model is `{provider,id}`, or `null` for the host's cheap slot |
 | `preflight` | `{nodeIds: string[]}` | Preflight described below; selected IDs must be distinct, present, 1–1000 nodes |
 | `generate` | `{preflightId}` | Snapshot after durable acceptance, not completion |
 | `generationStatus` | `{}` | Snapshot, including durable task states |
@@ -41,7 +41,7 @@ Generated cards retain all existing delivery fields plus `generationId`, `reques
 
 ## Persistence and lifecycle
 
-Schema 1 migrates to schema 2 through the existing locked, atomic `StateStore`, preserving settings, pairing and cards. Unsupported or malformed data is refused without resetting. Persisted applied results get a shape check (targets from the input, card fields and core kinds). Writer content rules run once, at apply time, so a later stricter rule never makes old state unreadable.
+Schema 1 migrates to schema 2 through the existing locked, atomic `StateStore`, preserving settings, pairing and cards. Unsupported or malformed data is refused without resetting. Schema 6 (#37, #38) drops the constant-values toggle and `compose` from the top-level settings, falling back to `fact` and `equation` if no kind is left; generation history keeps its frozen settings and inputs, and `compose` cards stay readable. Persisted applied results get a shape check (targets from the input, card fields and core kinds). Writer content rules run once, at apply time, so a later stricter rule never makes old state unreadable.
 
 Delivery and generation share one mutation fence. Background work (activation recovery, the generation driver) waits for it. A UI call waits out a background hold, but still gets the busy error if another UI operation holds the fence, which keeps double-clicked sends from running twice. Worker partial/streaming text is never a draft.
 

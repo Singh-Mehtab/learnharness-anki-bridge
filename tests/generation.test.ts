@@ -26,7 +26,7 @@ test('preflight follows the cheap slot unless overridden, needs an available mod
   const c = host.context(directory); const close = await activate(c.ctx);
   try {
     const snap = await c.call('generationStatus');
-    assert.deepEqual(snap.generationSettings, { cardsPerNode: 2, enabledKinds: ['fact', 'equation'], constantValues: false, model: null });
+    assert.deepEqual(snap.generationSettings, { cardsPerNode: 2, enabledKinds: ['fact', 'equation'], model: null });
     await assert.rejects(c.call('preflight', { nodeIds: ['n_a'] }), /cheap model/);
     // Default: the host's cheap slot with its thinking level, like core Flashcards.
     (host.catalog.models[0] as { supportedLevels?: string[] }).supportedLevels = ['low', 'medium'];
@@ -78,8 +78,8 @@ test('defaults carry the cheap slot’s thinking through confirmation, worker st
     assert.deepEqual(start.model, { provider: 'scratch', id: 'writer', thinkingLevel: 'medium' });
     assert.deepEqual(input.enabledKinds, ['fact', 'equation']);
     assert.deepEqual(input.targets[0].allowedKinds, ['fact', 'equation']);
-    assert.equal(input.constantValues, false);
-    assert.match(start.prompt, /Constant values are off/);
+    assert.equal('constantValues' in input, false, 'new inputs carry no constant-values toggle');
+    assert.doesNotMatch(start.prompt, /Constant values/);
     host.workers.succeed('task-1', { targets: [{ nodeId: 'n_a', cards: [{ kind: 'equation', front: 'What is the fixture relation?', back: '$a=b$' }] }] });
     await until(async () => (await c.call('generationStatus')).generations[0].status === 'completed');
     const saved = JSON.parse(await readFile(statePath(directory), 'utf8'));
@@ -89,17 +89,18 @@ test('defaults carry the cheap slot’s thinking through confirmation, worker st
   } finally { await close(); }
 }));
 
-test('a blank flag increases the real preflight and worker cap; constant values and new kinds are opt-ins', () => withHost(async (host, directory) => {
+test('a blank flag increases the real preflight and worker cap; new kinds are opt-ins; constants and compose have no setting', () => withHost(async (host, directory) => {
   const c = host.context(directory), close = await activate(c.ctx);
   try {
     await c.call('generationSettings', { model: { provider: 'scratch', id: 'writer' } });
     const stale = await c.call('preflight', { nodeIds: ['n_a', 'n_b'] });
     await c.call('flag', { sessionId: 'c1', messageIds: ['m1'], note: '' });
     await assert.rejects(c.call('generate', { preflightId: stale.preflightId }), /stale|expired/);
-    await assert.rejects(c.call('generationSettings', { constantValues: 'yes' }), /toggle/);
+    await assert.rejects(c.call('generationSettings', { constantValues: true }), /Unsupported generation input/);
     await assert.rejects(c.call('generationSettings', { enabledKinds: ['recall'] }), /available card types/);
+    await assert.rejects(c.call('generationSettings', { enabledKinds: ['fact', 'compose'] }), /available card types/);
     const beforeOptIn = await c.call('preflight', { nodeIds: ['n_a', 'n_b'] });
-    await c.call('generationSettings', { enabledKinds: ['fact', 'steps', 'apply'], constantValues: true });
+    await c.call('generationSettings', { enabledKinds: ['fact', 'steps', 'apply'] });
     await assert.rejects(c.call('generate', { preflightId: beforeOptIn.preflightId }), /stale/);
     const p = await c.call('preflight', { nodeIds: ['n_a', 'n_b'] });
     assert.equal(p.maximumCards, 14);
@@ -119,16 +120,16 @@ test('a blank flag increases the real preflight and worker cap; constant values 
     assert.equal(input.targets[0].flagNote, undefined);
     assert.equal(input.targets[1].maxCards, undefined);
     assert.deepEqual(input.targets[0].allowedKinds, ['fact', 'steps', 'apply']);
-    assert.equal(input.constantValues, true);
-    assert.match(start.prompt, /Constant values are on/);
+    assert.deepEqual(input.enabledKinds, ['fact', 'steps', 'apply']);
+    assert.equal('constantValues' in input, false);
     assert.equal(start.options?.maxTokens, p.outputTokens);
     host.workers.succeed('task-1', { targets: [{ nodeId: 'n_a', cards: ['First', 'Second', 'Third'].map((ordinal, i) => ({
       kind: 'steps', front: `What is the ${ordinal} stage of the process?`, back: ['Prepare.', 'Execute.', 'Verify.'][i],
     })) }, { nodeId: 'n_b', cards: [], skipReason: 'No additional material.' }] });
     await until(async () => (await c.call('generationStatus')).generations[0].status === 'completed');
     const saved = await c.call('generationStatus');
-    assert.equal(saved.generationSettings.constantValues, true);
-    assert.equal(saved.generations[0].settings.constantValues, true);
+    assert.deepEqual(saved.generationSettings, { cardsPerNode: 2, enabledKinds: ['fact', 'steps', 'apply'], model: { provider: 'scratch', id: 'writer' } });
+    assert.deepEqual(saved.generations[0].settings, saved.generationSettings);
     assert.equal(saved.cards.length, 3);
   } finally { await close(); }
 }));
@@ -306,7 +307,7 @@ test('schema 1 state migrates without losing pairing or cards, and malformed gen
     assert.equal(snap.cards.length, 1); assert.equal(snap.destination.profile, 'Throwaway'); assert.deepEqual(snap.generations, []);
   } finally { await close(); }
   const saved = JSON.parse(await readFile(statePath(directory), 'utf8'));
-  assert.equal(saved.schemaVersion, 5);
+  assert.equal(saved.schemaVersion, 6);
   saved.generations = [{ id: 'g', bogus: true }];
   const broken = JSON.stringify(saved);
   await writeFile(statePath(directory), broken);
@@ -398,6 +399,59 @@ test('flag notes (0.4.0 seam) reach the writer input and are bound into the pref
   } finally { await generation.close(); await delivery.close(); }
 }));
 
+test('v5 (0.7.2) state drops the constants toggle and compose from settings only; history, frozen inputs and compose cards stay readable', () => withHost(async (host, directory) => {
+  const oldSettings = { cardsPerNode: 3, enabledKinds: ['fact', 'compose', 'why'], constantValues: true, model: { provider: 'scratch', id: 'writer' } };
+  const frozen = { ...pack({ propositions: host.nodes, chains: [] }, ['n_a'], () => ({}), { maxCardsPerNode: 3, enabledKinds: ['fact', 'compose', 'why'] }).batches[0].input, constantValues: true };
+  const inputBytes = JSON.stringify(frozen);
+  const source = { nodeId: 'n_a', name: 'Alpha', statement: host.nodes[0].statement,
+    statementHash: statementHash(host.nodes[0].statement), sessionId: 'c1', sessionName: 'Scratch session' };
+  const composeCard = { id: '00000000-0000-4000-8000-000000000002', ...source, nodeName: source.name,
+    sourceSnapshot: source, kind: 'compose', front: 'Given A and B, what follows?', back: 'Alpha.', extra: '', status: 'draft' };
+  const requestId = 'v5-request';
+  const historical = { id: 'v5-generation', nodeIds: ['n_a'], createdAt: '2026-11-19T00:00:00Z', status: 'running', settings: oldSettings,
+    modelSpec: oldSettings.model, skipped: [], tasks: [{ status: 'running', requestId, input: frozen, sources: [source], outputAllowance: outputAllowance(1, 3) }] };
+  const bytes = JSON.stringify({ ...initialState(), schemaVersion: 5, generationSettings: oldSettings, generations: [historical], cards: [composeCard] });
+  await writeFile(statePath(directory), bytes);
+  const task = host.workers.start('manual-card-writer', { requestId, input: frozen, model: oldSettings.model,
+    prompt: 'Frozen fixture prompt', purpose: 'user', maxTurns: 3, timeoutMs: 180_000 });
+  host.workers.succeed(task.id, { targets: [{ nodeId: 'n_a', cards: [{ kind: 'fact', front: 'What is the fixture condition?', back: 'Assumption A.' }] }] });
+  const c = host.context(directory), close = await activate(c.ctx);
+  try {
+    const saved = JSON.parse(await readFile(statePath(directory), 'utf8'));
+    assert.equal(saved.schemaVersion, 6);
+    assert.equal(await readFile(path.join(directory, 'state.v5.bak'), 'utf8'), bytes);
+    assert.deepEqual(saved.generationSettings, { cardsPerNode: 3, enabledKinds: ['fact', 'why'], model: oldSettings.model });
+    assert.deepEqual(saved.generations[0].settings, oldSettings, 'history keeps what the batch was run with');
+    assert.equal(JSON.stringify(saved.generations[0].tasks[0].input), inputBytes);
+    assert.equal(saved.generations[0].status, 'completed');
+    assert.deepEqual(saved.cards.map((card: { kind: string }) => card.kind), ['compose', 'fact']);
+    assert.deepEqual(saved.cards[0], composeCard);
+    assert.equal(host.workers.starts.length, 1, 'restart never starts model work');
+    // New drafts use the migrated settings: no compose, no constants toggle.
+    host.workers.starts.length = 0;
+    const p = await c.call('preflight', { nodeIds: ['n_b'] });
+    await c.call('generate', { preflightId: p.preflightId });
+    await until(() => host.workers.starts.length === 1);
+    const input = host.workers.starts[0].input as WriterInput;
+    assert.deepEqual(input.enabledKinds, ['fact', 'why']);
+    assert.equal('constantValues' in input, false);
+    assert.equal(input.targets[0].existingCards.length, 0);
+  } finally { await close(); }
+}));
+
+test('v5 settings with only compose fall back to the default card types', () => withHost(async (host, directory) => {
+  const bytes = JSON.stringify({ ...initialState(), schemaVersion: 5, generationSettings: { cardsPerNode: 1, enabledKinds: ['compose'], constantValues: false, model: null } });
+  await writeFile(statePath(directory), bytes);
+  const c = host.context(directory), close = await activate(c.ctx);
+  try {
+    assert.deepEqual((await c.call('generationStatus')).generationSettings, { cardsPerNode: 1, enabledKinds: ['fact', 'equation'], model: null });
+  } finally { await close(); }
+  const malformed = JSON.stringify({ ...initialState(), schemaVersion: 5, generationSettings: { cardsPerNode: 1, enabledKinds: ['fact'], model: null } });
+  await writeFile(statePath(directory), malformed);
+  await assert.rejects(activate(host.context(directory).ctx), /Invalid generation state/);
+  assert.equal(await readFile(statePath(directory), 'utf8'), malformed, 'a v5 file without its toggle is refused, not reset');
+}));
+
 test('v4 backup and restart recover a frozen legacy worker without changing its input or old cards', () => withHost(async (host, directory) => {
   const legacySettings = { cardsPerNode: 3, enabledKinds: ['recall'], model: { provider: 'scratch', id: 'writer' } };
   const legacyInput = pack({ propositions: host.nodes, chains: [] }, ['n_a'], () => ({}), {
@@ -424,9 +478,9 @@ test('v4 backup and restart recover a frozen legacy worker without changing its 
     const c = host.context(directory), close = await activate(c.ctx);
     try {
       const saved = JSON.parse(await readFile(statePath(directory), 'utf8'));
-      assert.equal(saved.schemaVersion, 5);
+      assert.equal(saved.schemaVersion, 6);
       assert.equal(await readFile(path.join(directory, 'state.v4.bak'), 'utf8'), bytes);
-      assert.deepEqual(saved.generationSettings, { cardsPerNode: 3, enabledKinds: ['fact', 'equation'], constantValues: false, model: legacySettings.model });
+      assert.deepEqual(saved.generationSettings, { cardsPerNode: 3, enabledKinds: ['fact', 'equation'], model: legacySettings.model });
       assert.deepEqual(saved.generations[0].settings, legacySettings);
       assert.equal(saved.generations[0].status, 'completed');
       const stored = saved.generations[0].tasks[0];

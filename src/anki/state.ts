@@ -1,9 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { link, mkdir, open, readFile, rename, unlink } from 'node:fs/promises';
 import path from 'node:path';
-import { defaultGenerationSettings, validateGenerations, validLegacyGenerationSettings, validSource } from '../generation/types.ts';
+import { defaultGenerationSettings, fromV072Settings, validateGenerations, validLegacyGenerationSettings, validSource, validV072GenerationSettings } from '../generation/types.ts';
 import type { Generation, GenerationSettings, SourceSnapshot } from '../generation/types.ts';
-import { isStoredKind } from '../writer/types.ts';
+import { DEFAULT_KINDS, isStoredKind } from '../writer/types.ts';
 import type { StoredCardKind } from '../writer/types.ts';
 import { validateFlags } from '../session/flow.ts';
 import type { Flag } from '../session/flow.ts';
@@ -35,7 +35,7 @@ export interface Card {
   requestId?: string;
 }
 export interface State {
-  schemaVersion: 5;
+  schemaVersion: 6;
   generationSettings: GenerationSettings;
   generations: Generation[];
   flags: Flag[];
@@ -46,7 +46,7 @@ export interface State {
   cards: Card[];
 }
 export const initialState = (): State => ({
-  schemaVersion: 5,
+  schemaVersion: 6,
   generationSettings: defaultGenerationSettings(),
   generations: [],
   flags: [],
@@ -62,7 +62,7 @@ function destination(v: unknown): v is Destination {
   return object(v) && text(v.url) && !!v.url && text(v.profile) && !!v.profile;
 }
 export function validateState(value: unknown): asserts value is State {
-  if (!object(value) || value.schemaVersion !== 5) throw new Error('Unsupported state format. Keep state.json intact and use a compatible Anki Bridge version.');
+  if (!object(value) || value.schemaVersion !== 6) throw new Error('Unsupported state format. Keep state.json intact and use a compatible Anki Bridge version.');
   validateGenerations(value.generationSettings, value.generations);
   validateFlags(value.flags);
   validateDismissals(value.dismissals);
@@ -81,7 +81,7 @@ export function validateState(value: unknown): asserts value is State {
   }
 }
 
-/** Upgrade older snapshots one step per version (1 -> 2 -> 3 -> 4 -> 5), then validate the result.
+/** Upgrade older snapshots one step per version (1 -> 2 -> 3 -> 4 -> 5 -> 6), then validate the result.
  * StateStore.open writes only after validation passes, so malformed or newer data is
  * refused and the file is left as it was. */
 export function migrateState(raw: unknown): State {
@@ -94,7 +94,14 @@ export function migrateState(raw: unknown): State {
     if (!validLegacyGenerationSettings(old)) throw new Error('Invalid generation state. The file has not been reset.');
     // The old kinds were on by default, so they don't represent an opt-in. Leave
     // task inputs and historical settings byte-for-byte equivalent for worker recovery.
-    value = { ...value, schemaVersion: 5, generationSettings: { ...defaultGenerationSettings(), cardsPerNode: old.cardsPerNode, model: old.model } };
+    value = { ...value, schemaVersion: 5, generationSettings: { cardsPerNode: old.cardsPerNode, enabledKinds: [...DEFAULT_KINDS], constantValues: false, model: old.model } };
+  }
+  if (object(value) && value.schemaVersion === 5) {
+    const old = value.generationSettings;
+    if (!validV072GenerationSettings(old)) throw new Error('Invalid generation state. The file has not been reset.');
+    // #37 removed the constant-values toggle and #38 stopped drafting compose. Only the
+    // current settings change; generation history keeps its 0.7.2 settings and inputs.
+    value = { ...value, schemaVersion: 6, generationSettings: fromV072Settings(old) };
   }
   validateState(value);
   return value;
