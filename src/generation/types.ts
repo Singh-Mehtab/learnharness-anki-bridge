@@ -1,4 +1,4 @@
-import { DEFAULT_KINDS, FLAGGED_CARD_CAP, isCoreKind, isStoredKind } from '../writer/types.ts';
+import { CORE_KINDS, DEFAULT_KINDS, FLAGGED_CARD_CAP, isCoreKind, isStoredKind } from '../writer/types.ts';
 import type { CoreCardKind, StoredCardKind } from '../writer/types.ts';
 import type { WriterInput, WriterResult } from '../writer/types.ts';
 
@@ -6,8 +6,14 @@ interface SettingsBase {
   cardsPerNode: number;
   model: { provider: string; id: string } | null;
 }
+/** model null means the host's cheap model slot. */
 export interface GenerationSettings extends SettingsBase {
   enabledKinds: CoreCardKind[];
+}
+/** Settings saved by 0.7.2 (state schema 5): compose was offered and constant
+ *  values had a toggle. Kept for generation history and migration. */
+export interface V072GenerationSettings extends SettingsBase {
+  enabledKinds: (CoreCardKind | 'compose')[];
   constantValues: boolean;
 }
 interface LegacyGenerationSettings extends SettingsBase {
@@ -42,7 +48,7 @@ export interface Generation {
   /** Absent on legacy generations, whose targets were all explicit requests. */
   backfillNodeIds?: string[];
   status: 'running' | 'completed' | 'cancelled' | 'interrupted' | 'failed';
-  settings: GenerationSettings | LegacyGenerationSettings;
+  settings: GenerationSettings | V072GenerationSettings | LegacyGenerationSettings;
   /** Model and thinking level resolved at start (0.7.2). Absent on older batches, which used settings.model. */
   modelSpec?: { provider: string; id: string; thinkingLevel?: string };
   tasks: GenerationTask[];
@@ -51,8 +57,14 @@ export interface Generation {
   hidden?: boolean;
 }
 export const defaultGenerationSettings = (): GenerationSettings => ({
-  cardsPerNode: 2, enabledKinds: [...DEFAULT_KINDS], constantValues: false, model: null,
+  cardsPerNode: 2, enabledKinds: [...DEFAULT_KINDS], model: null,
 });
+/** Current settings from 0.7.2 settings: drop the constant-values toggle (#37)
+ *  and compose (#38). Falls back to the defaults if no kind is left. */
+export function fromV072Settings(old: V072GenerationSettings): GenerationSettings {
+  const kinds = CORE_KINDS.filter(k => (old.enabledKinds as string[]).includes(k));
+  return { cardsPerNode: old.cardsPerNode, enabledKinds: kinds.length ? kinds : [...DEFAULT_KINDS], model: old.model };
+}
 
 const object = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
 const strings = (v: unknown): v is string[] => Array.isArray(v) && v.every(x => typeof x === 'string');
@@ -62,7 +74,10 @@ function validBaseSettings(v: unknown): v is SettingsBase & Record<string, unkno
     && (v.model === null || object(v.model) && typeof v.model.provider === 'string' && !!v.model.provider && typeof v.model.id === 'string' && !!v.model.id);
 }
 export function validGenerationSettings(v: unknown): v is GenerationSettings {
-  return validBaseSettings(v) && distinctKinds(v.enabledKinds) && v.enabledKinds.every(isCoreKind) && typeof v.constantValues === 'boolean';
+  return validBaseSettings(v) && distinctKinds(v.enabledKinds) && v.enabledKinds.every(isCoreKind) && !('constantValues' in v);
+}
+export function validV072GenerationSettings(v: unknown): v is V072GenerationSettings {
+  return validBaseSettings(v) && distinctKinds(v.enabledKinds) && v.enabledKinds.every(k => isCoreKind(k) || k === 'compose') && typeof v.constantValues === 'boolean';
 }
 export function validLegacyGenerationSettings(v: unknown): v is LegacyGenerationSettings {
   return validBaseSettings(v) && distinctKinds(v.enabledKinds) && v.enabledKinds.every(k => ['recall', 'why', 'compose', 'discriminate'].includes(k)) && v.constantValues === undefined;
@@ -93,7 +108,7 @@ export function validateGenerations(settings: unknown, generations: unknown): vo
   if (!validGenerationSettings(settings) || !Array.isArray(generations)) throw new Error('Invalid generation state. The file has not been reset.');
   const ids = new Set<string>(), requests = new Set<string>();
   for (const g of generations) {
-    if (!object(g) || typeof g.id !== 'string' || !g.id || ids.has(g.id) || typeof g.createdAt !== 'string' || !strings(g.nodeIds) || !(validGenerationSettings(g.settings) || validLegacyGenerationSettings(g.settings)) || !['running', 'completed', 'cancelled', 'interrupted', 'failed'].includes(String(g.status)) || !Array.isArray(g.tasks) || !Array.isArray(g.skipped) || g.skipped.some(s => !object(s) || typeof s.nodeId !== 'string' || typeof s.reason !== 'string')) throw new Error('Invalid generation batch.');
+    if (!object(g) || typeof g.id !== 'string' || !g.id || ids.has(g.id) || typeof g.createdAt !== 'string' || !strings(g.nodeIds) || !(validGenerationSettings(g.settings) || validV072GenerationSettings(g.settings) || validLegacyGenerationSettings(g.settings)) || !['running', 'completed', 'cancelled', 'interrupted', 'failed'].includes(String(g.status)) || !Array.isArray(g.tasks) || !Array.isArray(g.skipped) || g.skipped.some(s => !object(s) || typeof s.nodeId !== 'string' || typeof s.reason !== 'string')) throw new Error('Invalid generation batch.');
     if (g.backfillNodeIds !== undefined && (!strings(g.backfillNodeIds) || new Set(g.backfillNodeIds).size !== g.backfillNodeIds.length || g.backfillNodeIds.some(id => !(g.nodeIds as string[]).includes(id)))) throw new Error('Invalid generation backfill targets.');
     if (g.hidden !== undefined && typeof g.hidden !== 'boolean') throw new Error('Invalid generation visibility.');
     if (g.modelSpec !== undefined && !(object(g.modelSpec) && typeof g.modelSpec.provider === 'string' && !!g.modelSpec.provider && typeof g.modelSpec.id === 'string' && !!g.modelSpec.id && (g.modelSpec.thinkingLevel === undefined || typeof g.modelSpec.thinkingLevel === 'string'))) throw new Error('Invalid generation model.');

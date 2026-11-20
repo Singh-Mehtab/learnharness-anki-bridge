@@ -1,7 +1,10 @@
-// Settings page: connection, destination profile, tags and note type upkeep.
+// Settings page: connection, destination profile, tags, extra card types and note type upkeep.
 // Card review lives on the main page; nothing here sends cards.
 import type { PluginFrontendContext } from "../sdk/index.d.ts";
+import { exampleCard, KIND_HELP, KIND_NAMES } from "./kinds-ui.ts";
 import { button, confirmDialog, el, field, input, plural, RenderScope, status } from "./ui.ts";
+import { SETTINGS_KINDS } from "./writer/types.ts";
+import type { CoreCardKind } from "./writer/types.ts";
 import type { ButtonHandle } from "./ui.ts";
 
 export interface Destination { url: string; profile: string }
@@ -29,7 +32,7 @@ export function connectionText(url: string, result: Connection | Error): { text:
   return { tone: "success", text: `Connected. Profile ${result.profile} is open with ${plural(result.decks.length, "deck")}.` };
 }
 
-interface SettingsSnapshot { settings: Settings; destination: Destination | null }
+interface SettingsSnapshot { settings: Settings; destination: Destination | null; generationSettings?: { enabledKinds: CoreCardKind[] } }
 
 export function mountSettings(ctx: PluginFrontendContext, container: HTMLElement, signal: AbortSignal, peers: Peers): () => void {
   const root = el("div", undefined, "anki-bridge ab-settings");
@@ -75,6 +78,30 @@ export function mountSettings(ctx: PluginFrontendContext, container: HTMLElement
     field("Tags for new cards", template, "Separate tags with spaces. {deck} becomes the deck name with spaces replaced by underscores. You can still change the tags before each send."),
     systemLabel, tagStatus);
 
+  // Card types that stay off the Write step (#38)
+  const kinds = el("section", undefined, "ab-panel");
+  const kindStatus = status();
+  const kindBoxes = new Map<CoreCardKind, HTMLInputElement>();
+  kinds.append(el("h3", "More card types", "ab-panel-title"),
+    el("p", "Fact, Equation, Why and Steps are chosen on the Write step. These types are off by default. When one is on, the writer may use it for any idea it fits, and the Write step says so.", "ab-muted ab-panel-intro"));
+  for (const kind of SETTINGS_KINDS) {
+    const box = el("input"); box.type = "checkbox";
+    const label = el("label", undefined, "ab-check");
+    label.append(box, el("span", `${KIND_NAMES[kind]}: ${KIND_HELP[kind].charAt(0).toLowerCase()}${KIND_HELP[kind].slice(1)}`));
+    kindBoxes.set(kind, box);
+    box.onchange = () => {
+      const wanted = box.checked;
+      if (busy) { syncKinds(); kindStatus.show("Wait for the current action to finish, then try again.", "error"); return; }
+      void act(kindStatus, async () => {
+        // Send only this change; the backend applies it to the saved types, so it can't undo one made on the Write step.
+        await apply("generationSettings", { toggleKind: { kind, enabled: wanted } });
+        return `${KIND_NAMES[kind]} ${wanted ? "on" : "off"}.`;
+      }, "Saving…").then(() => { if (alive()) syncKinds(); });
+    };
+    kinds.append(label, exampleCard(kind));
+  }
+  kinds.append(kindStatus);
+
   // Note type upkeep
   const noteType = el("section", undefined, "ab-panel ab-panel-quiet");
   const noteActions = el("div", undefined, "ab-actions");
@@ -83,7 +110,7 @@ export function mountSettings(ctx: PluginFrontendContext, container: HTMLElement
     el("p", "Cards use the LearnHarness Basic note type, which Anki Bridge creates on the first send. Use these only if Anki Bridge reports a problem with it. Neither changes your cards or review history.", "ab-muted ab-panel-intro"),
     noteActions, noteStatus);
 
-  root.append(connection, destination, tags, noteType);
+  root.append(connection, destination, tags, kinds, noteType);
 
   let saveButton: ButtonHandle, testButton: ButtonHandle, pairButton: ButtonHandle, removeKey: ButtonHandle | undefined;
   let savedUrl = "";
@@ -100,6 +127,15 @@ export function mountSettings(ctx: PluginFrontendContext, container: HTMLElement
     urlHint.textContent = (/localhost/i.test(url.value) ? "Use 127.0.0.1 instead of localhost, which can fail over IPv6." : "Usually http://127.0.0.1:8765. Use the root address, not an API path.")
       + (changed ? " Saving a different address removes the saved API key." : "")
       + (keyCleared ? " The key you typed was cleared because the address changed. Type it again for this address." : "");
+  }
+  /** Checkboxes follow the saved types. At least one type stays on across Write and Settings. */
+  function syncKinds(): void {
+    const enabled = state?.generationSettings?.enabledKinds;
+    kinds.hidden = !enabled;
+    for (const [kind, box] of kindBoxes) {
+      box.checked = !!enabled?.includes(kind);
+      box.disabled = box.checked && enabled?.length === 1;
+    }
   }
   let lastEndpoint = "";
   url.oninput = () => {
@@ -119,6 +155,7 @@ export function mountSettings(ctx: PluginFrontendContext, container: HTMLElement
       if (alive()) syncButtons();
       // A tag change made during another save is saved now, with the latest values.
       if (tagsQueued && alive()) { tagsQueued = false; void saveTags(); }
+      else if (reloadQueued && alive()) { reloadQueued = false; void load(); }
     }
   }
   async function apply(name: string, value?: unknown): Promise<void> {
@@ -230,13 +267,15 @@ export function mountSettings(ctx: PluginFrontendContext, container: HTMLElement
       destinationText.append("No profile chosen yet. Open the profile you want in Anki, then choose it here. Use a throwaway profile while you try Anki Bridge.");
     }
     pairButton.update({ label: d ? "Switch to the open profile" : "Use the open profile" });
-    urlAdvice(); syncButtons();
+    syncKinds(); urlAdvice(); syncButtons();
   }
   async function load(): Promise<void> {
     try { const next = await ctx.call<SettingsSnapshot>("snapshot"); if (alive()) render(next); }
     catch (error) { if (alive()) connectionStatus.show(`Couldn't load settings: ${message(error)}`, "error"); }
   }
-  function refreshFromPeer(): void { if (!busy) void load(); }
+  let reloadQueued = false;
+  // A change made elsewhere during a save here is loaded once that save ends.
+  function refreshFromPeer(): void { if (busy) reloadQueued = true; else void load(); }
   peers.add(refreshFromPeer);
   const unsubscribe = ctx.onResync(() => { void load(); });
   void load();

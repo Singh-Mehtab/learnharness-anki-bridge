@@ -1,11 +1,12 @@
 import type { PluginFrontendContext } from "../sdk/index.d.ts";
 import type { Generation, GenerationSettings } from "./generation/types.ts";
-import { CORE_KINDS, FLAGGED_CARD_CAP } from "./writer/types.ts";
-import type { CoreCardKind, StoredCardKind } from "./writer/types.ts";
+import { FLAGGED_CARD_CAP, SETTINGS_KINDS, WRITE_KINDS } from "./writer/types.ts";
+import { exampleCard, KIND_HELP, KIND_NAMES } from "./kinds-ui.ts";
 import { CoveragePicker } from "./coverage-ui.ts";
 import type { CoverageRow, CoverageView } from "./coverage-ui.ts";
 import { button, confirmDialog, el, plural, status } from "./ui.ts";
 import type { ButtonHandle } from "./ui.ts";
+import type { Peers } from "./settings-ui.ts";
 
 interface DraftingSnapshot { generationSettings: GenerationSettings; generations: Generation[] }
 interface Preflight {
@@ -14,19 +15,7 @@ interface Preflight {
   batches: Array<{ nodeIds: string[] }>; skipped: Array<{ nodeId: string; reason: string }>;
 }
 interface SessionFlowNodes { session: { id: string; title: string; exists: boolean }; nodes: CoverageRow[]; missing?: CoverageRow[]; cardsPerNode: number; paired: boolean; pairingWarning?: boolean }
-/** Learner-facing names. Keep legacy Recall readable without offering it to the writer. */
-export const KIND_NAMES: Record<StoredCardKind, string> = {
-  fact: "Fact", equation: "Equation", steps: "Steps", apply: "Apply", why: "Why", compose: "Compose", discriminate: "Contrast", recall: "Recall",
-};
-export const KIND_HELP: Record<CoreCardKind, string> = {
-  fact: "Remember a fact, definition, unit or prefix.",
-  equation: "Recall a specific formula or relation.",
-  steps: "Recall the steps of a method.",
-  apply: "Recognise where to use an idea in a new situation.",
-  why: "Explain the reason behind the idea.",
-  compose: "Combine linked ideas to reach this one.",
-  discriminate: "Tell the idea apart from a similar one.",
-};
+export { KIND_NAMES } from "./kinds-ui.ts";
 
 /** Provider errors often arrive as raw JSON; show the message and status only. */
 export function readableError(error: string | undefined): string {
@@ -49,9 +38,9 @@ export interface DraftingHandle {
 
 /** Steps 1 (idea list) and 2 (write). Closing a view does not cancel backend generation. */
 export function mountDrafting(ctx: PluginFrontendContext, ideasHost: HTMLElement, writeHost: HTMLElement, signal: AbortSignal,
-  onCardsChanged: () => Promise<void>, reviewWaiting?: (nodeId: string) => void): DraftingHandle {
+  onCardsChanged: () => Promise<void>, reviewWaiting?: (nodeId: string) => void, peers?: Peers): DraftingHandle {
   const settingsRow = el("div", undefined, "ab-write-settings");
-  const kindHelp = el("p", undefined, "ab-muted ab-kind-help");
+  const kindHelp = el("div", undefined, "ab-muted ab-kind-help");
   const writeBar = el("div", undefined, "ab-actions ab-write-bar");
   const feedback = status();
   const activity = el("div", undefined, "ab-activity");
@@ -60,7 +49,7 @@ export function mountDrafting(ctx: PluginFrontendContext, ideasHost: HTMLElement
   let nodes: CoverageRow[] = [];
   let coverageRequest = 0, choiceRevision = 0;
   let widgets: Array<{ dispose(): void }> = [], activityWidgets: Array<{ dispose(): void }> = [];
-  let loading = false, choosingOverride = false;
+  let loading = false, examplesOpen = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let queue: Promise<void> = Promise.resolve(), pending = 0;
   /** Bumped by every selection or settings change; an estimate from an older revision is discarded. */
@@ -155,7 +144,6 @@ export function mountDrafting(ctx: PluginFrontendContext, ideasHost: HTMLElement
   const name = (id: string) => nodes.find(n => n.id === id)?.name ?? id;
   /** Estimate, confirm in a dialog, then start. Retry passes its own estimate call. */
   async function estimateAndStart(estimate: () => Promise<Preflight>): Promise<void> {
-    if (choosingOverride) throw new Error("Choose a model override or switch back to the LearnHarness cheap model.");
     if (picker.isStale) throw new Error("The idea list is out of date. Refresh it first.");
     invalidate(); const at = revision;
     feedback.show("Estimating…");
@@ -169,7 +157,7 @@ export function mountDrafting(ctx: PluginFrontendContext, ideasHost: HTMLElement
     const sent = p.batches.reduce((n, b) => n + b.nodeIds.length, 0);
     fact("Ideas", sent === p.nodeCount ? String(sent) : `${sent} of ${p.nodeCount} selected`);
     fact("Cards", `Up to ${p.maximumCards}`);
-    fact("Model", `${p.modelName ?? p.model.id}${p.model.thinkingLevel ? `, ${p.model.thinkingLevel} thinking` : ""}${p.followsCheapSlot ? " (LearnHarness cheap model)" : ""}`);
+    fact("Model", `${p.modelName ?? p.model.id}${p.model.thinkingLevel ? `, ${p.model.thinkingLevel} thinking` : ""}${p.followsCheapSlot ? " (cheap model)" : ""}`);
     fact("Model calls", `${p.batches.length}, or up to ${p.batches.length * 3} if answers need fixing`);
     fact("Cost", p.estimatedCost === null ? "No estimate for this model" : `About $${p.estimatedCost.toFixed(4)} for the first attempt`);
     fact("Sent to the model", "These ideas, linked ideas, an excerpt of the reply each idea came from, your flag notes and existing cards for these ideas");
@@ -274,36 +262,29 @@ export function mountDrafting(ctx: PluginFrontendContext, ideasHost: HTMLElement
       renderActivity(); return;
     }
     const settings = state.generationSettings;
-    // Default follows the host's cheap slot, like core Flashcards; the picker is an override.
-    const modelBox = el("div", undefined, "ab-model");
-    const modelField = el("div", undefined, "ab-field ab-field-inline");
-    const follow = el("label", undefined, "ab-chip");
-    const followBox = el("input"); followBox.type = "checkbox"; followBox.checked = !settings.model && !choosingOverride;
-    follow.append(followBox, document.createTextNode(" Use the LearnHarness cheap model"));
-    follow.title = "Uses the model and thinking level set for the cheap slot in LearnHarness settings.";
-    modelBox.hidden = followBox.checked;
-    modelField.append(el("span", "Model to write cards", "ab-label"), follow, modelBox);
-    followBox.onchange = () => {
+    // One optional picker (#39). Blank (null) follows the host's cheap slot, like core Flashcards.
+    const modelField = el("div", undefined, "ab-field ab-field-inline ab-model-field");
+    const modelBox = el("div", undefined, "ab-model"), modelRow = el("div", undefined, "ab-model-row");
+    modelRow.append(modelBox);
+    modelField.append(el("span", "Model to write cards", "ab-label"), modelRow);
+    widgets.push(ctx.ui.mountModelPicker(modelBox, { value: settings.model ?? undefined, onChange: value => {
       invalidate();
-      choosingOverride = !followBox.checked;
-      if (followBox.checked && settings.model) {
-        void run(async () => { await snapshot("generationSettings", { model: null }); });
-      } else render();
-    };
-    if (!modelBox.hidden) widgets.push(ctx.ui.mountModelPicker(modelBox, { value: settings.model ?? undefined, onChange: value => {
-      invalidate();
-      return run(async () => {
-        await snapshot("generationSettings", { model: { provider: value.provider, id: value.id } });
-        choosingOverride = false;
-      });
+      return run(async () => { await snapshot("generationSettings", { model: { provider: value.provider, id: value.id } }); });
     } }, { signal }));
+    // The host picker has no empty choice, so Clear is how a chosen model goes back to blank.
+    if (settings.model) widgets.push(button(ctx, modelRow, signal, { label: "Clear", variant: "ghost", size: "sm", title: "Use the cheap model", onClick: () => {
+      invalidate();
+      return run(async () => { await snapshot("generationSettings", { model: null }); });
+    } }));
+    modelField.append(el("span", "Leave blank to use the cheap model.", "ab-muted ab-hint"));
 
+    // Write shows the common types (#38). Apply and Contrast are switched on in Settings.
     const kindsField = el("div", undefined, "ab-field ab-field-inline ab-kinds");
     kindsField.setAttribute("role", "group"); kindsField.setAttribute("aria-label", "Card types");
     kindsField.append(el("span", "Card types", "ab-label"));
     const chips = el("div", undefined, "ab-chips");
     const enabled = settings.enabledKinds;
-    for (const kind of CORE_KINDS) {
+    for (const kind of WRITE_KINDS) {
       const chip = el("label", undefined, "ab-chip");
       const box = el("input"); box.type = "checkbox"; box.checked = enabled.includes(kind);
       // At least one type stays on.
@@ -312,12 +293,12 @@ export function mountDrafting(ctx: PluginFrontendContext, ideasHost: HTMLElement
       box.onchange = () => {
         invalidate();
         const wanted = box.checked;
-        // Apply each toggle to the latest saved types, so quick toggles don't undo each other.
+        // Send only this change; the backend applies it to the saved types, so it can't undo one made in Settings.
         void run(async () => {
-          const current = state?.generationSettings?.enabledKinds ?? enabled;
-          const next = CORE_KINDS.filter(k => k === kind ? wanted : current.includes(k));
-          if (!next.length) return;
-          await snapshot("generationSettings", { enabledKinds: next });
+          try { await snapshot("generationSettings", { toggleKind: { kind, enabled: wanted } }); }
+          catch (error) { box.checked = !wanted; throw error; }
+          // An open Settings panel shows Apply and Contrast, and whether the last type is locked on.
+          for (const peer of peers ?? []) if (peer !== reloadFromPeer) peer();
         });
       };
       chip.append(box, el("span", KIND_NAMES[kind]));
@@ -332,17 +313,17 @@ export function mountDrafting(ctx: PluginFrontendContext, ideasHost: HTMLElement
     cap.onchange = () => { invalidate(); void run(async () => { await snapshot("generationSettings", { cardsPerNode: Number(cap.value) }); }); };
     capField.append(el("span", "Most cards per idea", "ab-label"), cap);
     capField.title = `Flagged ideas can get up to ${FLAGGED_CARD_CAP} cards.`;
-    const constantsField = el("label", undefined, "ab-chip");
-    const constants = el("input"); constants.type = "checkbox"; constants.checked = settings.constantValues;
-    constants.onchange = () => {
-      invalidate();
-      const constantValues = constants.checked;
-      void run(async () => { await snapshot("generationSettings", { constantValues }); });
-    };
-    constantsField.append(constants, document.createTextNode(" Include numerical values of physical constants"));
-    settingsRow.append(modelField, kindsField, capField, constantsField);
+    settingsRow.append(modelField, kindsField, capField);
 
-    for (const kind of CORE_KINDS) { const line = el("span"); line.append(el("strong", KIND_NAMES[kind]), ` ${KIND_HELP[kind].replace(/\.$/, "")}.`); kindHelp.append(line); }
+    const help = el("div", undefined, "ab-kind-lines");
+    for (const kind of WRITE_KINDS) { const line = el("span"); line.append(el("strong", KIND_NAMES[kind]), ` ${KIND_HELP[kind].replace(/\.$/, "")}.`); help.append(line); }
+    const fromSettings = SETTINGS_KINDS.filter(k => enabled.includes(k));
+    if (fromSettings.length) help.append(el("span", `Also on in Settings: ${fromSettings.map(k => KIND_NAMES[k]).join(" and ")}.`, "ab-kind-extra"));
+    const examples = el("details", undefined, "ab-kind-examples");
+    examples.open = examplesOpen;
+    examples.ontoggle = () => { examplesOpen = examples.open; };
+    examples.append(el("summary", "See examples"), ...WRITE_KINDS.map(exampleCard));
+    kindHelp.append(help, examples);
 
     writeButton = button(ctx, writeBar, signal, { label: "Write cards", variant: "default", onClick: () => run(async () => {
       if (!picker.ids.length) throw new Error("Select at least one idea in step 1.");
@@ -353,6 +334,9 @@ export function mountDrafting(ctx: PluginFrontendContext, ideasHost: HTMLElement
     writeBar.append(el("span", "The model only drafts. You check every card before anything reaches Anki.", "ab-muted"));
     renderActivity();
   }
+  // Settings can switch Apply or Contrast on; show that here without a page reload.
+  const reloadFromPeer = () => { invalidate(); void run(async () => { await snapshot(); }); };
+  peers?.add(reloadFromPeer);
   const unsubscribe = ctx.onResync(() => { invalidate(); void run(async () => { await load(); await onCardsChanged(); }); });
   return {
     setScope: (next, select) => {
@@ -370,6 +354,6 @@ export function mountDrafting(ctx: PluginFrontendContext, ideasHost: HTMLElement
     },
     refresh,
     invalidateEstimate: () => { invalidate(); },
-    dispose: () => { disposed = true; if (timer) clearTimeout(timer); unsubscribe(); disposeWidgets(); },
+    dispose: () => { disposed = true; if (timer) clearTimeout(timer); peers?.delete(reloadFromPeer); unsubscribe(); disposeWidgets(); },
   };
 }

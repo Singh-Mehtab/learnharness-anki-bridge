@@ -25,7 +25,7 @@ Dry runs still need the selected fixture sets. The default includes a private `q
 npm run bench:run -- --dry-run --sets humanities,programming
 ```
 
-The bench uses the authenticated Claude Code CLI. In-app drafting uses the LearnHarness cheap model or your Anki Bridge override and its provider account, including subscription quota on Claude Code routes. The automated tests and dry runs make no model calls.
+The bench uses the authenticated Claude Code CLI. In-app drafting uses the LearnHarness cheap model, or the model picked in Anki Bridge, and its provider account, including subscription quota on Claude Code routes. The automated tests and dry runs make no model calls.
 
 ## Try the development workflow
 
@@ -40,7 +40,7 @@ For development tests, use a throwaway Anki profile and a LearnHarness checkout 
 
    The installer replaces `anki-bridge/dist/` and preserves its sibling `data/`. Discovery leaves the plugin disabled. Enable it in settings; restart LearnHarness after changing already-loaded plugin code.
 3. Open the Anki Bridge settings. Save the AnkiConnect address and optional API key, then test the connection. The default is `http://127.0.0.1:8765`; check your local port first because another service may use it. With Anki open on the throwaway profile, choose Use the open profile.
-4. Open Anki Bridge from the sidebar and choose ideas in step 1. In step 2, use the LearnHarness cheap model or select an override, review the default card types and cap, then press Write cards. The dialog shows the idea count, card limit, model calls and a dollar estimate when the catalog has pricing. Estimating calls no model. Start writing runs it in the background; you can leave the page. Cancelling keeps cards from finished batches.
+4. Open Anki Bridge from the sidebar and choose ideas in step 1. In step 2, leave the model picker blank for the cheap model or pick one, review the default card types and cap, then press Write cards. The dialog shows the idea count, card limit, model calls and a dollar estimate when the catalog has pricing. Estimating calls no model. Start writing runs it in the background; you can leave the page. Cancelling keeps cards from finished batches.
 5. Review each card. The collapsed Source idea shows the statement captured at drafting. Edit and save as needed; editing an approved card returns it to draft. Length warnings are advisory. Drop unwanted cards, then approve cards one at a time or all together. No generated card is approved automatically.
 6. Choose an existing or new deck, check the tags and send approved cards. Check presence or use Show in Anki. URL or profile mismatches block sends and reconciliation; do not switch profiles during a send, since AnkiConnect cannot make a profile check and write atomic.
 

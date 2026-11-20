@@ -10,7 +10,7 @@ import { writerInstructions, writerPrompt } from '../writer/prompt.ts';
 import { resultSchemaFor } from '../writer/schema.ts';
 import { validateResult } from '../writer/validate.ts';
 import { capFor } from '../writer/kinds.ts';
-import { isStoredKind } from '../writer/types.ts';
+import { CORE_KINDS, isCoreKind, isStoredKind } from '../writer/types.ts';
 import type { Batch } from '../writer/input.ts';
 import type { WriterInput, WriterResult } from '../writer/types.ts';
 import { validGenerationSettings } from './types.ts';
@@ -203,7 +203,7 @@ export class GenerationService {
     const notes = this.flagNotes?.();
     const packed = pack(graph, ids, id => ({ source: sources.find(s => s.nodeId === id)?.source, flagged: notes?.has(id), flagNote: notes?.get(id) || undefined,
       existingCards: cards.filter(c => c.nodeId === id).reverse().slice(0, 6).map(c => ({ kind: c.kind, front: c.front, back: c.back })) }),
-    { maxCardsPerNode: settings.cardsPerNode, enabledKinds: settings.enabledKinds, constantValues: settings.constantValues, contextWindow: model.contextWindow, maxTokens: model.maxTokens });
+    { maxCardsPerNode: settings.cardsPerNode, enabledKinds: settings.enabledKinds, contextWindow: model.contextWindow, maxTokens: model.maxTokens });
     const batches: Batch[] = [], skipped = [...packed.skipped];
     // The pure packer budgets source material. Also account for prompt/schema overhead
     // and the growing output reserve when the selected model has known limits.
@@ -250,9 +250,17 @@ export class GenerationService {
         return { ...graphCoverage(this.ctx.learning.graph(), this.store.snapshot()), catalog };
       }
       if (name === 'generationSettings') {
-        keys(value, ['cardsPerNode', 'enabledKinds', 'constantValues', 'model']);
-        const settings = { ...this.store.snapshot().generationSettings, ...value };
-        if (!validGenerationSettings(settings)) throw new Error('Choose 1–4 cards per node, one or more available card types, a constant-values toggle, and a model override or null.');
+        keys(value, ['cardsPerNode', 'enabledKinds', 'model', 'toggleKind']);
+        const { toggleKind, ...patch } = value;
+        const settings = { ...this.store.snapshot().generationSettings, ...patch };
+        if (toggleKind !== undefined) {
+          // One checkbox change, applied to the saved set inside the fence, so Write and Settings can't undo each other.
+          const t = object(toggleKind); keys(t, ['kind', 'enabled']);
+          if ('enabledKinds' in patch || !isCoreKind(t.kind) || typeof t.enabled !== 'boolean') throw new Error('Unsupported generation input.');
+          settings.enabledKinds = CORE_KINDS.filter(k => k === t.kind ? t.enabled : settings.enabledKinds.includes(k));
+          if (!settings.enabledKinds.length) throw new Error('Keep at least one card type on.');
+        }
+        if (!validGenerationSettings(settings)) throw new Error('Choose 1–4 cards per node, one or more available card types, and a model, or null for the cheap model.');
         await this.delivery.save(s => { s.generationSettings = settings; });
       } else if (name === 'preflight') {
         keys(value, ['nodeIds', 'backfillNodeIds']);
@@ -303,7 +311,9 @@ export class GenerationService {
         await this.delivery.save(s => { s.generations.find(x => x.id === g.id)!.hidden = true; });
       } else throw new Error('Unknown generation operation.');
       return this.delivery.snapshot(false);
-    });
+      // A card-type toggle is a short merge, so it queues behind the current writer
+      // instead of failing busy when Write and Settings save at the same moment.
+    }, name === 'generationSettings' && !!input && typeof input === 'object' && 'toggleKind' in input);
   }
   private drive(id: string): void {
     const driver = this.run(id).catch(async error => {

@@ -30,7 +30,7 @@ function mount(ctx: PluginFrontendContext, container: HTMLElement, signal: Abort
   let reviewHandle: ReturnType<typeof mountReview> | undefined;
   const drafting = mountDrafting(ctx, ideasList, writeBody, signal,
     async () => { await reviewHandle?.refresh(); },
-    nodeId => { void reviewHandle?.showWaiting(nodeId); });
+    nodeId => { void reviewHandle?.showWaiting(nodeId); }, peers);
   reviewHandle = mountReview(ctx, reviewBody, signal, { peers, headerAside: reviewMenu, onChanged: () => drafting.refresh() });
   const sources = mountSources(ctx, ideasSource, signal, { requests, drafting });
   return () => { sources(); drafting.dispose(); reviewHandle?.dispose(); root.remove(); };

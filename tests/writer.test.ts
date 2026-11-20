@@ -13,6 +13,7 @@ import {
   trimToFit,
   validateResult,
   writerInstructions,
+  resultSchemaFor,
   writerPrompt,
   FLAGGED_CARD_CAP,
   duplicateIndexes,
@@ -235,14 +236,26 @@ test("instructions describe only requested kinds; prompt carries cap and kinds",
   assert.match(trial, /The back is the result and extra gives the key step/);
   const p = writerPrompt(input());
   assert.match(p, /at most 2 cards per target/);
-  assert.match(p, /Enabled kinds: recall, why, compose, discriminate/);
+  assert.match(p, /Enabled kinds: recall, why, compose, discriminate\.\n/);
+  assert.doesNotMatch(p, /Constant values/);
+});
+
+// #37: no constant-values toggle. A flag, or a flag note, is how a learner asks for a value.
+test("constant values are carded only on an explicit flag", () => {
+  const text = writerInstructions();
+  assert.match(text, /Numerical values of physical constants.*are carded only on request: when the learner flagged a target that states the value, or a flag note asks for it\./);
+  assert.doesNotMatch(text, /constant values are on/i);
+  const flagged = writerPrompt({ ...input(), targets: [{ ...input().targets[0]!, flagged: true, maxCards: 12 }] });
+  assert.match(flagged, /"flagged":true/);
 });
 
 // 0.7.2 (#34): fact and equation by default; flags are explicit requests.
 test("default instructions put facts first and describe every shipping kind", () => {
   const text = writerInstructions();
-  for (const k of ["fact", "equation", "steps", "apply", "why", "compose", "discriminate"]) assert.ok(text.includes(`- ${k}:`), `missing kind ${k}`);
-  assert.ok(!text.includes("- recall:") && !text.includes("- mini-problem:"));
+  for (const k of ["fact", "equation", "steps", "apply", "why", "discriminate"]) assert.ok(text.includes(`- ${k}:`), `missing kind ${k}`);
+  // #38: compose is no longer drafted, so the worker neither describes nor accepts it.
+  assert.ok(!text.includes("- recall:") && !text.includes("- compose:") && !text.includes("- mini-problem:"));
+  assert.ok(!JSON.stringify(resultSchemaFor()).includes("compose"));
   assert.ok(text.includes("Standard reference facts"));
   assert.ok(!text.includes("Not \"What is <name>?\""), "fact cards may ask directly");
 });

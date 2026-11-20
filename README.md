@@ -30,9 +30,13 @@ Under "Ideas from", pick one teaching session or your whole graph. In a session,
 
 ### 2. Write cards
 
-Fact and Equation are on by default. They ask directly for things worth remembering, such as a unit prefix, a definition or a formula. You can turn on Steps for procedures, Apply for a new example, or Why, Compose and Contrast for reasoning about linked ideas. Turn on numerical constant values if you want to memorise them too. A conversion constant you use in calculations can still get a card with that option off.
+Write offers four card types, each with a one-line description. Fact and Equation are on by default and ask directly for things worth remembering, such as a unit prefix, a definition or a formula. Why asks for the reason a result holds, and Steps for the next step in a method you carry out; both start off. "See examples" shows a sample card for each.
 
-Anki Bridge uses LearnHarness's cheap model and its thinking setting unless you pick another model. Set a limit per idea. Flagged ideas can get up to 12 cards even if the normal limit is lower; there is no separate per-session limit.
+Apply and Contrast are off by default and switched on in Settings, under More card types, which also shows an example of each. When either is on, Write says so.
+
+Physical constants' numerical values aren't carded by default. Flag the idea that states one to get a card for its value. A conversion constant you use in calculations, such as $\hbar c$, can still get a card.
+
+Leave the model picker blank to use LearnHarness's cheap model and its thinking setting, or pick another model. Clear returns it to blank. Set a limit per idea. Flagged ideas can get up to 12 cards even if the normal limit is lower; there is no separate per-session limit.
 
 Write cards shows the size and estimated cost of the run before anything starts. The model drafts in the background, so you can leave the page. Progress also shows under Background agents.
 
