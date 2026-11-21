@@ -1,7 +1,10 @@
 // Step 3: check each card, approve it and send approved cards to a deck, or download them as an .apkg file.
 import type { PluginFrontendContext } from "../sdk/index.d.ts";
 import type { SendResult } from "./anki/delivery.ts";
-import type { PackageResult } from "./anki/apkg.ts";
+import type { PackageResult as ExportResult } from "./anki/apkg.ts";
+/** An export plus the tags the user asked for, so a re-check sends the same request. */
+type PackageResult = ExportResult & { requestTags: string[] };
+import { packageRevision } from "./anki/package-revision.ts";
 import { expandTagTemplate, matchTagCase, tagSuggestions, validateTags } from "./anki/tags.ts";
 import { isWaitingCard } from "./coverage/flow.ts";
 import { KIND_NAMES } from "./kinds-ui.ts";
@@ -13,19 +16,19 @@ import type { ButtonHandle } from "./ui.ts";
 interface Card {
   id: string; nodeId: string; statementHash: string; sessionId: string; nodeName: string; sessionName: string;
   kind: string; front: string; back: string; extra: string;
-  status: "draft" | "approved" | "sending" | "sent" | "failed" | "dropped";
+  status: "draft" | "approved" | "sending" | "sent" | "imported" | "failed" | "dropped";
   deck?: string; noteId?: number; existingNote?: true; destination?: Destination; lastError?: string;
   presence?: "present" | "deleted" | "unknown";
   sourceStatement?: string; sourceChanged?: boolean; sourceMissing?: boolean; sourceUnavailable?: boolean;
 }
-export interface Snapshot { settings: Settings; destination: Destination | null; cards: Card[]; recoveryError?: string; generationRecoveryError?: string }
+export interface Snapshot { settings: Settings; destination: Destination | null; cards: Card[]; recoveryError?: string; generationRecoveryError?: string; durabilityWarning?: string; importMarkId?: string }
 type Fields = { front: string; back: string; extra: string };
 const message = (error: unknown) => error instanceof Error ? error.message : String(error);
 const words = (text: string) => text.trim().split(/\s+/u).filter(Boolean).length;
 
 const STATUS: Record<Card["status"], { text: string; tone: "neutral" | "good" | "warn" | "bad" | "info" }> = {
   draft: { text: "Draft", tone: "neutral" }, approved: { text: "Approved", tone: "good" }, sending: { text: "Unconfirmed", tone: "warn" },
-  sent: { text: "In Anki", tone: "good" }, failed: { text: "Send failed", tone: "bad" }, dropped: { text: "Dropped", tone: "neutral" },
+  sent: { text: "In Anki", tone: "good" }, imported: { text: "Imported", tone: "good" }, failed: { text: "Send failed", tone: "bad" }, dropped: { text: "Dropped", tone: "neutral" },
 };
 
 export interface ReviewHandle {
@@ -57,9 +60,13 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
   /** A clear confirmation after a send, kept until the next action or dismissed (#32). */
   const sentPanel = el("div", undefined, "ab-sent");
   sentPanel.setAttribute("role", "status"); sentPanel.hidden = true;
+  const downloadPanel = el("div", undefined, "ab-sent");
+  downloadPanel.setAttribute("role", "status"); downloadPanel.hidden = true;
+  const importedPanel = el("div", undefined, "ab-sent");
+  importedPanel.setAttribute("role", "status"); importedPanel.hidden = true;
   const list = el("div", undefined, "ab-cards");
   const history = el("details", undefined, "ab-history");
-  host.append(banner, sendBar, feedback, sentPanel, list, history);
+  host.append(banner, sendBar, feedback, sentPanel, downloadPanel, importedPanel, list, history);
 
   const menuSlot = options.headerAside;
   let state: Snapshot | undefined, connection: Connection | undefined, connectionError = "";
@@ -69,13 +76,17 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
   const editing = new Set<string>();
   /** Cards whose save is in flight. Their editors stay read-only across re-renders. */
   const saving = new Set<string>();
+  let packageMarkInFlight = false;
   const alive = () => !disposed && !signal.aborted && !ctx.signal.aborted;
   const historyScope = new RenderScope(signal), barScope = new RenderScope(signal), bannerScope = new RenderScope(signal);
   const rows = new Map<string, { key: string; scope: RenderScope; view: ReturnType<typeof renderCard> }>();
   let bannerKey = "", historyKey = "";
   let approveAll: ButtonHandle | undefined, sendAll: ButtonHandle | undefined, downloadAll: ButtonHandle | undefined;
   let bulkTargetKey: string | undefined;
-  const sentScope = new RenderScope(signal);
+  const sentScope = new RenderScope(signal), downloadScope = new RenderScope(signal), importedScope = new RenderScope(signal);
+  let syncReceipt: (() => void) | undefined;
+  function hideDownload(): void { if (packageMarkInFlight) return; downloadScope.reset(); downloadPanel.replaceChildren(); downloadPanel.hidden = true; syncReceipt = undefined; }
+  function hideImported(): void { if (busy) return; importedScope.reset(); importedPanel.replaceChildren(); importedPanel.hidden = true; }
   function hideSent(): void { sentScope.reset(); sentPanel.replaceChildren(); sentPanel.hidden = true; delete sentPanel.dataset.kind; }
   function showSent({ added, found, skipped, failed, deck, tags }: SendResult["delivery"]): void {
     const ids = [...added, ...found];
@@ -108,21 +119,62 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
   }
   /** Requesting a download leaves approval and delivery unchanged. */
   function showDownloaded(result: PackageResult, bytes: Uint8Array<ArrayBuffer>): void {
-    const s = sentScope.reset();
-    sentPanel.dataset.kind = "download";
+    const s = downloadScope.reset();
+    downloadPanel.dataset.kind = "download";
     const icon = el("span", undefined, "ab-sent-icon"); icon.setAttribute("aria-hidden", "true");
     icon.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11m-5-5 5 5 5-5M5 20h14"/></svg>';
     const text = el("div", undefined, "ab-sent-text");
     text.append(el("p", `Download requested: ${result.fileName}, ${plural(result.ids.length, "card")}`, "ab-sent-title"), el("p", `Deck ${result.deck}`, "ab-sent-detail"));
     if (result.tags.length) text.append(el("p", `Tags ${result.tags.join(" ")}`, "ab-sent-detail"));
     text.append(
-      el("p", "Cards stay approved in Bridge and can still be sent. Open the file in Anki to import it.", "ab-sent-detail"),
+      el("p", "Downloading does not change card status. Open the file in Anki to import it.", "ab-sent-detail"),
       el("p", "Importing may duplicate cards already in Anki or update notes from an earlier package.", "ab-sent-detail ab-warning"));
     const actionsBox = el("div", undefined, "ab-actions");
-    // The same file again, byte for byte, without asking the backend.
-    button(ctx, actionsBox, s, { label: "Download again", onClick: () => saveFile(result.fileName, bytes) });
-    button(ctx, actionsBox, s, { label: "Dismiss", variant: "ghost", onClick: hideSent });
-    revealPanel(icon, text, actionsBox);
+    // Download again re-exports through the backend, which rejects imported or
+    // sent cards even when this view's snapshot is stale.
+    const eligible = () => !packageMarkInFlight && result.ids.every((id, i) => { const card = state?.cards.find(c => c.id === id); return card && result.revisions[i] === packageRevision(card) && (card.status === "approved" || card.status === "failed") && card.noteId === undefined; });
+    const warning = el("p", "", "ab-sent-detail ab-warning"); text.append(warning);
+    const again = button(ctx, actionsBox, s, { label: "Download again", onClick: () => { if (eligible()) void downloadAgain(result, bytes); } });
+    const mark = button(ctx, actionsBox, s, { label: "Mark as imported", onClick: () => { if (eligible()) void packageAction("markImported", result, bytes, s); } });
+    syncReceipt = () => { const blocked = !eligible(); again.update({ disabled: blocked }); mark.update({ disabled: blocked }); warning.textContent = packageMarkInFlight ? "Marking cards as imported…" : blocked ? "Some cards are no longer eligible. Dismiss this receipt and review the cards." : ""; };
+    button(ctx, actionsBox, s, { label: "Dismiss", variant: "ghost", onClick: hideDownload });
+    downloadPanel.replaceChildren(icon, text, actionsBox); downloadPanel.hidden = false; syncReceipt();
+  }
+  function showImported(result: PackageResult, bytes: Uint8Array<ArrayBuffer>, markId: string): void {
+    const s = importedScope.reset();
+    importedPanel.dataset.kind = "imported";
+    const text = el("div", undefined, "ab-sent-text");
+    text.append(el("p", `${plural(result.ids.length, "card")} marked as imported`, "ab-sent-title"));
+    const actionsBox = el("div", undefined, "ab-actions");
+    button(ctx, actionsBox, s, { label: "Undo", onClick: () => packageAction("unmarkImported", result, bytes, s, markId) });
+    button(ctx, actionsBox, s, { label: "Dismiss", variant: "ghost", onClick: hideImported });
+    importedPanel.replaceChildren(text, actionsBox); importedPanel.hidden = false;
+  }
+  async function packageAction(name: "markImported" | "unmarkImported", result: PackageResult, bytes: Uint8Array<ArrayBuffer>, panel: AbortSignal, markId?: string): Promise<void> {
+    if (!alive() || busy || panel.aborted) return;
+    if (name === "markImported" && !importedPanel.hidden) { feedback.show("Undo or dismiss the previous import first.", "error"); return; }
+    if (name === "markImported" && result.ids.some(id => editing.has(id))) { feedback.show("Save or cancel your edits before marking these cards imported.", "error"); return; }
+    busy = true; packageMarkInFlight = name === "markImported"; actions++; syncBar(); syncReceipt?.();
+    let committed: Snapshot | undefined;
+    try {
+      const next = await ctx.call<Snapshot>(name, name === "markImported" ? { ids: result.ids, deck: result.deck, fingerprints: result.fingerprints } : { ids: result.ids, markId });
+      if (alive()) {
+        if (name === "markImported" && !next.importMarkId) throw new Error("Import confirmation was incomplete");
+        state = next; render();
+        if (!panel.aborted) {
+          if (name === "markImported") { packageMarkInFlight = false; hideDownload(); showImported(result, bytes, next.importMarkId!); }
+          else { importedScope.reset(); importedPanel.replaceChildren(); importedPanel.hidden = true; if (downloadPanel.hidden) showDownloaded(result, bytes); }
+        }
+        feedback.show(next.durabilityWarning ? `Cards updated, but saving could not be confirmed: ${next.durabilityWarning}.` : "", next.durabilityWarning ? "error" : undefined);
+        committed = next;
+      }
+    } catch (error) { if (alive()) feedback.show(`${message(error)}. Refresh cards and check their status before retrying.`, "error"); }
+    finally { busy = false; packageMarkInFlight = false; if (alive()) { syncBar(); syncReceipt?.(); } if (refreshPending && alive()) void backgroundRefresh(); }
+    // Coverage refreshes after the action finishes, so the confirmation's Undo works immediately.
+    if (committed && alive()) {
+      const warned = !!committed.durabilityWarning;
+      try { await options.onChanged(); } catch { if (alive() && !warned) feedback.show("Cards updated, but coverage could not refresh. Refresh the page.", "error"); }
+    }
   }
 
   async function run(action: () => Promise<string | void>, keepPosition = false): Promise<void> {
@@ -297,10 +349,26 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
       sendAll?.update(sendProps);
     }
   }
+  async function downloadAgain(result: PackageResult, bytes: Uint8Array<ArrayBuffer>): Promise<void> {
+    if (busy) return;
+    busy = true; actions++; syncBar();
+    try {
+      const fresh = await ctx.call<ExportResult>("exportPackage", { ids: result.ids, deck: result.deck, tags: result.requestTags });
+      if (!alive()) return;
+      if (fresh.fingerprints.join() !== result.fingerprints.join()) throw new Error("These cards changed after the download. Dismiss this receipt and download again");
+      saveFile(result.fileName, bytes);
+    } catch (error) {
+      if (!alive()) return;
+      feedback.show(`${message(error)}. Refresh cards and check their status.`, "error");
+      try { const fresh = await ctx.call<Snapshot>("snapshot"); if (alive()) { state = fresh; render(); await options.onChanged(); } } catch { /* The message above already asks for a refresh. */ }
+    } finally { busy = false; if (alive()) { syncBar(); syncReceipt?.(); } if (refreshPending && alive()) void backgroundRefresh(); }
+  }
   async function download(ids: string[]): Promise<string> {
+    if (!downloadPanel.hidden) throw new Error("Mark or dismiss the previous download before starting another.");
     const blocked = downloadBlocker();
     if (blocked) throw new Error(blocked);
-    const result = await ctx.call<PackageResult>("exportPackage", { ids, deck: deckName(), tags: validateTags(tagList()) });
+    const requestTags = validateTags(tagList());
+    const result: PackageResult = { ...await ctx.call<ExportResult>("exportPackage", { ids, deck: deckName(), tags: requestTags }), requestTags };
     if (!alive()) return "";
     const bytes = base64Bytes(result.data);
     saveFile(result.fileName, bytes);
@@ -435,7 +503,8 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
       article.tabIndex = -1;
       if (card.nodeId) article.dataset.waitingNode = card.nodeId;
     }
-    const editable = ["draft", "approved", "failed"].includes(card.status) && card.noteId === undefined;
+    const importedConflict = card.status === "imported" && editing.has(card.id);
+    const editable = importedConflict || (["draft", "approved", "failed"].includes(card.status) && card.noteId === undefined);
     if (!editable) { edits.delete(card.id); editing.delete(card.id); }
     const isEditing = editable && editing.has(card.id);
     const values: Fields = (isEditing && edits.get(card.id)) || card;
@@ -449,6 +518,7 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
     article.append(head);
 
     const notices: string[] = [];
+    if (importedConflict) notices.push("This card was marked imported in another view. Copy your unsaved edits before cancelling; they cannot be saved to this imported card.");
     if (card.lastError) notices.push(card.lastError);
     if (card.sourceMissing) notices.push("Source idea wasn't found in this graph snapshot. Check the card before approving.");
     else if (card.sourceChanged) notices.push("Idea changed since this card was written.");
@@ -512,7 +582,7 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
     if (editable) {
       if (isEditing) {
         button(ctx, left, s, { label: "Cancel", disabled: saving.has(card.id), onClick: () => { edits.delete(card.id); editing.delete(card.id); feedback.show(""); render(); } });
-        button(ctx, right, s, { label: "Save", variant: "default", onClick: () => run(async () => {
+        if (!importedConflict) button(ctx, right, s, { label: "Save", variant: "default", onClick: () => run(async () => {
           // Typing during the save would be lost when the editor closes.
           saving.add(card.id);
           for (const area of Object.values(inputs)) if (area) area.readOnly = true;
@@ -527,10 +597,12 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
           }
         }) });
       } else {
-        button(ctx, left, s, { label: "Edit", onClick: () => { editing.add(card.id); feedback.show(""); render(); article.ownerDocument.querySelector<HTMLTextAreaElement>(`[data-keep="card-${card.id}-front"]`)?.focus(); } });
+        button(ctx, left, s, { label: "Edit", onClick: () => { if (packageMarkInFlight) return; editing.add(card.id); feedback.show(""); render(); article.ownerDocument.querySelector<HTMLTextAreaElement>(`[data-keep="card-${card.id}-front"]`)?.focus(); } });
         button(ctx, left, s, { label: "Drop", onClick: () => run(async () => { await call("drop", { ids: [card.id] }); edits.delete(card.id); return "Card dropped."; }) });
         primary = button(ctx, right, s, primaryProps(card.status));
       }
+    } else if (card.status === "imported") {
+      if (card.deck) left.append(el("span", card.deck, "ab-muted"));
     } else if (card.status === "sent") {
       const where = [card.existingNote ? "Found in Anki" : card.deck, card.presence === "deleted" ? "deleted in Anki" : ""].filter(Boolean).join(", ");
       if (where) left.append(el("span", where, "ab-muted"));
@@ -588,7 +660,7 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
       const keepCard = card && list.contains(card) ? card.dataset.cardId : undefined;
       const area = keepCard && active?.tagName === "TEXTAREA" ? active as HTMLTextAreaElement : undefined;
       const keep = area && { key: area.dataset.keep, start: area.selectionStart, end: area.selectionEnd, dir: area.selectionDirection };
-      draw(); after?.();
+      draw(); syncReceipt?.(); after?.();
       if (keepCard && !active?.isConnected) {
         const row = waitingCard(keepCard);
         const next = keep && [...(row?.querySelectorAll<HTMLTextAreaElement>("textarea[data-keep]") ?? [])].find(a => a.dataset.keep === keep.key);
@@ -636,15 +708,15 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
     if (!deckTouched) deck.value = state.settings.lastDeck;
     renderBar();
     syncDeck();
-    const waiting = state.cards.filter(c => c.status !== "sent" && c.status !== "dropped");
+    const waiting = state.cards.filter(c => c.status !== "sent" && (c.status !== "imported" || editing.has(c.id)) && c.status !== "dropped");
     reconcileWaiting(waiting);
     if (!waiting.length) {
       const empty = el("div", undefined, "ab-empty-card");
-      const anySent = state.cards.some(c => c.status === "sent");
+      const anySent = state.cards.some(c => c.status === "sent" || c.status === "imported");
       empty.append(el("p", anySent ? "Nothing left to review." : "No cards yet.", "ab-empty-title"));
       list.append(empty);
     }
-    const sent = state.cards.filter(c => c.status === "sent");
+    const sent = state.cards.filter(c => c.status === "sent" || (c.status === "imported" && !editing.has(c.id)));
     const key = JSON.stringify(sent.map(c => [c, atShown(c)]));
     if (historyKey === key) return;
     historyKey = key;

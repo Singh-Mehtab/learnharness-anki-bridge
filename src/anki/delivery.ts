@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { AnkiClient, AnkiError, normalizeUrl } from './client.ts';
+import { packageFingerprint } from './apkg.ts';
 import { ensureNoteType, MODEL_NAME, repairFields, updateStyling } from './note-type.ts';
 import { renderMarkdown } from './render.ts';
 import { StateStore, sameDestination } from './state.ts';
@@ -232,8 +233,46 @@ export class DeliveryService {
           sessionName: optionalText(value.sessionName, 'Session name', 'Manual'),
           statementHash: optionalText(value.statementHash, 'Statement hash', createHash('sha256').update(front + '\0' + back).digest('hex')) };
         await this.save(s => { s.cards.push(card); });
+      } else if (name === 'markImported' || name === 'unmarkImported') {
+        const ids = idsInput(value.ids);
+        const current = this.store.snapshot().cards;
+        const cards = ids.map(id => { const card = current.find(c => c.id === id); if (!card) throw new Error('Card not found.'); return card; });
+        const markId = name === 'markImported' ? randomUUID() : requiredText(value.markId, 'Import mark ID');
+        let durabilityWarning: string | undefined;
+        const packageSave = async (mutator: (state: State) => void) => {
+          let committed = false;
+          const unsubscribe = this.store.onCommit(() => { committed = true; });
+          try { await this.save(mutator); }
+          catch (error) { if (!committed) throw error; durabilityWarning = this.message(error); }
+          finally { unsubscribe(); }
+        };
+        if (name === 'markImported') {
+          const deck = requiredText(value.deck, 'Deck').trim();
+          if (deck.length > 250 || /[\r\n]/.test(deck)) throw new Error('Use a one-line deck name under 251 characters.');
+          if (cards.some(c => !['approved', 'failed'].includes(c.status) || c.noteId !== undefined)) throw new Error('Only approved or failed unsent cards can be marked as imported.');
+          if (!Array.isArray(value.fingerprints) || value.fingerprints.length !== cards.length || cards.some((c, i) => packageFingerprint(c) !== (value.fingerprints as unknown[])[i])) throw new Error('Cards changed since this package was downloaded. Download a new package.');
+          await packageSave(s => { for (const card of s.cards) if (ids.includes(card.id)) {
+            card.importPrevious = { status: card.status as 'approved' | 'failed', deck: card.deck, destination: card.destination, presence: card.presence, lastError: card.lastError };
+            card.status = 'imported'; card.deck = deck; card.importMarkId = markId;
+            delete card.noteId; delete card.destination; delete card.existingNote; delete card.presence; delete card.lastError;
+          } });
+        } else {
+          if (cards.some(c => c.status !== 'imported')) throw new Error('Only imported cards can be unmarked.');
+          if (cards.some(c => c.importMarkId !== markId)) throw new Error('This import mark has changed. Refresh the cards.');
+          await packageSave(s => { for (const card of s.cards) if (ids.includes(card.id)) {
+            const previous = card.importPrevious ?? { status: 'approved' as const };
+            card.status = previous.status;
+            delete card.deck; delete card.destination; delete card.presence; delete card.lastError; delete card.importPrevious; delete card.importMarkId;
+            if (previous.deck !== undefined) card.deck = previous.deck;
+            if (previous.destination !== undefined) card.destination = previous.destination;
+            if (previous.presence !== undefined) card.presence = previous.presence;
+            if (previous.lastError !== undefined) card.lastError = previous.lastError;
+          } });
+        }
+        return { ...this.snapshot(), ...(name === 'markImported' ? { importMarkId: markId } : {}), ...(durabilityWarning ? { durabilityWarning } : {}) };
       } else if (name === 'edit') {
         const card = this.card(value.id);
+        if (card.status === 'imported') throw new Error('This card was imported and cannot be edited here. Edit it in Anki.');
         if (card.status === 'sending') throw new Error('Cards with an unconfirmed send cannot be edited. Check unconfirmed sends first.');
         if (card.status === 'dropped') throw new Error('Dropped cards cannot be edited.');
         if (card.status === 'sent' || card.noteId !== undefined) throw new Error('This card was sent and cannot be edited here. Edit it in Anki.');
@@ -242,10 +281,12 @@ export class DeliveryService {
         await this.patchCard(card.id, { front, back, extra, status: 'draft', lastError: undefined });
       } else if (name === 'drop') {
         const cards = idsInput(value.ids).map(id => this.card(id));
+        if (cards.some(c => c.status === 'imported')) throw new Error('This card was imported and cannot be edited here. Edit it in Anki.');
         if (cards.some(c => c.noteId || ['sending', 'sent', 'dropped'].includes(c.status))) throw new Error('Only unsent editable cards can be dropped.');
         await this.save(s => { for (const card of s.cards) if (cards.some(c => c.id === card.id)) card.status = 'dropped'; });
       } else if (name === 'approve') {
         const cards = idsInput(value.ids).map(id => this.card(id));
+        if (cards.some(c => c.status === 'imported')) throw new Error('This card was imported and cannot be edited here. Edit it in Anki.');
         if (cards.some(c => c.noteId || ['sending', 'sent', 'dropped'].includes(c.status))) throw new Error('Only unsent drafts or failed cards can be approved.');
         await this.save(s => { for (const card of s.cards) if (cards.some(c => c.id === card.id)) card.status = 'approved'; });
       } else if (name === 'send') {
@@ -254,7 +295,12 @@ export class DeliveryService {
         if (deck.length > 250 || /[\r\n]/.test(deck)) throw new Error('Use a one-line deck name under 251 characters.');
         const settings = this.store.snapshot().settings;
         const chosenTags = validateTags(value.tags === undefined ? expandTagTemplate(settings.tagTemplate ?? '', deck) : value.tags);
-        for (const id of ids) this.card(id);
+        const current = this.store.snapshot().cards;
+        for (const id of ids) {
+          const card = current.find(c => c.id === id);
+          if (!card) throw new Error('Card not found.');
+          if (card.status === 'imported') throw new Error('Imported cards cannot be sent again.');
+        }
         // The settings dialog can re-pair while a review view still shows the old destination.
         const paired = this.store.snapshot().destination;
         if (paired) expectDestination(value.expectedDestination, paired, 'Paired destination changed. Check it and send again.');

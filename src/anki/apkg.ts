@@ -14,6 +14,7 @@ import path from 'node:path';
 import { crc32, deflateRawSync } from 'node:zlib';
 import { BACK, CSS, FIELDS, FRONT, MODEL_NAME, TEMPLATE_NAME } from './note-type.ts';
 import { renderMarkdown } from './render.ts';
+import { packageRevision } from './package-revision.ts';
 import { expandTagTemplate, systemTags, validateTags } from './tags.ts';
 import type { Card, State } from './state.ts';
 
@@ -27,12 +28,21 @@ export interface PackageResult {
   /** The .apkg bytes, base64-encoded for the JSON call bridge. */
   data: string;
   ids: string[];
+  /** Fingerprints bind the acknowledgement to the card contents in this package. */
+  fingerprints: string[];
+  /** Exact exported card revisions for validating cached download receipts. */
+  revisions: string[];
   deck: string;
   /** Every tag the package's notes carry, including the automatic learnharness tags. */
   tags: string[];
 }
 
 const htmlText = (text: string) => text.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
+
+/** Bind imported acknowledgements to all card-derived package fields and tags. */
+export function packageFingerprint(card: Card): string {
+  return createHash('sha256').update(packageRevision(card)).digest('hex');
+}
 
 /** The same field values AnkiConnect delivery sends with addNote, in note type field order. */
 export function packageFields(card: Card): string[] {
@@ -78,6 +88,7 @@ export function selectPackageCards(state: State, input: unknown): { deck: string
     const card = state.cards.find(c => c.id === id);
     if (!card) throw new Error('Card not found.');
     // Sent, unconfirmed and dropped cards stay out: a package of them would only duplicate notes.
+    if (card.status === 'imported') throw new Error('These cards are already marked imported and cannot be downloaded again.');
     if (card.noteId !== undefined || (card.status !== 'approved' && card.status !== 'failed')) throw new Error('Only approved, unsent cards can be downloaded. Approve drafts first.');
     return { card, fields: packageFields(card), tags: packageTags(chosen, card, withSystemTags) };
   });
@@ -239,5 +250,5 @@ export async function exportPackage(state: State, input: unknown, now = Date.now
   const { deck, cards } = selectPackageCards(state, input);
   const collection = await buildCollection(deck, cards, now);
   const bytes = zip([{ name: 'collection.anki2', data: collection }, { name: 'media', data: Buffer.from('{}') }], new Date(now));
-  return { fileName: packageFileName(deck), data: bytes.toString('base64'), ids: cards.map(c => c.card.id), deck, tags: [...new Set(cards.flatMap(c => c.tags))] };
+  return { fileName: packageFileName(deck), data: bytes.toString('base64'), ids: cards.map(c => c.card.id), fingerprints: cards.map(c => packageFingerprint(c.card)), revisions: cards.map(c => packageRevision(c.card)), deck, tags: [...new Set(cards.flatMap(c => c.tags))] };
 }

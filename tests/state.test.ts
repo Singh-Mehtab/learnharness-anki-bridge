@@ -1,9 +1,29 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { StateStore, syncDirectory } from '../src/anki/state.ts';
+import { initialState, migrateState, validateState, StateStore, syncDirectory } from '../src/anki/state.ts';
+
+test('schema 8 migrates v7 with exact backup and validates imported metadata', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'anki-bridge-v8-'));
+  const card = { id: '0b6f7c1e-0000-4000-8000-000000000001', nodeId: 'n', statementHash: 'h', sessionId: 's', nodeName: 'N', sessionName: 'S', kind: 'fact', front: 'F', back: 'B', extra: '', status: 'approved' };
+  const old = { ...initialState(), schemaVersion: 7, cards: [card] };
+  const bytes = JSON.stringify(old, null, 2) + '\n';
+  try {
+    await writeFile(path.join(root, 'state.json'), bytes);
+    const store = await StateStore.open(root);
+    assert.deepEqual(store.snapshot(), { ...old, schemaVersion: 8 });
+    assert.equal(await readFile(path.join(root, 'state.v7.bak'), 'utf8'), bytes);
+    await store.close();
+    const imported = { ...card, status: 'imported', deck: 'Deck' };
+    validateState({ ...initialState(), cards: [imported] });
+    for (const bad of [{ ...imported, deck: '' }, { ...imported, noteId: 1 }, { ...imported, destination: { url: 'x', profile: 'p' } }, { ...imported, presence: 'present' }, { ...imported, existingNote: true }]) {
+      assert.throws(() => validateState({ ...initialState(), cards: [bad] }));
+    }
+    assert.throws(() => migrateState({ ...old, cards: [imported] }));
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
 
 test('directory sync is skipped on Windows, where fsync on a directory fails with EPERM', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'anki-bridge-sync-'));

@@ -1,6 +1,6 @@
 {
   "name": "learnharness-anki-bridge",
-  "version": "0.8.2",
+  "version": "0.8.3",
   "private": true,
   "type": "module",
   "description": "Unofficial graph-to-Anki drafting, review and one-way AnkiConnect delivery.",

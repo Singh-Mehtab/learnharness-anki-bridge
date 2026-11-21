@@ -14,7 +14,7 @@ LearnHarness community plugins run local code with your app's permissions. Only 
 
 1. In LearnHarness, open **Settings → Community plugins** and select and copy the plugins directory path. Paste it into Explorer's address bar or Finder's **Go to Folder**. Quit LearnHarness completely. On Mac, use **Quit** or ⌘Q; closing its window is not enough.
 2. If the plugins directory already contains `anki-bridge`, stop and follow the upgrade steps instead. Otherwise, extract the zip outside the plugins directory. Windows **Extract All** may create a version-named outer folder: open it and move the inner `anki-bridge` folder into the plugins directory.
-3. Check that the manifest is directly at `<plugins directory>/anki-bridge/dist/manifest.json`, not `<plugins directory>/anki-bridge-v0.8.2/anki-bridge/dist/manifest.json`. Renaming the outer folder does not remove the extra level.
+3. Check that the manifest is directly at `<plugins directory>/anki-bridge/dist/manifest.json`, not `<plugins directory>/anki-bridge-v0.8.3/anki-bridge/dist/manifest.json`. Renaming the outer folder does not remove the extra level.
 4. Restart LearnHarness. Anki Bridge should appear in **Community plugins** and starts disabled. Enable it there, then open Anki Bridge from the sidebar. LearnHarness's built-in Flashcards plugin is independent and can stay enabled.
 
 ## Upgrade without losing data
@@ -25,15 +25,15 @@ LearnHarness community plugins run local code with your app's permissions. Only 
 
 If there is no `dist/` or you find `dist/data/`, stop before moving anything.
 
-Version 0.8.1 upgrades state to schema 7 so it can record an existing Anki note without claiming to know its deck. It saves the original `state.json` in `data/state.v6.bak` when upgrading from 0.8.0, or `data/state.v5.bak` when upgrading directly from 0.7.2. If a backup of the same name already exists with different contents, the upgrade stops without changing either file. Move that backup to a private location before trying again.
+Version 0.8.3 upgrades state to schema 8 for imported-card records. It saves the original `state.json` in `data/state.v7.bak` when upgrading from 0.8.1 or 0.8.2, `data/state.v6.bak` from 0.8.0, or `data/state.v5.bak` from 0.7.2. If a backup of the same name already exists with different contents, the upgrade stops without changing either file. Move that backup to a private location before trying again.
 
 When upgrading from 0.7.2, your drafts, flags, delivery records, card limit and model override carry over. Apply and Contrast move to Settings. Existing Compose cards stay readable, but Write no longer generates them.
 
-### Roll back to 0.8.0 or 0.7.2
+### Roll back to an earlier version
 
 1. Quit LearnHarness completely and save a private copy of your current `anki-bridge/data/` before restoring anything.
-2. Restore the old `dist/` and the `data/` backup taken before upgrading from that version. If you don't have the full backup, copy the matching migration backup over `data/state.json`: `state.v6.bak` for 0.8.0 or `state.v5.bak` for 0.7.2. A direct upgrade from 0.7.2 does not create a schema 6 backup. If there is no matching backup, keep your state intact and use a compatible build; do not edit the schema number.
-3. Restart LearnHarness and check the restored version and data before resuming work. Replacing `dist/` alone won't work: neither old version can read schema 7. Rolling back restores older drafts, settings and delivery history. It does not undo sends to Anki.
+2. Restore the old `dist/` and the `data/` backup taken before upgrading from that version. If you don't have the full backup, copy the matching migration backup over `data/state.json`: `state.v7.bak` for 0.8.1 or 0.8.2, `state.v6.bak` for 0.8.0, or `state.v5.bak` for 0.7.2. A direct upgrade from 0.7.2 does not create a schema 6 backup. If there is no matching backup, keep your state intact and use a compatible build; do not edit the schema number.
+3. Restart LearnHarness and check the restored version and data before resuming work. Replacing `dist/` alone won't work: earlier versions cannot read schema 8. Rolling back restores older drafts, settings and delivery history. It does not undo sends or imports to Anki.
 
 ## Connect and send a card
 

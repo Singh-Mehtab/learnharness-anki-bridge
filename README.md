@@ -17,7 +17,7 @@
   <a href="CHANGELOG.md">Changelog</a>
 </p>
 
-<p align="center"><sub>Version 0.8.2 · No public release yet · Build from source</sub></p>
+<p align="center"><sub>Version 0.8.3 · No public release yet · Build from source</sub></p>
 
 Anki Bridge is a community plugin for [LearnHarness](https://github.com/amosblomqvist/learnharness). It reads the ideas in your knowledge graph, has your model draft flashcards from them, and adds the ones you approve to [Anki](https://apps.ankiweb.net/). You edit and approve every draft, and Anki schedules the reviews. Only cards you approve are added, either when you press Send or when you import a package you downloaded.
 
@@ -75,7 +75,7 @@ Pick a deck (or type a new one), check the tags and press **Send to Anki**. The 
 
 **Download .apkg**, next to Send to Anki, saves the approved cards as a package file. It needs a deck name but no AnkiConnect, and Anki can be closed. Open the file with Anki, or use **File → Import**, to add the cards. The package has the same fields, formatting, tags and note type as a send.
 
-A download is not a send. The cards stay approved, they don't count as in Anki, and you can still send them. Anki decides how to match an imported package with your collection. Depending on Anki's import settings, importing can add duplicates of cards you sent directly, or update notes from an earlier package of the same cards, including edits you made to them in Anki. Anki Bridge can't check what an import will do.
+A download is not a send. The cards stay approved until you mark them as imported. After importing, press **Mark as imported** in the download panel so Bridge won't package them again. Bridge takes your word for the import and counts the cards as in Anki for any paired profile. Undo restores each card's previous approval or failed-send state until you dismiss the confirmation or reload. Anki decides how to match an imported package with your collection. Depending on Anki's import settings, importing can add duplicates of cards you sent directly, or update notes from an earlier package of the same cards, including edits you made to them in Anki. Anki Bridge can't check what an import will do.
 
 ## Card types
 
@@ -109,7 +109,7 @@ Each topic shows its cards with their lapses, reviews, recent Again dates and de
 ## Install
 
 > [!NOTE]
-> Anki Bridge has no public release yet. Version 0.8.2 is the current build for personal use. Use the `anki-bridge-v0.8.2.zip` install archive if you have it, or build it from source using the [install guide](docs/install.md#build-the-zip-from-source). GitHub's automatically generated source zip is not the install archive.
+> Anki Bridge has no public release yet. Version 0.8.3 is the current build for personal use. Use the `anki-bridge-v0.8.3.zip` install archive if you have it, or build it from source using the [install guide](docs/install.md#build-the-zip-from-source). GitHub's automatically generated source zip is not the install archive.
 
 ### What you need
 
