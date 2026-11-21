@@ -62,7 +62,7 @@ The original core bench failed the zero-answer-leak criterion. The 0.1.1 follow-
 
 That is a partial result, **not a full benchmark pass**. Claude's quota stopped both synthetic-subject batches. The fixtures are hand-written and cleaner than real extraction output; the QM sample is not from an independent lecture. Human spot-checks and model scores remain separate.
 
-Additional card-quality validation is deferred until before public release. No automatic rerun is scheduled. See the [bench guide](../bench/README.md) and [0.1.1 closeout](../bench/0.1.1-closeout.md) for methods and limitations. Private graph data, generated cards and per-card scores are not committed.
+No further bench run was made before 0.9.0. The author judged card quality from daily use instead, which is not a benchmark result. See the [bench guide](../bench/README.md) and [0.1.1 closeout](../bench/0.1.1-closeout.md) for methods and limitations. Private graph data, generated cards and per-card scores are not committed.
 
 ## Earlier verification
 
