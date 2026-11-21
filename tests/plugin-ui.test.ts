@@ -62,7 +62,7 @@ async function setup(options: { handler?: (name: string, input: any) => unknown;
       if (name === "edit") Object.assign(state.cards.find(c => c.id === input.id)!, { front: input.front, back: input.back, extra: input.extra, status: "draft" });
       if (name === "approve") state.cards.filter(c => input.ids.includes(c.id)).forEach(c => { c.status = "approved"; });
       if (name === "drop") state.cards.filter(c => input.ids.includes(c.id)).forEach(c => { c.status = "dropped"; });
-      if (name === "markImported") state.cards.filter(c => input.ids.includes(c.id)).forEach(c => { c.status = "imported"; c.deck = input.deck; });
+      if (name === "markImported") { state.cards.filter(c => input.ids.includes(c.id)).forEach(c => { c.status = "imported"; c.deck = input.deck; }); return structuredClone({ ...state, importMarkId: "test-mark" }); }
       if (name === "unmarkImported") state.cards.filter(c => input.ids.includes(c.id)).forEach(c => { c.status = "approved"; delete c.deck; });
       if (name === "draft") state.cards.push(card(`manual-${state.cards.length}`, { front: input.front, back: input.back, extra: input.extra, kind: input.kind, nodeName: "Hand-written card", sessionName: "Manual" }));
       if (name === "send") {
@@ -1010,7 +1010,7 @@ test("Download .apkg works unpaired, saves the package, keeps cards approved and
     if (name === "markImported" && markGate) await markGate;
     if (failAfterCommit && (name === "markImported" || name === "unmarkImported")) {
       state.cards.filter(c => input.ids.includes(c.id)).forEach(c => { c.status = name === "markImported" ? "imported" : "approved"; if (name === "markImported") c.deck = input.deck; else delete c.deck; });
-      return structuredClone({ ...state, durabilityWarning: "directory sync failed" });
+      return structuredClone({ ...state, ...(name === "markImported" ? { importMarkId: "test-mark" } : {}), durabilityWarning: "directory sync failed" });
     }
     return undefined;
   } });
@@ -1043,7 +1043,7 @@ test("Download .apkg works unpaired, saves the package, keeps cards approved and
     const panel = f.container.querySelector('.ab-sent[data-kind="download"]')!;
     assert.equal(panel.getAttribute("data-kind"), "download");
     assert.match(panel.textContent!, /Download requested: anki-bridge-synthetic-deck\.apkg, 2 cards/);
-    assert.match(panel.textContent!, /Cards stay approved in Bridge and can still be sent\. Open the file in Anki to import it/);
+    assert.match(panel.textContent!, /Downloading does not change card status\. Open the file in Anki to import it/);
     assert.doesNotMatch(panel.textContent!, /\bSaved\b/);
     assert.match(panel.textContent!, /Importing may duplicate cards already in Anki or update notes from an earlier package/);
     assert.doesNotMatch(panel.textContent!, /sent to Anki/);
@@ -1118,6 +1118,16 @@ test("undo keeps a newer package receipt", async () => {
     f.button("Undo", f.container.querySelector('.ab-sent[data-kind="imported"]')).click(); await tick();
     assert.match(receipt.textContent!, /b\.apkg/, "undo must not replace a newer receipt");
     assert.ok(f.button("Mark as imported", receipt));
+    state.cards[1].front = "Changed after download";
+    await f.more("Refresh cards"); await tick();
+    assert.equal(f.button("Download again", receipt).disabled, true);
+    state.cards[1].front = "Question b";
+    Object.assign(state.cards[1], { status: "sent", noteId: 123, deck: "Scratch", destination: paired() });
+    await f.more("Refresh cards"); await tick();
+    assert.equal(f.button("Download again", receipt).disabled, true);
+    assert.equal(f.button("Mark as imported", receipt).disabled, true);
+    assert.match(receipt.textContent!, /no longer eligible/);
+    assert.equal(f.button("Dismiss", receipt).disabled, false);
   } finally { URL.createObjectURL = create; URL.revokeObjectURL = revoke; await f.dispose(); }
 });
 

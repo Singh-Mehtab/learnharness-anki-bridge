@@ -18,7 +18,7 @@ interface Card {
   presence?: "present" | "deleted" | "unknown";
   sourceStatement?: string; sourceChanged?: boolean; sourceMissing?: boolean; sourceUnavailable?: boolean;
 }
-export interface Snapshot { settings: Settings; destination: Destination | null; cards: Card[]; recoveryError?: string; generationRecoveryError?: string; durabilityWarning?: string }
+export interface Snapshot { settings: Settings; destination: Destination | null; cards: Card[]; recoveryError?: string; generationRecoveryError?: string; durabilityWarning?: string; importMarkId?: string }
 type Fields = { front: string; back: string; extra: string };
 const message = (error: unknown) => error instanceof Error ? error.message : String(error);
 const words = (text: string) => text.trim().split(/\s+/u).filter(Boolean).length;
@@ -81,7 +81,8 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
   let approveAll: ButtonHandle | undefined, sendAll: ButtonHandle | undefined, downloadAll: ButtonHandle | undefined;
   let bulkTargetKey: string | undefined;
   const sentScope = new RenderScope(signal), downloadScope = new RenderScope(signal), importedScope = new RenderScope(signal);
-  function hideDownload(): void { if (packageMarkInFlight) return; downloadScope.reset(); downloadPanel.replaceChildren(); downloadPanel.hidden = true; }
+  let syncReceipt: (() => void) | undefined;
+  function hideDownload(): void { if (packageMarkInFlight) return; downloadScope.reset(); downloadPanel.replaceChildren(); downloadPanel.hidden = true; syncReceipt = undefined; }
   function hideImported(): void { if (busy) return; importedScope.reset(); importedPanel.replaceChildren(); importedPanel.hidden = true; }
   function hideSent(): void { sentScope.reset(); sentPanel.replaceChildren(); sentPanel.hidden = true; delete sentPanel.dataset.kind; }
   function showSent({ added, found, skipped, failed, deck, tags }: SendResult["delivery"]): void {
@@ -123,42 +124,48 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
     text.append(el("p", `Download requested: ${result.fileName}, ${plural(result.ids.length, "card")}`, "ab-sent-title"), el("p", `Deck ${result.deck}`, "ab-sent-detail"));
     if (result.tags.length) text.append(el("p", `Tags ${result.tags.join(" ")}`, "ab-sent-detail"));
     text.append(
-      el("p", "Cards stay approved in Bridge and can still be sent. Open the file in Anki to import it.", "ab-sent-detail"),
+      el("p", "Downloading does not change card status. Open the file in Anki to import it.", "ab-sent-detail"),
       el("p", "Importing may duplicate cards already in Anki or update notes from an earlier package.", "ab-sent-detail ab-warning"));
     const actionsBox = el("div", undefined, "ab-actions");
     // The same file again, byte for byte, without asking the backend.
-    button(ctx, actionsBox, s, { label: "Download again", onClick: () => saveFile(result.fileName, bytes) });
-    button(ctx, actionsBox, s, { label: "Mark as imported", onClick: () => packageAction("markImported", result, bytes, s) });
+    const revision = (card: Card) => JSON.stringify([card.id, card.front, card.back, card.extra, card.sessionName, card.nodeName, card.nodeId, card.kind]);
+    const revisions = result.ids.map(id => { const card = state?.cards.find(c => c.id === id); return card ? revision(card) : undefined; });
+    const eligible = () => result.ids.every((id, i) => { const card = state?.cards.find(c => c.id === id); return card && revisions[i] === revision(card) && (card.status === "approved" || card.status === "failed") && card.noteId === undefined; });
+    const warning = el("p", "", "ab-sent-detail ab-warning"); text.append(warning);
+    const again = button(ctx, actionsBox, s, { label: "Download again", onClick: () => { if (eligible()) saveFile(result.fileName, bytes); } });
+    const mark = button(ctx, actionsBox, s, { label: "Mark as imported", onClick: () => { if (eligible()) void packageAction("markImported", result, bytes, s); } });
+    syncReceipt = () => { const blocked = !eligible(); again.update({ disabled: blocked }); mark.update({ disabled: blocked }); warning.textContent = blocked ? "Some cards are no longer eligible. Dismiss this receipt and review the cards." : ""; };
     button(ctx, actionsBox, s, { label: "Dismiss", variant: "ghost", onClick: hideDownload });
-    downloadPanel.replaceChildren(icon, text, actionsBox); downloadPanel.hidden = false;
+    downloadPanel.replaceChildren(icon, text, actionsBox); downloadPanel.hidden = false; syncReceipt();
   }
-  function showImported(result: PackageResult, bytes: Uint8Array<ArrayBuffer>): void {
+  function showImported(result: PackageResult, bytes: Uint8Array<ArrayBuffer>, markId: string): void {
     const s = importedScope.reset();
     importedPanel.dataset.kind = "imported";
     const text = el("div", undefined, "ab-sent-text");
     text.append(el("p", `${plural(result.ids.length, "card")} marked as imported`, "ab-sent-title"));
     const actionsBox = el("div", undefined, "ab-actions");
-    button(ctx, actionsBox, s, { label: "Undo", onClick: () => packageAction("unmarkImported", result, bytes, s) });
+    button(ctx, actionsBox, s, { label: "Undo", onClick: () => packageAction("unmarkImported", result, bytes, s, markId) });
     button(ctx, actionsBox, s, { label: "Dismiss", variant: "ghost", onClick: hideImported });
     importedPanel.replaceChildren(text, actionsBox); importedPanel.hidden = false;
   }
-  async function packageAction(name: "markImported" | "unmarkImported", result: PackageResult, bytes: Uint8Array<ArrayBuffer>, panel: AbortSignal): Promise<void> {
+  async function packageAction(name: "markImported" | "unmarkImported", result: PackageResult, bytes: Uint8Array<ArrayBuffer>, panel: AbortSignal, markId?: string): Promise<void> {
     if (!alive() || busy || panel.aborted) return;
     if (name === "markImported" && !importedPanel.hidden) { feedback.show("Undo or dismiss the previous import first.", "error"); return; }
     if (name === "markImported" && result.ids.some(id => editing.has(id))) { feedback.show("Save or cancel your edits before marking these cards imported.", "error"); return; }
     busy = true; packageMarkInFlight = name === "markImported"; actions++; syncBar();
     try {
-      const next = await ctx.call<Snapshot>(name, name === "markImported" ? { ids: result.ids, deck: result.deck, fingerprints: result.fingerprints } : { ids: result.ids });
+      const next = await ctx.call<Snapshot>(name, name === "markImported" ? { ids: result.ids, deck: result.deck, fingerprints: result.fingerprints } : { ids: result.ids, markId });
       if (alive()) {
+        if (name === "markImported" && !next.importMarkId) throw new Error("Import confirmation was incomplete");
         state = next; render();
         if (!panel.aborted) {
-          if (name === "markImported") { packageMarkInFlight = false; hideDownload(); showImported(result, bytes); }
+          if (name === "markImported") { packageMarkInFlight = false; hideDownload(); showImported(result, bytes, next.importMarkId!); }
           else { importedScope.reset(); importedPanel.replaceChildren(); importedPanel.hidden = true; if (downloadPanel.hidden) showDownloaded(result, bytes); }
         }
         feedback.show(next.durabilityWarning ? `Cards updated, but saving could not be confirmed: ${next.durabilityWarning}.` : "", next.durabilityWarning ? "error" : undefined);
         try { await options.onChanged(); } catch { if (alive() && !next.durabilityWarning) feedback.show("Cards updated, but coverage could not refresh. Refresh the page.", "error"); }
       }
-    } catch (error) { if (alive()) feedback.show(message(error), "error"); }
+    } catch (error) { if (alive()) feedback.show(`${message(error)}. Refresh cards and check their status before retrying.`, "error"); }
     finally { busy = false; packageMarkInFlight = false; if (alive()) syncBar(); if (refreshPending && alive()) void backgroundRefresh(); }
   }
 
@@ -630,7 +637,7 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
       const keepCard = card && list.contains(card) ? card.dataset.cardId : undefined;
       const area = keepCard && active?.tagName === "TEXTAREA" ? active as HTMLTextAreaElement : undefined;
       const keep = area && { key: area.dataset.keep, start: area.selectionStart, end: area.selectionEnd, dir: area.selectionDirection };
-      draw(); after?.();
+      draw(); syncReceipt?.(); after?.();
       if (keepCard && !active?.isConnected) {
         const row = waitingCard(keepCard);
         const next = keep && [...(row?.querySelectorAll<HTMLTextAreaElement>("textarea[data-keep]") ?? [])].find(a => a.dataset.keep === keep.key);

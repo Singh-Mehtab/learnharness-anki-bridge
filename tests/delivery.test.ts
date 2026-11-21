@@ -100,7 +100,7 @@ test('mark imported and undo are atomic, offline, and reject later edits and sen
       await assert.rejects(f.service.command('markImported', { ids, deck: 'Deck' }));
       assert.deepEqual(f.store.snapshot(), before);
     }
-    await f.service.command('markImported', { ids: [a, b], deck: ' Deck::One ', fingerprints });
+    const marked = await f.service.command('markImported', { ids: [a, b], deck: ' Deck::One ', fingerprints }) as { importMarkId: string };
     for (const c of f.snap().cards.slice(0, 2)) {
       assert.equal(c.status, 'imported'); assert.equal(c.deck, 'Deck::One');
       assert.equal(c.noteId, undefined); assert.equal(c.destination, undefined);
@@ -111,9 +111,9 @@ test('mark imported and undo are atomic, offline, and reject later edits and sen
     await assert.rejects(f.service.command('approve', { ids: [a] }), /imported/);
     await assert.rejects(f.send([a]), /Imported cards/);
     const imported = f.store.snapshot();
-    await assert.rejects(f.service.command('unmarkImported', { ids: [a, draft] }), /Only imported/);
+    await assert.rejects(f.service.command('unmarkImported', { ids: [a, draft], markId: marked.importMarkId }), /Only imported/);
     assert.deepEqual(f.store.snapshot(), imported);
-    await f.service.command('unmarkImported', { ids: [a, b] });
+    await f.service.command('unmarkImported', { ids: [a, b], markId: marked.importMarkId });
     assert.deepEqual(f.snap().cards.slice(0, 2).map(c => [c.status, c.deck]), [['approved', undefined], ['approved', undefined]]);
   } finally { await f.close(); }
 });
@@ -127,9 +127,25 @@ test('undo restores failed send details and approved cards in a mixed batch', as
       Object.assign(s.cards.find(c => c.id === b)!, { status: 'failed', deck: 'Old', destination: { url: 'http://127.0.0.1:8766/', profile: 'Scratch' }, lastError: 'Connection lost', presence: 'unknown' });
     }));
     const before = f.store.snapshot().cards;
-    await f.service.command('markImported', { ids: [a, b], deck: 'Package', fingerprints: before.map(packageFingerprint) });
-    await f.service.command('unmarkImported', { ids: [a, b] });
+    const marked = await f.service.command('markImported', { ids: [a, b], deck: 'Package', fingerprints: before.map(packageFingerprint) }) as { importMarkId: string };
+    await f.service.command('unmarkImported', { ids: [a, b], markId: marked.importMarkId });
     assert.deepEqual(f.store.snapshot().cards, before);
+  } finally { await f.close(); }
+});
+
+test('an old undo cannot reverse a later import of the same card', async () => {
+  const { packageFingerprint } = await import('../src/anki/apkg.ts');
+  const f = await fixture();
+  try {
+    const id = await f.draft('Question?'); await f.approve([id]);
+    const fingerprints = [packageFingerprint(f.store.snapshot().cards[0])];
+    const first = await f.service.command('markImported', { ids: [id], deck: 'Deck', fingerprints }) as { importMarkId: string };
+    await f.service.command('unmarkImported', { ids: [id], markId: first.importMarkId });
+    const second = await f.service.command('markImported', { ids: [id], deck: 'Deck', fingerprints }) as { importMarkId: string };
+    assert.notEqual(first.importMarkId, second.importMarkId);
+    const before = f.store.snapshot();
+    await assert.rejects(f.service.command('unmarkImported', { ids: [id], markId: first.importMarkId }), /mark has changed/);
+    assert.deepEqual(f.store.snapshot(), before);
   } finally { await f.close(); }
 });
 
@@ -141,10 +157,10 @@ test('post-commit warnings belong only to the command that committed', async () 
     const fingerprints = [packageFingerprint(f.store.snapshot().cards[0])];
     const replace = f.store.replace.bind(f.store);
     f.store.replace = async state => { await replace(state); throw new Error('directory sync failed'); };
-    const marked = await f.service.command('markImported', { ids: [id], deck: 'Deck', fingerprints }) as { durabilityWarning?: string };
+    const marked = await f.service.command('markImported', { ids: [id], deck: 'Deck', fingerprints }) as { durabilityWarning?: string; importMarkId: string };
     assert.match(marked.durabilityWarning!, /directory sync failed/);
     await assert.rejects(f.service.command('markImported', { ids: [id], deck: 'Deck', fingerprints }), /Only approved/);
-    const undone = await f.service.command('unmarkImported', { ids: [id] }) as { durabilityWarning?: string };
+    const undone = await f.service.command('unmarkImported', { ids: [id], markId: marked.importMarkId }) as { durabilityWarning?: string };
     assert.match(undone.durabilityWarning!, /directory sync failed/);
     assert.equal(f.snap().cards[0].status, 'approved');
   } finally { await f.close(); }
