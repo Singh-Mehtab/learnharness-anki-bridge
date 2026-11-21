@@ -13,19 +13,19 @@ import type { ButtonHandle } from "./ui.ts";
 interface Card {
   id: string; nodeId: string; statementHash: string; sessionId: string; nodeName: string; sessionName: string;
   kind: string; front: string; back: string; extra: string;
-  status: "draft" | "approved" | "sending" | "sent" | "failed" | "dropped";
+  status: "draft" | "approved" | "sending" | "sent" | "imported" | "failed" | "dropped";
   deck?: string; noteId?: number; existingNote?: true; destination?: Destination; lastError?: string;
   presence?: "present" | "deleted" | "unknown";
   sourceStatement?: string; sourceChanged?: boolean; sourceMissing?: boolean; sourceUnavailable?: boolean;
 }
-export interface Snapshot { settings: Settings; destination: Destination | null; cards: Card[]; recoveryError?: string; generationRecoveryError?: string }
+export interface Snapshot { settings: Settings; destination: Destination | null; cards: Card[]; recoveryError?: string; generationRecoveryError?: string; durabilityWarning?: string }
 type Fields = { front: string; back: string; extra: string };
 const message = (error: unknown) => error instanceof Error ? error.message : String(error);
 const words = (text: string) => text.trim().split(/\s+/u).filter(Boolean).length;
 
 const STATUS: Record<Card["status"], { text: string; tone: "neutral" | "good" | "warn" | "bad" | "info" }> = {
   draft: { text: "Draft", tone: "neutral" }, approved: { text: "Approved", tone: "good" }, sending: { text: "Unconfirmed", tone: "warn" },
-  sent: { text: "In Anki", tone: "good" }, failed: { text: "Send failed", tone: "bad" }, dropped: { text: "Dropped", tone: "neutral" },
+  sent: { text: "In Anki", tone: "good" }, imported: { text: "Imported", tone: "good" }, failed: { text: "Send failed", tone: "bad" }, dropped: { text: "Dropped", tone: "neutral" },
 };
 
 export interface ReviewHandle {
@@ -57,9 +57,11 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
   /** A clear confirmation after a send, kept until the next action or dismissed (#32). */
   const sentPanel = el("div", undefined, "ab-sent");
   sentPanel.setAttribute("role", "status"); sentPanel.hidden = true;
+  const importedPanel = el("div", undefined, "ab-sent");
+  importedPanel.setAttribute("role", "status"); importedPanel.hidden = true;
   const list = el("div", undefined, "ab-cards");
   const history = el("details", undefined, "ab-history");
-  host.append(banner, sendBar, feedback, sentPanel, list, history);
+  host.append(banner, sendBar, feedback, sentPanel, importedPanel, list, history);
 
   const menuSlot = options.headerAside;
   let state: Snapshot | undefined, connection: Connection | undefined, connectionError = "";
@@ -69,13 +71,15 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
   const editing = new Set<string>();
   /** Cards whose save is in flight. Their editors stay read-only across re-renders. */
   const saving = new Set<string>();
+  let packageMarkInFlight = false;
   const alive = () => !disposed && !signal.aborted && !ctx.signal.aborted;
   const historyScope = new RenderScope(signal), barScope = new RenderScope(signal), bannerScope = new RenderScope(signal);
   const rows = new Map<string, { key: string; scope: RenderScope; view: ReturnType<typeof renderCard> }>();
   let bannerKey = "", historyKey = "";
   let approveAll: ButtonHandle | undefined, sendAll: ButtonHandle | undefined, downloadAll: ButtonHandle | undefined;
   let bulkTargetKey: string | undefined;
-  const sentScope = new RenderScope(signal);
+  const sentScope = new RenderScope(signal), importedScope = new RenderScope(signal);
+  function hideImported(): void { importedScope.reset(); importedPanel.replaceChildren(); importedPanel.hidden = true; }
   function hideSent(): void { sentScope.reset(); sentPanel.replaceChildren(); sentPanel.hidden = true; delete sentPanel.dataset.kind; }
   function showSent({ added, found, skipped, failed, deck, tags }: SendResult["delivery"]): void {
     const ids = [...added, ...found];
@@ -121,8 +125,38 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
     const actionsBox = el("div", undefined, "ab-actions");
     // The same file again, byte for byte, without asking the backend.
     button(ctx, actionsBox, s, { label: "Download again", onClick: () => saveFile(result.fileName, bytes) });
+    button(ctx, actionsBox, s, { label: "Mark as imported", onClick: () => packageAction("markImported", result, bytes, s) });
     button(ctx, actionsBox, s, { label: "Dismiss", variant: "ghost", onClick: hideSent });
     revealPanel(icon, text, actionsBox);
+  }
+  function showImported(result: PackageResult, bytes: Uint8Array<ArrayBuffer>): void {
+    const s = importedScope.reset();
+    importedPanel.dataset.kind = "imported";
+    const text = el("div", undefined, "ab-sent-text");
+    text.append(el("p", `${plural(result.ids.length, "card")} marked as imported`, "ab-sent-title"));
+    const actionsBox = el("div", undefined, "ab-actions");
+    button(ctx, actionsBox, s, { label: "Undo", onClick: () => packageAction("unmarkImported", result, bytes, s) });
+    button(ctx, actionsBox, s, { label: "Dismiss", variant: "ghost", onClick: hideImported });
+    importedPanel.replaceChildren(text, actionsBox); importedPanel.hidden = false;
+  }
+  async function packageAction(name: "markImported" | "unmarkImported", result: PackageResult, bytes: Uint8Array<ArrayBuffer>, panel: AbortSignal): Promise<void> {
+    if (!alive() || busy || panel.aborted) return;
+    if (name === "markImported" && !importedPanel.hidden) { feedback.show("Undo or dismiss the previous import first.", "error"); return; }
+    if (name === "markImported" && result.ids.some(id => editing.has(id))) { feedback.show("Save or cancel your edits before marking these cards imported.", "error"); return; }
+    busy = true; packageMarkInFlight = name === "markImported"; actions++; syncBar();
+    try {
+      const next = await ctx.call<Snapshot>(name, name === "markImported" ? { ids: result.ids, deck: result.deck, fingerprints: result.fingerprints } : { ids: result.ids });
+      if (alive()) {
+        state = next; render();
+        if (!panel.aborted) {
+          if (name === "markImported") { hideSent(); showImported(result, bytes); }
+          else { hideImported(); showDownloaded(result, bytes); }
+        }
+        feedback.show(next.durabilityWarning ? `Cards updated, but saving could not be confirmed: ${next.durabilityWarning}.` : "", next.durabilityWarning ? "error" : undefined);
+        try { await options.onChanged(); } catch { if (alive() && !next.durabilityWarning) feedback.show("Cards updated, but coverage could not refresh. Refresh the page.", "error"); }
+      }
+    } catch (error) { if (alive()) feedback.show(message(error), "error"); }
+    finally { busy = false; packageMarkInFlight = false; if (alive()) syncBar(); if (refreshPending && alive()) void backgroundRefresh(); }
   }
 
   async function run(action: () => Promise<string | void>, keepPosition = false): Promise<void> {
@@ -435,7 +469,8 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
       article.tabIndex = -1;
       if (card.nodeId) article.dataset.waitingNode = card.nodeId;
     }
-    const editable = ["draft", "approved", "failed"].includes(card.status) && card.noteId === undefined;
+    const importedConflict = card.status === "imported" && editing.has(card.id);
+    const editable = importedConflict || (["draft", "approved", "failed"].includes(card.status) && card.noteId === undefined);
     if (!editable) { edits.delete(card.id); editing.delete(card.id); }
     const isEditing = editable && editing.has(card.id);
     const values: Fields = (isEditing && edits.get(card.id)) || card;
@@ -449,6 +484,7 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
     article.append(head);
 
     const notices: string[] = [];
+    if (importedConflict) notices.push("This card was marked imported in another view. Copy your unsaved edits before cancelling; they cannot be saved to this imported card.");
     if (card.lastError) notices.push(card.lastError);
     if (card.sourceMissing) notices.push("Source idea wasn't found in this graph snapshot. Check the card before approving.");
     else if (card.sourceChanged) notices.push("Idea changed since this card was written.");
@@ -512,7 +548,7 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
     if (editable) {
       if (isEditing) {
         button(ctx, left, s, { label: "Cancel", disabled: saving.has(card.id), onClick: () => { edits.delete(card.id); editing.delete(card.id); feedback.show(""); render(); } });
-        button(ctx, right, s, { label: "Save", variant: "default", onClick: () => run(async () => {
+        if (!importedConflict) button(ctx, right, s, { label: "Save", variant: "default", onClick: () => run(async () => {
           // Typing during the save would be lost when the editor closes.
           saving.add(card.id);
           for (const area of Object.values(inputs)) if (area) area.readOnly = true;
@@ -527,10 +563,12 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
           }
         }) });
       } else {
-        button(ctx, left, s, { label: "Edit", onClick: () => { editing.add(card.id); feedback.show(""); render(); article.ownerDocument.querySelector<HTMLTextAreaElement>(`[data-keep="card-${card.id}-front"]`)?.focus(); } });
+        button(ctx, left, s, { label: "Edit", onClick: () => { if (packageMarkInFlight) return; editing.add(card.id); feedback.show(""); render(); article.ownerDocument.querySelector<HTMLTextAreaElement>(`[data-keep="card-${card.id}-front"]`)?.focus(); } });
         button(ctx, left, s, { label: "Drop", onClick: () => run(async () => { await call("drop", { ids: [card.id] }); edits.delete(card.id); return "Card dropped."; }) });
         primary = button(ctx, right, s, primaryProps(card.status));
       }
+    } else if (card.status === "imported") {
+      if (card.deck) left.append(el("span", card.deck, "ab-muted"));
     } else if (card.status === "sent") {
       const where = [card.existingNote ? "Found in Anki" : card.deck, card.presence === "deleted" ? "deleted in Anki" : ""].filter(Boolean).join(", ");
       if (where) left.append(el("span", where, "ab-muted"));
@@ -636,15 +674,15 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
     if (!deckTouched) deck.value = state.settings.lastDeck;
     renderBar();
     syncDeck();
-    const waiting = state.cards.filter(c => c.status !== "sent" && c.status !== "dropped");
+    const waiting = state.cards.filter(c => c.status !== "sent" && (c.status !== "imported" || editing.has(c.id)) && c.status !== "dropped");
     reconcileWaiting(waiting);
     if (!waiting.length) {
       const empty = el("div", undefined, "ab-empty-card");
-      const anySent = state.cards.some(c => c.status === "sent");
+      const anySent = state.cards.some(c => c.status === "sent" || c.status === "imported");
       empty.append(el("p", anySent ? "Nothing left to review." : "No cards yet.", "ab-empty-title"));
       list.append(empty);
     }
-    const sent = state.cards.filter(c => c.status === "sent");
+    const sent = state.cards.filter(c => c.status === "sent" || (c.status === "imported" && !editing.has(c.id)));
     const key = JSON.stringify(sent.map(c => [c, atShown(c)]));
     if (historyKey === key) return;
     historyKey = key;

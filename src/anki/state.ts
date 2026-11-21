@@ -11,7 +11,7 @@ import { validateDismissals } from '../coverage/flow.ts';
 import type { Dismissal } from '../coverage/flow.ts';
 
 export interface Destination { url: string; profile: string }
-export type CardStatus = 'draft' | 'approved' | 'sending' | 'sent' | 'failed' | 'dropped';
+export type CardStatus = 'draft' | 'approved' | 'sending' | 'sent' | 'imported' | 'failed' | 'dropped';
 export type CardKind = StoredCardKind;
 export interface Card {
   id: string;
@@ -37,7 +37,7 @@ export interface Card {
   requestId?: string;
 }
 export interface State {
-  schemaVersion: 7;
+  schemaVersion: 8;
   generationSettings: GenerationSettings;
   generations: Generation[];
   flags: Flag[];
@@ -48,7 +48,7 @@ export interface State {
   cards: Card[];
 }
 export const initialState = (): State => ({
-  schemaVersion: 7,
+  schemaVersion: 8,
   generationSettings: defaultGenerationSettings(),
   generations: [],
   flags: [],
@@ -64,9 +64,9 @@ function destination(v: unknown): v is Destination {
   return object(v) && text(v.url) && !!v.url && text(v.profile) && !!v.profile;
 }
 export function validateState(value: unknown): asserts value is State {
-  validateStateFormat(value, 7);
+  validateStateFormat(value, 8);
 }
-function validateStateFormat(value: unknown, version: 6 | 7): void {
+function validateStateFormat(value: unknown, version: 6 | 7 | 8): void {
   if (!object(value) || value.schemaVersion !== version) throw new Error('Unsupported state format. Keep state.json and use a compatible Anki Bridge version.');
   validateGenerations(value.generationSettings, value.generations);
   validateFlags(value.flags);
@@ -75,14 +75,15 @@ function validateStateFormat(value: unknown, version: 6 | 7): void {
   if (!object(settings) || !['url', 'apiKey', 'lastDeck'].every(k => text(settings[k])) || settings.tagTemplate !== undefined && !text(settings.tagTemplate) || settings.systemTags !== undefined && typeof settings.systemTags !== 'boolean' || !(value.destination === null || destination(value.destination)) || !Array.isArray(value.cards)) throw new Error('Invalid Anki Bridge state.');
   const ids = new Set<string>();
   for (const card of value.cards) {
-    if (!object(card) || !['id', 'nodeId', 'statementHash', 'sessionId', 'nodeName', 'sessionName', 'front', 'back', 'extra'].every(k => text(card[k])) || !/^[\da-f]{8}-(?:[\da-f]{4}-){3}[\da-f]{12}$/i.test(card.id as string) || ids.has(card.id as string) || !isStoredKind(card.kind) || !['draft', 'approved', 'sending', 'sent', 'failed', 'dropped'].includes(card.status as string)) throw new Error('Invalid card state.');
+    if (!object(card) || !['id', 'nodeId', 'statementHash', 'sessionId', 'nodeName', 'sessionName', 'front', 'back', 'extra'].every(k => text(card[k])) || !/^[\da-f]{8}-(?:[\da-f]{4}-){3}[\da-f]{12}$/i.test(card.id as string) || ids.has(card.id as string) || !isStoredKind(card.kind) || !(version === 8 ? ['draft', 'approved', 'sending', 'sent', 'imported', 'failed', 'dropped'] : ['draft', 'approved', 'sending', 'sent', 'failed', 'dropped']).includes(card.status as string)) throw new Error('Invalid card state.');
     ids.add(card.id as string);
     if (card.sourceSnapshot !== undefined && !validSource(card.sourceSnapshot) || card.generationId !== undefined && !text(card.generationId) || card.requestId !== undefined && !text(card.requestId)) throw new Error('Invalid generation card metadata.');
     if (card.destination !== undefined && !destination(card.destination)) throw new Error('Invalid card destination.');
     if (card.noteId !== undefined && (!Number.isSafeInteger(card.noteId) || (card.noteId as number) <= 0)) throw new Error('Invalid Anki note ID.');
-    const deckMayBeUnknown = version === 7 && card.status === 'sent' && card.existingNote === true;
+    const deckMayBeUnknown = version >= 7 && card.status === 'sent' && card.existingNote === true;
     if (['sent', 'sending'].includes(card.status as string) && (!destination(card.destination) || (!deckMayBeUnknown && (!text(card.deck) || !card.deck)))) throw new Error('Missing delivery destination or deck.');
     if (card.existingNote !== undefined && (card.existingNote !== true || card.status !== 'sent')) throw new Error('Invalid existing-note metadata.');
+    if (card.status === 'imported' && (!text(card.deck) || !card.deck.trim() || card.noteId !== undefined || card.destination !== undefined || card.existingNote !== undefined || card.presence !== undefined)) throw new Error('Invalid imported card metadata.');
     if (card.status === 'sent' && card.noteId === undefined) throw new Error('Sent card has no Anki note ID.');
     if (card.deck !== undefined && !text(card.deck) || card.lastError !== undefined && !text(card.lastError) || card.presence !== undefined && !['present', 'deleted', 'unknown'].includes(card.presence as string)) throw new Error('Invalid delivery metadata.');
   }
@@ -118,6 +119,10 @@ export function migrateState(raw: unknown): State {
     // before migration so a deckless record cannot become a rollback backup.
     validateStateFormat(value, 6);
     value = { ...value, schemaVersion: 7 };
+  }
+  if (object(value) && value.schemaVersion === 7) {
+    validateStateFormat(value, 7);
+    value = { ...value, schemaVersion: 8 };
   }
   validateState(value);
   return value;

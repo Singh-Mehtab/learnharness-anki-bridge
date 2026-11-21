@@ -27,12 +27,19 @@ export interface PackageResult {
   /** The .apkg bytes, base64-encoded for the JSON call bridge. */
   data: string;
   ids: string[];
+  /** Fingerprints bind the acknowledgement to the card contents in this package. */
+  fingerprints: string[];
   deck: string;
   /** Every tag the package's notes carry, including the automatic learnharness tags. */
   tags: string[];
 }
 
 const htmlText = (text: string) => text.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
+
+/** Bind imported acknowledgements to all card-derived package fields and tags. */
+export function packageFingerprint(card: Card): string {
+  return createHash('sha256').update(JSON.stringify([card.id, card.front, card.back, card.extra, card.sessionName, card.nodeName, card.nodeId, card.kind])).digest('hex');
+}
 
 /** The same field values AnkiConnect delivery sends with addNote, in note type field order. */
 export function packageFields(card: Card): string[] {
@@ -239,5 +246,5 @@ export async function exportPackage(state: State, input: unknown, now = Date.now
   const { deck, cards } = selectPackageCards(state, input);
   const collection = await buildCollection(deck, cards, now);
   const bytes = zip([{ name: 'collection.anki2', data: collection }, { name: 'media', data: Buffer.from('{}') }], new Date(now));
-  return { fileName: packageFileName(deck), data: bytes.toString('base64'), ids: cards.map(c => c.card.id), deck, tags: [...new Set(cards.flatMap(c => c.tags))] };
+  return { fileName: packageFileName(deck), data: bytes.toString('base64'), ids: cards.map(c => c.card.id), fingerprints: cards.map(c => packageFingerprint(c.card)), deck, tags: [...new Set(cards.flatMap(c => c.tags))] };
 }

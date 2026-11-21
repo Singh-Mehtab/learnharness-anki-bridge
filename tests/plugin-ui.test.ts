@@ -62,6 +62,8 @@ async function setup(options: { handler?: (name: string, input: any) => unknown;
       if (name === "edit") Object.assign(state.cards.find(c => c.id === input.id)!, { front: input.front, back: input.back, extra: input.extra, status: "draft" });
       if (name === "approve") state.cards.filter(c => input.ids.includes(c.id)).forEach(c => { c.status = "approved"; });
       if (name === "drop") state.cards.filter(c => input.ids.includes(c.id)).forEach(c => { c.status = "dropped"; });
+      if (name === "markImported") state.cards.filter(c => input.ids.includes(c.id)).forEach(c => { c.status = "imported"; c.deck = input.deck; });
+      if (name === "unmarkImported") state.cards.filter(c => input.ids.includes(c.id)).forEach(c => { c.status = "approved"; delete c.deck; });
       if (name === "draft") state.cards.push(card(`manual-${state.cards.length}`, { front: input.front, back: input.back, extra: input.extra, kind: input.kind, nodeName: "Hand-written card", sessionName: "Manual" }));
       if (name === "send") {
         state.settings.lastDeck = input.deck;
@@ -1001,7 +1003,15 @@ test("Download .apkg works unpaired, saves the package, keeps cards approved and
   const realCreate = URL.createObjectURL, realRevoke = URL.revokeObjectURL;
   URL.createObjectURL = (blob: Blob) => { const url = `blob:test/${blobs.size}`; blobs.set(url, blob); return url; };
   URL.revokeObjectURL = () => {};
-  const f = await setup({ state, handler: (name, input) => name === "exportPackage" ? exportPackage(backend, input, 1_795_000_000_000) : undefined });
+  let failAfterCommit = false;
+  const f = await setup({ state, handler: (name, input) => {
+    if (name === "exportPackage") return exportPackage(backend, input, 1_795_000_000_000);
+    if (failAfterCommit && (name === "markImported" || name === "unmarkImported")) {
+      state.cards.filter(c => input.ids.includes(c.id)).forEach(c => { c.status = name === "markImported" ? "imported" : "approved"; if (name === "markImported") c.deck = input.deck; else delete c.deck; });
+      return structuredClone({ ...state, durabilityWarning: "directory sync failed" });
+    }
+    return undefined;
+  } });
   const pending: Promise<void>[] = [];
   (f.window as any).HTMLAnchorElement.prototype.click = function (this: HTMLAnchorElement) {
     pending.push(blobs.get(this.href)!.arrayBuffer().then(b => { saved.push({ name: this.download, bytes: Buffer.from(b) }); }));
@@ -1038,6 +1048,39 @@ test("Download .apkg works unpaired, saves the package, keeps cards approved and
     assert.equal(f.calls.some(c => c.name === "send"), false, "a download never sends");
     assert.deepEqual(Array.from(f.review().querySelectorAll(".ab-card")).map(c => c.getAttribute("data-status")), ["approved", "draft", "failed"], "nothing marked sent");
     assert.equal(f.button(/^Send 2 cards to Anki/).disabled, false, "the same cards remain available for sending once paired");
+    const first = f.review().querySelector('.ab-card[data-card-id="0b6f7c1e-0000-4000-8000-00000000000a"]')!;
+    f.button("Edit", first).click();
+    f.type(f.review().querySelector('textarea[aria-label="Front"]') as unknown as HTMLTextAreaElement, "Unsaved change");
+    f.button("Mark as imported", panel).click(); await tick();
+    assert.match(f.status()!, /Save or cancel your edits/);
+    assert.equal(f.calls.some(c => c.name === "markImported"), false);
+    assert.equal((f.review().querySelector('textarea[aria-label="Front"]') as unknown as HTMLTextAreaElement).value, "Unsaved change");
+    f.button("Cancel", f.review()).click();
+    failAfterCommit = true;
+    f.button("Mark as imported", panel).click(); await tick();
+    assert.match(f.status()!, /directory sync failed/);
+    const importedPanel = f.container.querySelector('.ab-sent[data-kind="imported"]')!;
+    assert.match(importedPanel.textContent!, /2 cards marked as imported/);
+    assert.deepEqual(f.state.cards.map(c => c.status), ["imported", "draft", "imported"]);
+    const history = f.container.querySelector(".ab-history") as unknown as HTMLDetailsElement;
+    history.open = true; history.dispatchEvent(f.event("toggle"));
+    assert.match(history.textContent!, /Sent cards \(2\)/);
+    assert.match(history.textContent!, /Imported/);
+    assert.match(history.textContent!, /Synthetic::Deck/);
+    assert.equal(f.find("Show in Anki", history), undefined);
+    await f.more("Refresh cards"); await tick();
+    assert.ok(f.button("Undo", importedPanel), "refresh preserves Undo");
+    await f.more("Write a card by hand"); await tick();
+    const manual = f.dialog()!;
+    const [front, back] = Array.from(manual.querySelectorAll("textarea")) as unknown as HTMLTextAreaElement[];
+    front.value = "Manual front"; back.value = "Manual back";
+    f.button("Add card", manual).click(); await tick();
+    assert.ok(f.button("Undo", importedPanel), "an unrelated write preserves Undo");
+    f.button("Undo", importedPanel).click(); await tick();
+    assert.match(f.status()!, /directory sync failed/);
+    assert.deepEqual(f.state.cards.map(c => c.status), ["approved", "draft", "approved", "draft"]);
+    failAfterCommit = false;
+    assert.equal(f.find("Undo", importedPanel), undefined);
     f.button("Download again", panel).click(); await settle(2);
     assert.equal(saved.length, 2);
     assert.equal(f.calls.filter(c => c.name === "exportPackage").length, 1, "the same file again, without a new export");
@@ -1047,6 +1090,22 @@ test("Download .apkg works unpaired, saves the package, keeps cards approved and
     f.button("Dismiss", f.container.querySelector(".ab-sent")!).click();
     assert.equal((f.container.querySelector(".ab-sent") as unknown as HTMLElement).hidden, true);
   } finally { URL.createObjectURL = realCreate; URL.revokeObjectURL = realRevoke; await f.dispose(); }
+});
+
+test("a card imported in another view keeps unsaved edits visible for copying", async () => {
+  const state = fixture(); state.cards = [card("a", { status: "approved" })];
+  const f = await setup({ state });
+  try {
+    f.button("Edit", f.review()).click();
+    f.type(f.review().querySelector('textarea[aria-label="Front"]') as unknown as HTMLTextAreaElement, "Unsaved work");
+    Object.assign(state.cards[0], { status: "imported", deck: "Deck" });
+    await f.more("Refresh cards"); await tick();
+    assert.match(f.review().textContent!, /marked imported in another view/);
+    assert.equal((f.review().querySelector('textarea[aria-label="Front"]') as unknown as HTMLTextAreaElement).value, "Unsaved work");
+    assert.equal(f.find("Save", f.review()), undefined);
+    f.button("Cancel", f.review()).click();
+    assert.equal(f.review().querySelector("textarea"), null);
+  } finally { await f.dispose(); }
 });
 
 test("a found note is not called newly sent or assigned the requested deck and tags", async () => {
