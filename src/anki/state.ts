@@ -32,6 +32,8 @@ export interface Card {
   destination?: Destination;
   lastError?: string;
   presence?: 'present' | 'deleted' | 'unknown';
+  /** Previous unsent state, retained solely for undoing an imported mark. */
+  importPrevious?: { status: 'approved' | 'failed'; deck?: string; destination?: Destination; lastError?: string; presence?: 'present' | 'deleted' | 'unknown' };
   sourceSnapshot?: SourceSnapshot;
   generationId?: string;
   requestId?: string;
@@ -84,6 +86,10 @@ function validateStateFormat(value: unknown, version: 6 | 7 | 8): void {
     if (['sent', 'sending'].includes(card.status as string) && (!destination(card.destination) || (!deckMayBeUnknown && (!text(card.deck) || !card.deck)))) throw new Error('Missing delivery destination or deck.');
     if (card.existingNote !== undefined && (card.existingNote !== true || card.status !== 'sent')) throw new Error('Invalid existing-note metadata.');
     if (card.status === 'imported' && (!text(card.deck) || !card.deck.trim() || card.noteId !== undefined || card.destination !== undefined || card.existingNote !== undefined || card.presence !== undefined)) throw new Error('Invalid imported card metadata.');
+    if (card.importPrevious !== undefined) {
+      const previous = card.importPrevious;
+      if (version !== 8 || card.status !== 'imported' || !object(previous) || !['approved', 'failed'].includes(previous.status as string) || previous.deck !== undefined && !text(previous.deck) || previous.destination !== undefined && !destination(previous.destination) || previous.lastError !== undefined && !text(previous.lastError) || previous.presence !== undefined && !['present', 'deleted', 'unknown'].includes(previous.presence as string)) throw new Error('Invalid import undo metadata.');
+    }
     if (card.status === 'sent' && card.noteId === undefined) throw new Error('Sent card has no Anki note ID.');
     if (card.deck !== undefined && !text(card.deck) || card.lastError !== undefined && !text(card.lastError) || card.presence !== undefined && !['present', 'deleted', 'unknown'].includes(card.presence as string)) throw new Error('Invalid delivery metadata.');
   }

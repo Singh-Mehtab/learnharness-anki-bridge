@@ -75,7 +75,7 @@ Pick a deck (or type a new one), check the tags and press **Send to Anki**. The 
 
 **Download .apkg**, next to Send to Anki, saves the approved cards as a package file. It needs a deck name but no AnkiConnect, and Anki can be closed. Open the file with Anki, or use **File → Import**, to add the cards. The package has the same fields, formatting, tags and note type as a send.
 
-A download is not a send. The cards stay approved until you mark them as imported. After importing, press **Mark as imported** in the download panel so Bridge won't package them again. Bridge takes your word for the import and counts the cards as in Anki for any paired profile. Anki decides how to match an imported package with your collection. Depending on Anki's import settings, importing can add duplicates of cards you sent directly, or update notes from an earlier package of the same cards, including edits you made to them in Anki. Anki Bridge can't check what an import will do.
+A download is not a send. The cards stay approved until you mark them as imported. After importing, press **Mark as imported** in the download panel so Bridge won't package them again. Bridge takes your word for the import and counts the cards as in Anki for any paired profile. Undo restores each card's previous approval or failed-send state until you dismiss the confirmation or reload. Anki decides how to match an imported package with your collection. Depending on Anki's import settings, importing can add duplicates of cards you sent directly, or update notes from an earlier package of the same cards, including edits you made to them in Anki. Anki Bridge can't check what an import will do.
 
 ## Card types
 

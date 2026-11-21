@@ -1004,8 +1004,10 @@ test("Download .apkg works unpaired, saves the package, keeps cards approved and
   URL.createObjectURL = (blob: Blob) => { const url = `blob:test/${blobs.size}`; blobs.set(url, blob); return url; };
   URL.revokeObjectURL = () => {};
   let failAfterCommit = false;
-  const f = await setup({ state, handler: (name, input) => {
+  let markGate: Promise<void> | undefined;
+  const f = await setup({ state, handler: async (name, input) => {
     if (name === "exportPackage") return exportPackage(backend, input, 1_795_000_000_000);
+    if (name === "markImported" && markGate) await markGate;
     if (failAfterCommit && (name === "markImported" || name === "unmarkImported")) {
       state.cards.filter(c => input.ids.includes(c.id)).forEach(c => { c.status = name === "markImported" ? "imported" : "approved"; if (name === "markImported") c.deck = input.deck; else delete c.deck; });
       return structuredClone({ ...state, durabilityWarning: "directory sync failed" });
@@ -1038,7 +1040,7 @@ test("Download .apkg works unpaired, saves the package, keeps cards approved and
     assert.equal(saved.length, 1);
     assert.equal(saved[0].name, "anki-bridge-synthetic-deck.apkg");
     assert.equal(saved[0].bytes.readUInt32LE(0), 0x04034b50, "the saved file is the zip package");
-    const panel = f.container.querySelector(".ab-sent")!;
+    const panel = f.container.querySelector('.ab-sent[data-kind="download"]')!;
     assert.equal(panel.getAttribute("data-kind"), "download");
     assert.match(panel.textContent!, /Download requested: anki-bridge-synthetic-deck\.apkg, 2 cards/);
     assert.match(panel.textContent!, /Cards stay approved in Bridge and can still be sent\. Open the file in Anki to import it/);
@@ -1048,6 +1050,9 @@ test("Download .apkg works unpaired, saves the package, keeps cards approved and
     assert.equal(f.calls.some(c => c.name === "send"), false, "a download never sends");
     assert.deepEqual(Array.from(f.review().querySelectorAll(".ab-card")).map(c => c.getAttribute("data-status")), ["approved", "draft", "failed"], "nothing marked sent");
     assert.equal(f.button(/^Send 2 cards to Anki/).disabled, false, "the same cards remain available for sending once paired");
+    const draftRow = f.review().querySelector('.ab-card[data-card-id="0b6f7c1e-0000-4000-8000-00000000000b"]')!;
+    f.button("Approve", draftRow).click(); await tick();
+    assert.ok(f.button("Mark as imported", panel), "approving another card preserves the download receipt");
     const first = f.review().querySelector('.ab-card[data-card-id="0b6f7c1e-0000-4000-8000-00000000000a"]')!;
     f.button("Edit", first).click();
     f.type(f.review().querySelector('textarea[aria-label="Front"]') as unknown as HTMLTextAreaElement, "Unsaved change");
@@ -1057,11 +1062,15 @@ test("Download .apkg works unpaired, saves the package, keeps cards approved and
     assert.equal((f.review().querySelector('textarea[aria-label="Front"]') as unknown as HTMLTextAreaElement).value, "Unsaved change");
     f.button("Cancel", f.review()).click();
     failAfterCommit = true;
-    f.button("Mark as imported", panel).click(); await tick();
+    let release!: () => void; markGate = new Promise(resolve => { release = resolve; });
+    f.button("Mark as imported", panel).click();
+    f.button("Dismiss", panel).click();
+    assert.equal((panel as unknown as HTMLElement).hidden, false, "cannot dismiss while marking");
+    release(); markGate = undefined; await tick();
     assert.match(f.status()!, /directory sync failed/);
     const importedPanel = f.container.querySelector('.ab-sent[data-kind="imported"]')!;
     assert.match(importedPanel.textContent!, /2 cards marked as imported/);
-    assert.deepEqual(f.state.cards.map(c => c.status), ["imported", "draft", "imported"]);
+    assert.deepEqual(f.state.cards.map(c => c.status), ["imported", "approved", "imported"]);
     const history = f.container.querySelector(".ab-history") as unknown as HTMLDetailsElement;
     history.open = true; history.dispatchEvent(f.event("toggle"));
     assert.match(history.textContent!, /Sent cards \(2\)/);
@@ -1078,18 +1087,38 @@ test("Download .apkg works unpaired, saves the package, keeps cards approved and
     assert.ok(f.button("Undo", importedPanel), "an unrelated write preserves Undo");
     f.button("Undo", importedPanel).click(); await tick();
     assert.match(f.status()!, /directory sync failed/);
-    assert.deepEqual(f.state.cards.map(c => c.status), ["approved", "draft", "approved", "draft"]);
+    assert.deepEqual(f.state.cards.map(c => c.status), ["approved", "approved", "approved", "draft"]);
     failAfterCommit = false;
     assert.equal(f.find("Undo", importedPanel), undefined);
     f.button("Download again", panel).click(); await settle(2);
     assert.equal(saved.length, 2);
     assert.equal(f.calls.filter(c => c.name === "exportPackage").length, 1, "the same file again, without a new export");
     assert.deepEqual(saved[1], saved[0]);
-    f.button("Download .apkg").click(); await settle(3);
-    assert.equal(saved.length, 3, "the button stays available for the same approved batch");
-    f.button("Dismiss", f.container.querySelector(".ab-sent")!).click();
-    assert.equal((f.container.querySelector(".ab-sent") as unknown as HTMLElement).hidden, true);
+    f.button("Download .apkg").click(); await settle();
+    assert.equal(saved.length, 2, "a new export cannot replace the outstanding receipt");
+    assert.match(f.status()!, /previous download/);
+    f.button("Dismiss", panel).click();
+    assert.equal((panel as unknown as HTMLElement).hidden, true);
   } finally { URL.createObjectURL = realCreate; URL.revokeObjectURL = realRevoke; await f.dispose(); }
+});
+
+test("undo keeps a newer package receipt", async () => {
+  const state = fixture(); state.cards = [card("a", { status: "approved" }), card("b")];
+  const create = URL.createObjectURL, revoke = URL.revokeObjectURL;
+  URL.createObjectURL = () => "blob:test"; URL.revokeObjectURL = () => {};
+  const f = await setup({ state, handler: (name, input) => name === "exportPackage" ? { fileName: `${input.ids.join("")}.apkg`, data: "AA==", ids: input.ids, fingerprints: input.ids.map(() => "hash"), deck: input.deck, tags: [] } : undefined });
+  (f.window as any).HTMLAnchorElement.prototype.click = function () {};
+  try {
+    f.button("Download .apkg").click(); await tick();
+    f.button("Mark as imported", f.container.querySelector('.ab-sent[data-kind="download"]')).click(); await tick();
+    f.button("Approve", f.review()).click(); await tick();
+    f.button("Download .apkg").click(); await tick();
+    const receipt = f.container.querySelector('.ab-sent[data-kind="download"]')!;
+    assert.match(receipt.textContent!, /b\.apkg/);
+    f.button("Undo", f.container.querySelector('.ab-sent[data-kind="imported"]')).click(); await tick();
+    assert.match(receipt.textContent!, /b\.apkg/, "undo must not replace a newer receipt");
+    assert.ok(f.button("Mark as imported", receipt));
+  } finally { URL.createObjectURL = create; URL.revokeObjectURL = revoke; await f.dispose(); }
 });
 
 test("a card imported in another view keeps unsaved edits visible for copying", async () => {

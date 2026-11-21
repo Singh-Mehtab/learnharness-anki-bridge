@@ -57,11 +57,13 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
   /** A clear confirmation after a send, kept until the next action or dismissed (#32). */
   const sentPanel = el("div", undefined, "ab-sent");
   sentPanel.setAttribute("role", "status"); sentPanel.hidden = true;
+  const downloadPanel = el("div", undefined, "ab-sent");
+  downloadPanel.setAttribute("role", "status"); downloadPanel.hidden = true;
   const importedPanel = el("div", undefined, "ab-sent");
   importedPanel.setAttribute("role", "status"); importedPanel.hidden = true;
   const list = el("div", undefined, "ab-cards");
   const history = el("details", undefined, "ab-history");
-  host.append(banner, sendBar, feedback, sentPanel, importedPanel, list, history);
+  host.append(banner, sendBar, feedback, sentPanel, downloadPanel, importedPanel, list, history);
 
   const menuSlot = options.headerAside;
   let state: Snapshot | undefined, connection: Connection | undefined, connectionError = "";
@@ -78,8 +80,9 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
   let bannerKey = "", historyKey = "";
   let approveAll: ButtonHandle | undefined, sendAll: ButtonHandle | undefined, downloadAll: ButtonHandle | undefined;
   let bulkTargetKey: string | undefined;
-  const sentScope = new RenderScope(signal), importedScope = new RenderScope(signal);
-  function hideImported(): void { importedScope.reset(); importedPanel.replaceChildren(); importedPanel.hidden = true; }
+  const sentScope = new RenderScope(signal), downloadScope = new RenderScope(signal), importedScope = new RenderScope(signal);
+  function hideDownload(): void { if (packageMarkInFlight) return; downloadScope.reset(); downloadPanel.replaceChildren(); downloadPanel.hidden = true; }
+  function hideImported(): void { if (busy) return; importedScope.reset(); importedPanel.replaceChildren(); importedPanel.hidden = true; }
   function hideSent(): void { sentScope.reset(); sentPanel.replaceChildren(); sentPanel.hidden = true; delete sentPanel.dataset.kind; }
   function showSent({ added, found, skipped, failed, deck, tags }: SendResult["delivery"]): void {
     const ids = [...added, ...found];
@@ -112,8 +115,8 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
   }
   /** Requesting a download leaves approval and delivery unchanged. */
   function showDownloaded(result: PackageResult, bytes: Uint8Array<ArrayBuffer>): void {
-    const s = sentScope.reset();
-    sentPanel.dataset.kind = "download";
+    const s = downloadScope.reset();
+    downloadPanel.dataset.kind = "download";
     const icon = el("span", undefined, "ab-sent-icon"); icon.setAttribute("aria-hidden", "true");
     icon.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11m-5-5 5 5 5-5M5 20h14"/></svg>';
     const text = el("div", undefined, "ab-sent-text");
@@ -126,8 +129,8 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
     // The same file again, byte for byte, without asking the backend.
     button(ctx, actionsBox, s, { label: "Download again", onClick: () => saveFile(result.fileName, bytes) });
     button(ctx, actionsBox, s, { label: "Mark as imported", onClick: () => packageAction("markImported", result, bytes, s) });
-    button(ctx, actionsBox, s, { label: "Dismiss", variant: "ghost", onClick: hideSent });
-    revealPanel(icon, text, actionsBox);
+    button(ctx, actionsBox, s, { label: "Dismiss", variant: "ghost", onClick: hideDownload });
+    downloadPanel.replaceChildren(icon, text, actionsBox); downloadPanel.hidden = false;
   }
   function showImported(result: PackageResult, bytes: Uint8Array<ArrayBuffer>): void {
     const s = importedScope.reset();
@@ -149,8 +152,8 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
       if (alive()) {
         state = next; render();
         if (!panel.aborted) {
-          if (name === "markImported") { hideSent(); showImported(result, bytes); }
-          else { hideImported(); showDownloaded(result, bytes); }
+          if (name === "markImported") { packageMarkInFlight = false; hideDownload(); showImported(result, bytes); }
+          else { importedScope.reset(); importedPanel.replaceChildren(); importedPanel.hidden = true; if (downloadPanel.hidden) showDownloaded(result, bytes); }
         }
         feedback.show(next.durabilityWarning ? `Cards updated, but saving could not be confirmed: ${next.durabilityWarning}.` : "", next.durabilityWarning ? "error" : undefined);
         try { await options.onChanged(); } catch { if (alive() && !next.durabilityWarning) feedback.show("Cards updated, but coverage could not refresh. Refresh the page.", "error"); }
@@ -332,6 +335,7 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
     }
   }
   async function download(ids: string[]): Promise<string> {
+    if (!downloadPanel.hidden) throw new Error("Mark or dismiss the previous download before starting another.");
     const blocked = downloadBlocker();
     if (blocked) throw new Error(blocked);
     const result = await ctx.call<PackageResult>("exportPackage", { ids, deck: deckName(), tags: validateTags(tagList()) });

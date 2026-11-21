@@ -250,12 +250,21 @@ export class DeliveryService {
           if (cards.some(c => !['approved', 'failed'].includes(c.status) || c.noteId !== undefined)) throw new Error('Only approved or failed unsent cards can be marked as imported.');
           if (!Array.isArray(value.fingerprints) || value.fingerprints.length !== cards.length || cards.some((c, i) => packageFingerprint(c) !== (value.fingerprints as unknown[])[i])) throw new Error('Cards changed since this package was downloaded. Download a new package.');
           await packageSave(s => { for (const card of s.cards) if (ids.includes(card.id)) {
+            card.importPrevious = { status: card.status as 'approved' | 'failed', deck: card.deck, destination: card.destination, presence: card.presence, lastError: card.lastError };
             card.status = 'imported'; card.deck = deck;
             delete card.noteId; delete card.destination; delete card.existingNote; delete card.presence; delete card.lastError;
           } });
         } else {
           if (cards.some(c => c.status !== 'imported')) throw new Error('Only imported cards can be unmarked.');
-          await packageSave(s => { for (const card of s.cards) if (ids.includes(card.id)) { card.status = 'approved'; delete card.deck; } });
+          await packageSave(s => { for (const card of s.cards) if (ids.includes(card.id)) {
+            const previous = card.importPrevious ?? { status: 'approved' as const };
+            card.status = previous.status;
+            delete card.deck; delete card.destination; delete card.presence; delete card.lastError; delete card.importPrevious;
+            if (previous.deck !== undefined) card.deck = previous.deck;
+            if (previous.destination !== undefined) card.destination = previous.destination;
+            if (previous.presence !== undefined) card.presence = previous.presence;
+            if (previous.lastError !== undefined) card.lastError = previous.lastError;
+          } });
         }
         return { ...this.snapshot(), ...(durabilityWarning ? { durabilityWarning } : {}) };
       } else if (name === 'edit') {

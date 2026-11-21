@@ -118,6 +118,21 @@ test('mark imported and undo are atomic, offline, and reject later edits and sen
   } finally { await f.close(); }
 });
 
+test('undo restores failed send details and approved cards in a mixed batch', async () => {
+  const { packageFingerprint } = await import('../src/anki/apkg.ts');
+  const f = await fixture();
+  try {
+    const a = await f.draft('First?'), b = await f.draft('Second?'); await f.approve([a, b]);
+    await f.service.exclusive(() => f.service.save(s => {
+      Object.assign(s.cards.find(c => c.id === b)!, { status: 'failed', deck: 'Old', destination: { url: 'http://127.0.0.1:8766/', profile: 'Scratch' }, lastError: 'Connection lost', presence: 'unknown' });
+    }));
+    const before = f.store.snapshot().cards;
+    await f.service.command('markImported', { ids: [a, b], deck: 'Package', fingerprints: before.map(packageFingerprint) });
+    await f.service.command('unmarkImported', { ids: [a, b] });
+    assert.deepEqual(f.store.snapshot().cards, before);
+  } finally { await f.close(); }
+});
+
 test('post-commit warnings belong only to the command that committed', async () => {
   const { packageFingerprint } = await import('../src/anki/apkg.ts');
   const f = await fixture();
