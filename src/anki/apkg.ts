@@ -88,6 +88,7 @@ export function selectPackageCards(state: State, input: unknown): { deck: string
     const card = state.cards.find(c => c.id === id);
     if (!card) throw new Error('Card not found.');
     // Sent, unconfirmed and dropped cards stay out: a package of them would only duplicate notes.
+    if (card.status === 'imported') throw new Error('These cards are already marked imported and cannot be downloaded again.');
     if (card.noteId !== undefined || (card.status !== 'approved' && card.status !== 'failed')) throw new Error('Only approved, unsent cards can be downloaded. Approve drafts first.');
     return { card, fields: packageFields(card), tags: packageTags(chosen, card, withSystemTags) };
   });

@@ -23,7 +23,7 @@ function fixture() {
 }
 const tick = async () => { for (let i = 0; i < 6; i++) await new Promise<void>(resolve => setTimeout(resolve, 0)); };
 
-async function setup(options: { handler?: (name: string, input: any) => unknown; state?: ReturnType<typeof fixture>; connection?: () => unknown; ui?: Record<string, unknown> } = {}) {
+async function setup(options: { handler?: (name: string, input: any) => unknown; coverageGate?: () => Promise<void> | undefined; state?: ReturnType<typeof fixture>; connection?: () => unknown; ui?: Record<string, unknown> } = {}) {
   const window = new Window();
   Object.assign(globalThis, { document: window.document });
   const controller = new AbortController(), activation = new AbortController();
@@ -46,6 +46,7 @@ async function setup(options: { handler?: (name: string, input: any) => unknown;
     app: { openView: (id: string) => { openedView = id; }, openSettings: () => { settingsOpened++; } },
     call: async (name: string, input: any) => {
       if (name === "coverageContext") coverageReads++;
+      if (name === "coverageContext") await options.coverageGate?.();
       if (name === "coverageContext") return { nodes: [], missing: [], cardsPerNode: 2, paired: true, pairingWarning: false };
       if (name === "generationStatus") return { generationSettings: structuredClone(state.generationSettings), generations: [] };
       if (name === "sessions") return { sessions: [], unresolved: [] };
@@ -1004,10 +1005,10 @@ test("Download .apkg works unpaired, saves the package, keeps cards approved and
   const realCreate = URL.createObjectURL, realRevoke = URL.revokeObjectURL;
   URL.createObjectURL = (blob: Blob) => { const url = `blob:test/${blobs.size}`; blobs.set(url, blob); return url; };
   URL.revokeObjectURL = () => {};
-  let failAfterCommit = false;
+  let failAfterCommit = false, exportCount = 0;
   let markGate: Promise<void> | undefined;
   const f = await setup({ state, handler: async (name, input) => {
-    if (name === "exportPackage") return exportPackage(backend, input, 1_795_000_000_000);
+    if (name === "exportPackage") return exportPackage(backend, input, 1_795_000_000_000 + 60_000 * exportCount++);
     if (name === "markImported" && markGate) await markGate;
     if (failAfterCommit && (name === "markImported" || name === "unmarkImported")) {
       state.cards.filter(c => input.ids.includes(c.id)).forEach(c => { c.status = name === "markImported" ? "imported" : "approved"; if (name === "markImported") c.deck = input.deck; else delete c.deck; });
@@ -1161,27 +1162,29 @@ test("a receipt follows the exported revision, not the view's snapshot at downlo
 });
 
 test("a stale receipt cannot re-download a card imported in another view", async () => {
+  const { exportPackage } = await import("../src/anki/apkg.ts");
+  const { initialState } = await import("../src/anki/state.ts");
   const state = fixture(); state.cards = [card("a", { status: "approved" })];
   const create = URL.createObjectURL, revoke = URL.revokeObjectURL;
   URL.createObjectURL = () => "blob:test"; URL.revokeObjectURL = () => {};
   let saves = 0;
   const f = await setup({ state, handler: (name, input) => {
     if (name !== "exportPackage") return undefined;
-    if (state.cards.some(c => input.ids.includes(c.id) && c.status === "imported")) throw new Error("Imported cards cannot be packaged again");
-    return { fileName: "a.apkg", data: "AA==", ids: input.ids, fingerprints: ["hash"], revisions: input.ids.map((id: string) => packageRevision(state.cards.find(c => c.id === id) as any)), deck: input.deck, tags: [] };
+    return exportPackage({ ...initialState(), cards: structuredClone(state.cards) } as unknown as Parameters<typeof exportPackage>[0], input, 1_795_000_000_000);
   } });
   (f.window as any).HTMLAnchorElement.prototype.click = function () { saves++; };
   try {
-    f.button("Download .apkg").click(); await tick();
+    const until = async (ok: () => boolean) => { for (let n = 0; n < 200 && !ok(); n++) await new Promise(r => setTimeout(r, 5)); };
+    f.button("Download .apkg").click(); await until(() => !!f.container.querySelector('.ab-sent[data-kind="download"]'));
     const receipt = f.container.querySelector('.ab-sent[data-kind="download"]')!;
-    f.button("Download again", receipt).click(); await tick();
+    f.button("Download again", receipt).click(); await until(() => saves === 2);
     assert.equal(saves, 2, "eligible cards download again");
     // Another window marks the card imported; this view has not refreshed.
     Object.assign(state.cards[0], { status: "imported", deck: "Default" });
     assert.equal(f.button("Download again", receipt).disabled, false);
-    f.button("Download again", receipt).click(); await tick();
+    f.button("Download again", receipt).click(); await until(() => f.button("Download again", receipt).disabled === true);
     assert.equal(saves, 2, "the backend refuses the stale download");
-    assert.match(f.container.textContent!, /cannot be packaged again/);
+    assert.match(f.container.textContent!, /already marked imported and cannot be downloaded again/);
     assert.equal(f.button("Download again", receipt).disabled, true, "the view refreshes and disables the receipt");
   } finally { URL.createObjectURL = create; URL.revokeObjectURL = revoke; await f.dispose(); }
 });
@@ -1208,6 +1211,26 @@ test("a resync during Download again is not lost", async () => {
     release(); gate = undefined; for (let i = 0; i < 6; i++) await tick();
     assert.ok(f.calls.filter(c => c.name === "snapshot").length > reads, "the pending refresh runs after the retry");
     assert.ok(f.review().querySelector('.ab-card[data-card-id="b"]'), "the new card appears");
+  } finally { URL.createObjectURL = create; URL.revokeObjectURL = revoke; await f.dispose(); }
+});
+
+test("Undo works while coverage is still refreshing after a mark", async () => {
+  const state = fixture(); state.cards = [card("a", { status: "approved" })];
+  const create = URL.createObjectURL, revoke = URL.revokeObjectURL;
+  URL.createObjectURL = () => "blob:test"; URL.revokeObjectURL = () => {};
+  let hold: Promise<void> | undefined;
+  const f = await setup({ state, coverageGate: () => hold, handler: (name, input) => name === "exportPackage" ? { fileName: "a.apkg", data: "AA==", ids: input.ids, fingerprints: ["hash"], revisions: input.ids.map((id: string) => packageRevision(state.cards.find(c => c.id === id) as any)), deck: input.deck, tags: [] } : undefined });
+  (f.window as any).HTMLAnchorElement.prototype.click = function () {};
+  try {
+    f.button("Download .apkg").click(); await tick();
+    let release!: () => void; hold = new Promise(r => { release = r; });
+    f.button("Mark as imported", f.container.querySelector('.ab-sent[data-kind="download"]')).click(); await tick(); await tick();
+    const imported = f.container.querySelector('.ab-sent[data-kind="imported"]')!;
+    assert.ok(imported && !(imported as unknown as HTMLElement).hidden, "the confirmation is showing");
+    f.button("Undo", imported).click(); await tick(); await tick();
+    assert.ok(f.calls.some(c => c.name === "unmarkImported"), "Undo runs while coverage is held");
+    assert.equal(state.cards[0].status, "approved");
+    release(); hold = undefined; await tick();
   } finally { URL.createObjectURL = create; URL.revokeObjectURL = revoke; await f.dispose(); }
 });
 

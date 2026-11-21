@@ -155,6 +155,7 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
     if (name === "markImported" && !importedPanel.hidden) { feedback.show("Undo or dismiss the previous import first.", "error"); return; }
     if (name === "markImported" && result.ids.some(id => editing.has(id))) { feedback.show("Save or cancel your edits before marking these cards imported.", "error"); return; }
     busy = true; packageMarkInFlight = name === "markImported"; actions++; syncBar(); syncReceipt?.();
+    let committed: Snapshot | undefined;
     try {
       const next = await ctx.call<Snapshot>(name, name === "markImported" ? { ids: result.ids, deck: result.deck, fingerprints: result.fingerprints } : { ids: result.ids, markId });
       if (alive()) {
@@ -165,10 +166,15 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
           else { importedScope.reset(); importedPanel.replaceChildren(); importedPanel.hidden = true; if (downloadPanel.hidden) showDownloaded(result, bytes); }
         }
         feedback.show(next.durabilityWarning ? `Cards updated, but saving could not be confirmed: ${next.durabilityWarning}.` : "", next.durabilityWarning ? "error" : undefined);
-        try { await options.onChanged(); } catch { if (alive() && !next.durabilityWarning) feedback.show("Cards updated, but coverage could not refresh. Refresh the page.", "error"); }
+        committed = next;
       }
     } catch (error) { if (alive()) feedback.show(`${message(error)}. Refresh cards and check their status before retrying.`, "error"); }
     finally { busy = false; packageMarkInFlight = false; if (alive()) { syncBar(); syncReceipt?.(); } if (refreshPending && alive()) void backgroundRefresh(); }
+    // Coverage refreshes after the action finishes, so the confirmation's Undo works immediately.
+    if (committed && alive()) {
+      const warned = !!committed.durabilityWarning;
+      try { await options.onChanged(); } catch { if (alive() && !warned) feedback.show("Cards updated, but coverage could not refresh. Refresh the page.", "error"); }
+    }
   }
 
   async function run(action: () => Promise<string | void>, keepPosition = false): Promise<void> {
