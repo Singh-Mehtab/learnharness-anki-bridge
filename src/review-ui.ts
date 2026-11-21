@@ -1,7 +1,9 @@
 // Step 3: check each card, approve it and send approved cards to a deck, or download them as an .apkg file.
 import type { PluginFrontendContext } from "../sdk/index.d.ts";
 import type { SendResult } from "./anki/delivery.ts";
-import type { PackageResult } from "./anki/apkg.ts";
+import type { PackageResult as ExportResult } from "./anki/apkg.ts";
+/** An export plus the tags the user asked for, so a re-check sends the same request. */
+type PackageResult = ExportResult & { requestTags: string[] };
 import { packageRevision } from "./anki/package-revision.ts";
 import { expandTagTemplate, matchTagCase, tagSuggestions, validateTags } from "./anki/tags.ts";
 import { isWaitingCard } from "./coverage/flow.ts";
@@ -132,7 +134,7 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
     // sent cards even when this view's snapshot is stale.
     const eligible = () => !packageMarkInFlight && result.ids.every((id, i) => { const card = state?.cards.find(c => c.id === id); return card && result.revisions[i] === packageRevision(card) && (card.status === "approved" || card.status === "failed") && card.noteId === undefined; });
     const warning = el("p", "", "ab-sent-detail ab-warning"); text.append(warning);
-    const again = button(ctx, actionsBox, s, { label: "Download again", onClick: () => { if (eligible()) void downloadAgain(result); } });
+    const again = button(ctx, actionsBox, s, { label: "Download again", onClick: () => { if (eligible()) void downloadAgain(result, bytes); } });
     const mark = button(ctx, actionsBox, s, { label: "Mark as imported", onClick: () => { if (eligible()) void packageAction("markImported", result, bytes, s); } });
     syncReceipt = () => { const blocked = !eligible(); again.update({ disabled: blocked }); mark.update({ disabled: blocked }); warning.textContent = packageMarkInFlight ? "Marking cards as imported…" : blocked ? "Some cards are no longer eligible. Dismiss this receipt and review the cards." : ""; };
     button(ctx, actionsBox, s, { label: "Dismiss", variant: "ghost", onClick: hideDownload });
@@ -341,25 +343,26 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
       sendAll?.update(sendProps);
     }
   }
-  async function downloadAgain(result: PackageResult): Promise<void> {
+  async function downloadAgain(result: PackageResult, bytes: Uint8Array<ArrayBuffer>): Promise<void> {
     if (busy) return;
     busy = true; actions++; syncBar();
     try {
-      const fresh = await ctx.call<PackageResult>("exportPackage", { ids: result.ids, deck: result.deck, tags: result.tags });
+      const fresh = await ctx.call<ExportResult>("exportPackage", { ids: result.ids, deck: result.deck, tags: result.requestTags });
       if (!alive()) return;
       if (fresh.fingerprints.join() !== result.fingerprints.join()) throw new Error("These cards changed after the download. Dismiss this receipt and download again");
-      saveFile(fresh.fileName, base64Bytes(fresh.data));
+      saveFile(result.fileName, bytes);
     } catch (error) {
       if (!alive()) return;
       feedback.show(`${message(error)}. Refresh cards and check their status.`, "error");
       try { const fresh = await ctx.call<Snapshot>("snapshot"); if (alive()) { state = fresh; render(); await options.onChanged(); } } catch { /* The message above already asks for a refresh. */ }
-    } finally { busy = false; if (alive()) { syncBar(); syncReceipt?.(); } }
+    } finally { busy = false; if (alive()) { syncBar(); syncReceipt?.(); } if (refreshPending && alive()) void backgroundRefresh(); }
   }
   async function download(ids: string[]): Promise<string> {
     if (!downloadPanel.hidden) throw new Error("Mark or dismiss the previous download before starting another.");
     const blocked = downloadBlocker();
     if (blocked) throw new Error(blocked);
-    const result = await ctx.call<PackageResult>("exportPackage", { ids, deck: deckName(), tags: validateTags(tagList()) });
+    const requestTags = validateTags(tagList());
+    const result: PackageResult = { ...await ctx.call<ExportResult>("exportPackage", { ids, deck: deckName(), tags: requestTags }), requestTags };
     if (!alive()) return "";
     const bytes = base64Bytes(result.data);
     saveFile(result.fileName, bytes);

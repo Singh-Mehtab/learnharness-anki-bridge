@@ -1095,8 +1095,9 @@ test("Download .apkg works unpaired, saves the package, keeps cards approved and
     f.button("Download again", panel).click(); await settle(2);
     assert.equal(saved.length, 2);
     assert.equal(f.calls.filter(c => c.name === "exportPackage").length, 2, "download again re-checks the cards through the backend");
-    assert.deepEqual(f.calls.filter(c => c.name === "exportPackage")[1].input.ids, f.calls.filter(c => c.name === "exportPackage")[0].input.ids);
-    assert.equal(saved[1].name, saved[0].name);
+    const exports = f.calls.filter(c => c.name === "exportPackage");
+    assert.deepEqual(exports[1].input, exports[0].input, "the re-check repeats the original request, including the user's tags");
+    assert.deepEqual(saved[1], saved[0], "the original bytes are saved again");
     f.button("Download .apkg").click(); await settle();
     assert.equal(saved.length, 2, "a new export cannot replace the outstanding receipt");
     assert.match(f.status()!, /previous download/);
@@ -1182,6 +1183,31 @@ test("a stale receipt cannot re-download a card imported in another view", async
     assert.equal(saves, 2, "the backend refuses the stale download");
     assert.match(f.container.textContent!, /cannot be packaged again/);
     assert.equal(f.button("Download again", receipt).disabled, true, "the view refreshes and disables the receipt");
+  } finally { URL.createObjectURL = create; URL.revokeObjectURL = revoke; await f.dispose(); }
+});
+
+test("a resync during Download again is not lost", async () => {
+  const state = fixture(); state.cards = [card("a", { status: "approved" })];
+  const create = URL.createObjectURL, revoke = URL.revokeObjectURL;
+  URL.createObjectURL = () => "blob:test"; URL.revokeObjectURL = () => {};
+  let gate: Promise<void> | undefined;
+  const f = await setup({ state, handler: async (name, input) => {
+    if (name !== "exportPackage") return undefined;
+    if (gate) await gate;
+    return { fileName: "a.apkg", data: "AA==", ids: input.ids, fingerprints: ["hash"], revisions: input.ids.map((id: string) => packageRevision(state.cards.find(c => c.id === id) as any)), deck: input.deck, tags: [] };
+  } });
+  (f.window as any).HTMLAnchorElement.prototype.click = function () {};
+  try {
+    f.button("Download .apkg").click(); await tick();
+    const receipt = f.container.querySelector('.ab-sent[data-kind="download"]')!;
+    let release!: () => void; gate = new Promise(r => { release = r; });
+    f.button("Download again", receipt).click(); await tick();
+    state.cards.push(card("b"));
+    const reads = f.calls.filter(c => c.name === "snapshot").length;
+    await f.resync();
+    release(); gate = undefined; for (let i = 0; i < 6; i++) await tick();
+    assert.ok(f.calls.filter(c => c.name === "snapshot").length > reads, "the pending refresh runs after the retry");
+    assert.ok(f.review().querySelector('.ab-card[data-card-id="b"]'), "the new card appears");
   } finally { URL.createObjectURL = create; URL.revokeObjectURL = revoke; await f.dispose(); }
 });
 
