@@ -235,7 +235,8 @@ export class DeliveryService {
         await this.save(s => { s.cards.push(card); });
       } else if (name === 'markImported' || name === 'unmarkImported') {
         const ids = idsInput(value.ids);
-        const cards = ids.map(id => this.card(id));
+        const current = this.store.snapshot().cards;
+        const cards = ids.map(id => { const card = current.find(c => c.id === id); if (!card) throw new Error('Card not found.'); return card; });
         const markId = name === 'markImported' ? randomUUID() : requiredText(value.markId, 'Import mark ID');
         let durabilityWarning: string | undefined;
         const packageSave = async (mutator: (state: State) => void) => {
@@ -294,8 +295,12 @@ export class DeliveryService {
         if (deck.length > 250 || /[\r\n]/.test(deck)) throw new Error('Use a one-line deck name under 251 characters.');
         const settings = this.store.snapshot().settings;
         const chosenTags = validateTags(value.tags === undefined ? expandTagTemplate(settings.tagTemplate ?? '', deck) : value.tags);
-        if (ids.some(id => this.card(id).status === 'imported')) throw new Error('Imported cards cannot be sent again.');
-        for (const id of ids) this.card(id);
+        const current = this.store.snapshot().cards;
+        for (const id of ids) {
+          const card = current.find(c => c.id === id);
+          if (!card) throw new Error('Card not found.');
+          if (card.status === 'imported') throw new Error('Imported cards cannot be sent again.');
+        }
         // The settings dialog can re-pair while a review view still shows the old destination.
         const paired = this.store.snapshot().destination;
         if (paired) expectDestination(value.expectedDestination, paired, 'Paired destination changed. Check it and send again.');

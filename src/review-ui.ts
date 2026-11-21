@@ -2,6 +2,7 @@
 import type { PluginFrontendContext } from "../sdk/index.d.ts";
 import type { SendResult } from "./anki/delivery.ts";
 import type { PackageResult } from "./anki/apkg.ts";
+import { packageRevision } from "./anki/package-revision.ts";
 import { expandTagTemplate, matchTagCase, tagSuggestions, validateTags } from "./anki/tags.ts";
 import { isWaitingCard } from "./coverage/flow.ts";
 import { KIND_NAMES } from "./kinds-ui.ts";
@@ -128,13 +129,11 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
       el("p", "Importing may duplicate cards already in Anki or update notes from an earlier package.", "ab-sent-detail ab-warning"));
     const actionsBox = el("div", undefined, "ab-actions");
     // The same file again, byte for byte, without asking the backend.
-    const revision = (card: Card) => JSON.stringify([card.id, card.front, card.back, card.extra, card.sessionName, card.nodeName, card.nodeId, card.kind]);
-    const revisions = result.ids.map(id => { const card = state?.cards.find(c => c.id === id); return card ? revision(card) : undefined; });
-    const eligible = () => result.ids.every((id, i) => { const card = state?.cards.find(c => c.id === id); return card && revisions[i] === revision(card) && (card.status === "approved" || card.status === "failed") && card.noteId === undefined; });
+    const eligible = () => !packageMarkInFlight && result.ids.every((id, i) => { const card = state?.cards.find(c => c.id === id); return card && result.revisions[i] === packageRevision(card) && (card.status === "approved" || card.status === "failed") && card.noteId === undefined; });
     const warning = el("p", "", "ab-sent-detail ab-warning"); text.append(warning);
     const again = button(ctx, actionsBox, s, { label: "Download again", onClick: () => { if (eligible()) saveFile(result.fileName, bytes); } });
     const mark = button(ctx, actionsBox, s, { label: "Mark as imported", onClick: () => { if (eligible()) void packageAction("markImported", result, bytes, s); } });
-    syncReceipt = () => { const blocked = !eligible(); again.update({ disabled: blocked }); mark.update({ disabled: blocked }); warning.textContent = blocked ? "Some cards are no longer eligible. Dismiss this receipt and review the cards." : ""; };
+    syncReceipt = () => { const blocked = !eligible(); again.update({ disabled: blocked }); mark.update({ disabled: blocked }); warning.textContent = packageMarkInFlight ? "Marking cards as imported…" : blocked ? "Some cards are no longer eligible. Dismiss this receipt and review the cards." : ""; };
     button(ctx, actionsBox, s, { label: "Dismiss", variant: "ghost", onClick: hideDownload });
     downloadPanel.replaceChildren(icon, text, actionsBox); downloadPanel.hidden = false; syncReceipt();
   }
@@ -152,7 +151,7 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
     if (!alive() || busy || panel.aborted) return;
     if (name === "markImported" && !importedPanel.hidden) { feedback.show("Undo or dismiss the previous import first.", "error"); return; }
     if (name === "markImported" && result.ids.some(id => editing.has(id))) { feedback.show("Save or cancel your edits before marking these cards imported.", "error"); return; }
-    busy = true; packageMarkInFlight = name === "markImported"; actions++; syncBar();
+    busy = true; packageMarkInFlight = name === "markImported"; actions++; syncBar(); syncReceipt?.();
     try {
       const next = await ctx.call<Snapshot>(name, name === "markImported" ? { ids: result.ids, deck: result.deck, fingerprints: result.fingerprints } : { ids: result.ids, markId });
       if (alive()) {
@@ -166,7 +165,7 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
         try { await options.onChanged(); } catch { if (alive() && !next.durabilityWarning) feedback.show("Cards updated, but coverage could not refresh. Refresh the page.", "error"); }
       }
     } catch (error) { if (alive()) feedback.show(`${message(error)}. Refresh cards and check their status before retrying.`, "error"); }
-    finally { busy = false; packageMarkInFlight = false; if (alive()) syncBar(); if (refreshPending && alive()) void backgroundRefresh(); }
+    finally { busy = false; packageMarkInFlight = false; if (alive()) { syncBar(); syncReceipt?.(); } if (refreshPending && alive()) void backgroundRefresh(); }
   }
 
   async function run(action: () => Promise<string | void>, keepPosition = false): Promise<void> {

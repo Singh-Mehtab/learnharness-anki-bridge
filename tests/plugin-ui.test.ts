@@ -1,4 +1,5 @@
 import { systemTags } from "../src/anki/tags.ts";
+import { packageRevision } from "../src/anki/package-revision.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { Window } from "happy-dom";
@@ -1064,6 +1065,7 @@ test("Download .apkg works unpaired, saves the package, keeps cards approved and
     failAfterCommit = true;
     let release!: () => void; markGate = new Promise(resolve => { release = resolve; });
     f.button("Mark as imported", panel).click();
+    assert.equal(f.button("Download again", panel).disabled, true, "cannot download while marking");
     f.button("Dismiss", panel).click();
     assert.equal((panel as unknown as HTMLElement).hidden, false, "cannot dismiss while marking");
     release(); markGate = undefined; await tick();
@@ -1106,7 +1108,7 @@ test("undo keeps a newer package receipt", async () => {
   const state = fixture(); state.cards = [card("a", { status: "approved" }), card("b")];
   const create = URL.createObjectURL, revoke = URL.revokeObjectURL;
   URL.createObjectURL = () => "blob:test"; URL.revokeObjectURL = () => {};
-  const f = await setup({ state, handler: (name, input) => name === "exportPackage" ? { fileName: `${input.ids.join("")}.apkg`, data: "AA==", ids: input.ids, fingerprints: input.ids.map(() => "hash"), deck: input.deck, tags: [] } : undefined });
+  const f = await setup({ state, handler: (name, input) => name === "exportPackage" ? { fileName: `${input.ids.join("")}.apkg`, data: "AA==", ids: input.ids, fingerprints: input.ids.map(() => "hash"), revisions: input.ids.map((id: string) => packageRevision(state.cards.find(c => c.id === id) as any)), deck: input.deck, tags: [] } : undefined });
   (f.window as any).HTMLAnchorElement.prototype.click = function () {};
   try {
     f.button("Download .apkg").click(); await tick();
@@ -1128,6 +1130,31 @@ test("undo keeps a newer package receipt", async () => {
     assert.equal(f.button("Mark as imported", receipt).disabled, true);
     assert.match(receipt.textContent!, /no longer eligible/);
     assert.equal(f.button("Dismiss", receipt).disabled, false);
+  } finally { URL.createObjectURL = create; URL.revokeObjectURL = revoke; await f.dispose(); }
+});
+
+test("a receipt follows the exported revision, not the view's snapshot at download time", async () => {
+  const state = fixture(); state.cards = [card("a", { status: "approved", front: "Version A" })];
+  const create = URL.createObjectURL, revoke = URL.revokeObjectURL;
+  URL.createObjectURL = () => "blob:test"; URL.revokeObjectURL = () => {};
+  let saves = 0;
+  const f = await setup({ state, handler: (name, input) => name === "exportPackage" ? { fileName: "a.apkg", data: "AA==", ids: input.ids, fingerprints: ["hash"], revisions: input.ids.map((id: string) => packageRevision(state.cards.find(c => c.id === id) as any)), deck: input.deck, tags: [] } : undefined });
+  (f.window as any).HTMLAnchorElement.prototype.click = function () { saves++; };
+  try {
+    // Another view edits and reapproves the card; this view hasn't refreshed yet.
+    state.cards[0].front = "Version B";
+    f.button("Download .apkg").click(); await tick();
+    const receipt = f.container.querySelector('.ab-sent[data-kind="download"]')!;
+    assert.equal(f.button("Download again", receipt).disabled, true, "view still shows A, package holds B");
+    await f.more("Refresh cards"); await tick();
+    assert.equal(f.button("Download again", receipt).disabled, false, "current B matches the package");
+    assert.equal(f.button("Mark as imported", receipt).disabled, false);
+    state.cards[0].front = "Version A";
+    await f.more("Refresh cards"); await tick();
+    assert.equal(f.button("Download again", receipt).disabled, true, "returning to A must not serve the cached B bytes");
+    const before = saves;
+    f.button("Download again", receipt).click();
+    assert.equal(saves, before);
   } finally { URL.createObjectURL = create; URL.revokeObjectURL = revoke; await f.dispose(); }
 });
 
