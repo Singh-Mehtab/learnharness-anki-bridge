@@ -28,9 +28,7 @@ Anki Bridge is a community plugin for [LearnHarness](https://github.com/amosblom
 </picture>
 
 
-&nbsp;
 
-![The Anki Bridge review step in LearnHarness. A deck and tags form with Approve all drafts (4), Download .apkg and Send 1 card to Anki sits above the drafts. An Equation card on Carnot efficiency shows its front, back, extra field and rendered equation, followed by a Fact card on the Kelvin-Planck statement and an approved Why card.](docs/images/readme/hero.png)
 
 
 
