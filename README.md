@@ -21,29 +21,24 @@
 
 Anki Bridge is a community plugin for [LearnHarness](https://github.com/amosblomqvist/learnharness). Your model drafts flashcards from the ideas in your knowledge graph. You edit and approve each draft, then send it to [Anki](https://apps.ankiweb.net/) or download it as a package. Anki schedules the reviews.
 
-![The Anki Bridge review step in LearnHarness. A deck and tags form with Approve all drafts (4), Download .apkg and Send 1 card to Anki sits above the drafts. An Equation card on Carnot efficiency shows its front, back, extra field and rendered equation, followed by a Fact card on the Kelvin-Planck statement and an approved Why card.](docs/images/readme/hero.png)
-
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/readme/how-it-works-dark.png">
   <source media="(prefers-color-scheme: light)" srcset="docs/images/readme/how-it-works-light.png">
   <img src="docs/images/readme/how-it-works-light.png" alt="Diagram in three parts separated by dashed lines. In LearnHarness, step 1 is choosing ideas, and replies you flag during teaching mark their ideas. In step 2 a model drafts cards, and in step 3 you edit, drop or approve each draft. In Anki, you press Send to add approved cards, or download an .apkg to import, and Anki schedules your reviews. Back in LearnHarness, you find weak spots: the ideas you keep missing in Anki, with a link to the session to relearn them.">
 </picture>
 
-## Main ideas
 
-Cards start from your graph. Each LearnHarness idea is one claim, linked to the ideas that support it and to the teaching reply it came from. The model gets the idea, its linked ideas and an excerpt of that reply, so a Why card can ask for the reasoning you were taught.
+&nbsp;
 
-You check every card before it reaches Anki. Model-written cards are often close but not quite right. Cards learners make themselves tend to work better than premade decks ([Pan et al., 2022](https://doi.org/10.1037/mac0000083)), and checking and editing a draft is a smaller version of that work. Each draft shows its source idea under a toggle and a live preview below each field.
+![The Anki Bridge review step in LearnHarness. A deck and tags form with Approve all drafts (4), Download .apkg and Send 1 card to Anki sits above the drafts. An Equation card on Carnot efficiency shows its front, back, extra field and rendered equation, followed by a Fact card on the Kelvin-Planck statement and an approved Why card.](docs/images/readme/hero.png)
 
-Sending only adds notes. Anki Bridge creates new notes in its own note type. It never edits or deletes an existing note or changes scheduling or review history, so edits you make in Anki stay. Importing a downloaded package works differently, because Anki decides what an import does.
 
-Maths and code keep their formatting. Equations use MathJax, and fenced code blocks keep their indentation in the preview and in Anki.
 
 ## How it works
 
 ### Flag replies while you learn
 
-When a teaching reply covers something you want to keep, press **Flag for Anki** in the session's top bar. This flags the latest finished reply and every idea LearnHarness extracts from it. You can add a note for the card writer, such as a mistake you made. Cmd+Shift+A, or Ctrl+Shift+A on Windows and Linux, flags the reply straight away, and the confirmation offers to add a note. Flagged ideas can get up to 12 cards. **Make cards** in the same bar opens Anki Bridge with the session's flagged ideas ticked.
+When a teaching reply covers something you want to keep, press **Flag for Anki** in the session's top bar. This flags the latest finished reply and every idea LearnHarness extracts from it. You can add a note for the card writer, such as a mistake you made. Cmd+Shift+A, or Ctrl+Shift+A on Windows and Linux, flags the reply straight away, and the confirmation offers to add a note. **Make cards** in the same bar opens Anki Bridge with the session's flagged ideas ticked.
 
 Flagging is optional. You can make cards for any idea in your graph.
 
@@ -75,7 +70,7 @@ Pick a deck or type a new one, check the tags and press **Send to Anki**. The de
 
 **Download .apkg** saves the approved cards as a package with the same fields, formatting, tags and note type as a send. It needs a deck name but not AnkiConnect, so Anki can be closed. Open the file with Anki or use **File → Import**.
 
-A download doesn't count as a send, so the cards stay approved and you can still send them. Anki decides how an import matches your collection. Depending on its import settings, importing can duplicate cards you already sent, or overwrite edits you made to cards from an earlier package.
+After importing, press **Mark as imported** in the download panel so Anki Bridge won't package them again, it counts the cards as in Anki for any paired profile. Anki decides how to match an imported package with your collection so importing can add duplicates of cards you sent directly, or update notes from an earlier package of the same cards, including edits you made to them in Anki.
 
 ## Card types
 
@@ -94,7 +89,7 @@ A download doesn't count as a send, so the cards stay approved and you can still
 | Apply | Pick the rule or method that fits a new situation | Settings, under **More card types** |
 | Contrast | Tell apart two ideas that are easy to mix up | Settings, under **More card types** |
 
-The model only writes types that fit an idea. Why needs supporting ideas in the graph, and Contrast needs a similar neighbouring idea. If the model can't write a useful card for an idea, it writes none and says why. It skips the numerical values of physical constants unless you flag the idea that states the value or ask for it in a flag note. Conversion constants you calculate with, such as $\hbar c$, can still get cards.
+The model only writes types that fit an idea. **Why** needs supporting ideas in the graph, and **Contrast** needs a similar neighboring idea. If the model can't write a useful card for an idea, it writes none and says why. It skips the numerical values of physical constants unless you flag the idea that states the value or ask for it in a flag note.
 
 ## Check Anki reviews
 
@@ -111,18 +106,18 @@ Each topic lists its cards with their lapses, reviews, recent Again dates and de
 ## Install
 
 > [!NOTE]
-> Download `anki-bridge-v0.9.0.zip` from the [latest release](https://github.com/Singh-Mehtab/learnharness-anki-bridge/releases/latest). GitHub's automatically generated source zip is not the install archive. You can also [build the zip from source](docs/install.md#build-the-zip-from-source).
+> Download `anki-bridge-v0.9.0.zip` from the [latest release](https://github.com/Singh-Mehtab/learnharness-anki-bridge/releases/latest).
 
 ### What you need
 
-- [LearnHarness](https://github.com/amosblomqvist/learnharness) with community plugin API v1. Tested on 0.6.1 on macOS. Later versions are allowed but untested.
+- [LearnHarness](https://github.com/amosblomqvist/learnharness) with community plugin API v1. Tested on 0.6.1 on macOS. Later versions are untested.
 - A model set up in LearnHarness, for writing cards. Choosing ideas, estimating cost and sending make no model calls. Writing cards uses your provider's quota.
 - For sending and checking Anki reviews, Anki Desktop 26.08 or later with the [AnkiConnect](https://git.sr.ht/~foosoft/anki-connect) add-on, running while you use them. Tested with AnkiConnect 26.10.11.0 and 26.11.15.0. Builds without `getActiveProfile` are refused, because the plugin uses it to check it is writing to the right profile. **Download .apkg** works without AnkiConnect.
 - To build the zip yourself, Node.js 23.6 or later, npm and the `zip` command. You don't need these to install a prebuilt zip.
 
 ### Steps
 
-1. In LearnHarness, open **Settings → Community plugins** and copy the plugins folder path. Quit LearnHarness completely. On Mac, use **Quit** or ⌘Q; closing the window is not enough.
+1. In LearnHarness, open **Settings → Community plugins** and copy the plugins folder path. Quit LearnHarness completely. 
 2. If the plugins folder already contains `anki-bridge`, stop and follow the upgrade steps below. Otherwise, extract the install zip outside the plugins folder.
 3. Open any folder created by your extractor. Move the inner `anki-bridge` folder into the plugins folder. Check that the manifest is at `<plugins folder>/anki-bridge/dist/manifest.json`, with no version-named folder above `anki-bridge`.
 4. Start LearnHarness, enable **Anki Bridge** under Community plugins, and open it from the sidebar.
@@ -130,11 +125,11 @@ Each topic lists its cards with their lapses, reviews, recent Again dates and de
 To upgrade, quit LearnHarness, privately back up `anki-bridge/data/`, then replace only `anki-bridge/dist/`. Do not merge folders or replace the whole `anki-bridge` folder. The `data/` folder holds your drafts, flags, send history and any saved API key. The [install guide](docs/install.md) has the full upgrade, rollback and troubleshooting steps.
 
 > [!WARNING]
-> Community plugins run local code with the same access as LearnHarness. Only install a build you trust.
+> Make sure the file you put in the plugin folder is `anki-bridge` and not `anki-bridge-v0.9.0`. 
 
 ### Connect to Anki
 
-Skip this if you only want to download packages. Otherwise, open Anki on the profile you want cards in. A throwaway profile is a good place to start.
+Skip this if you only want to download packages. Otherwise, open Anki on the profile you want cards in.
 
 1. In **Settings → Anki Bridge**, check the AnkiConnect address. The default is `http://127.0.0.1:8765`. Add an API key if you set one in AnkiConnect.
 2. If you changed the address or key, press **Save**. Then press **Test connection**.
@@ -158,7 +153,7 @@ If you set an API key, it goes with every AnkiConnect request. By default each n
 
 ## Limitations
 
-- Cards are Basic front-and-back notes. Cloze, reversed and type-in cards are not supported.
+- Cards are Basic front-and-back notes. Cloze, reversed and type-in cards are not yet supported.
 - Images and Mermaid diagrams cannot go in cards.
 - Card quality depends on your model, so check every draft. The writer was tuned on one lecture and has not been benchmarked on new subjects.
 - Tested in daily use on macOS with LearnHarness 0.6.1, a live model and Anki, including importing downloaded packages. Windows and Linux have not been tested.
