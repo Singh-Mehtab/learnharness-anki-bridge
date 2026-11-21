@@ -128,10 +128,11 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
       el("p", "Downloading does not change card status. Open the file in Anki to import it.", "ab-sent-detail"),
       el("p", "Importing may duplicate cards already in Anki or update notes from an earlier package.", "ab-sent-detail ab-warning"));
     const actionsBox = el("div", undefined, "ab-actions");
-    // The same file again, byte for byte, without asking the backend.
+    // Download again re-exports through the backend, which rejects imported or
+    // sent cards even when this view's snapshot is stale.
     const eligible = () => !packageMarkInFlight && result.ids.every((id, i) => { const card = state?.cards.find(c => c.id === id); return card && result.revisions[i] === packageRevision(card) && (card.status === "approved" || card.status === "failed") && card.noteId === undefined; });
     const warning = el("p", "", "ab-sent-detail ab-warning"); text.append(warning);
-    const again = button(ctx, actionsBox, s, { label: "Download again", onClick: () => { if (eligible()) saveFile(result.fileName, bytes); } });
+    const again = button(ctx, actionsBox, s, { label: "Download again", onClick: () => { if (eligible()) void downloadAgain(result); } });
     const mark = button(ctx, actionsBox, s, { label: "Mark as imported", onClick: () => { if (eligible()) void packageAction("markImported", result, bytes, s); } });
     syncReceipt = () => { const blocked = !eligible(); again.update({ disabled: blocked }); mark.update({ disabled: blocked }); warning.textContent = packageMarkInFlight ? "Marking cards as imported…" : blocked ? "Some cards are no longer eligible. Dismiss this receipt and review the cards." : ""; };
     button(ctx, actionsBox, s, { label: "Dismiss", variant: "ghost", onClick: hideDownload });
@@ -339,6 +340,20 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
       downloadAll?.update(downloadProps);
       sendAll?.update(sendProps);
     }
+  }
+  async function downloadAgain(result: PackageResult): Promise<void> {
+    if (busy) return;
+    busy = true; actions++; syncBar();
+    try {
+      const fresh = await ctx.call<PackageResult>("exportPackage", { ids: result.ids, deck: result.deck, tags: result.tags });
+      if (!alive()) return;
+      if (fresh.fingerprints.join() !== result.fingerprints.join()) throw new Error("These cards changed after the download. Dismiss this receipt and download again");
+      saveFile(fresh.fileName, base64Bytes(fresh.data));
+    } catch (error) {
+      if (!alive()) return;
+      feedback.show(`${message(error)}. Refresh cards and check their status.`, "error");
+      try { const fresh = await ctx.call<Snapshot>("snapshot"); if (alive()) { state = fresh; render(); await options.onChanged(); } } catch { /* The message above already asks for a refresh. */ }
+    } finally { busy = false; if (alive()) { syncBar(); syncReceipt?.(); } }
   }
   async function download(ids: string[]): Promise<string> {
     if (!downloadPanel.hidden) throw new Error("Mark or dismiss the previous download before starting another.");

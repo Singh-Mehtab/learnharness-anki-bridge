@@ -1094,8 +1094,9 @@ test("Download .apkg works unpaired, saves the package, keeps cards approved and
     assert.equal(f.find("Undo", importedPanel), undefined);
     f.button("Download again", panel).click(); await settle(2);
     assert.equal(saved.length, 2);
-    assert.equal(f.calls.filter(c => c.name === "exportPackage").length, 1, "the same file again, without a new export");
-    assert.deepEqual(saved[1], saved[0]);
+    assert.equal(f.calls.filter(c => c.name === "exportPackage").length, 2, "download again re-checks the cards through the backend");
+    assert.deepEqual(f.calls.filter(c => c.name === "exportPackage")[1].input.ids, f.calls.filter(c => c.name === "exportPackage")[0].input.ids);
+    assert.equal(saved[1].name, saved[0].name);
     f.button("Download .apkg").click(); await settle();
     assert.equal(saved.length, 2, "a new export cannot replace the outstanding receipt");
     assert.match(f.status()!, /previous download/);
@@ -1155,6 +1156,32 @@ test("a receipt follows the exported revision, not the view's snapshot at downlo
     const before = saves;
     f.button("Download again", receipt).click();
     assert.equal(saves, before);
+  } finally { URL.createObjectURL = create; URL.revokeObjectURL = revoke; await f.dispose(); }
+});
+
+test("a stale receipt cannot re-download a card imported in another view", async () => {
+  const state = fixture(); state.cards = [card("a", { status: "approved" })];
+  const create = URL.createObjectURL, revoke = URL.revokeObjectURL;
+  URL.createObjectURL = () => "blob:test"; URL.revokeObjectURL = () => {};
+  let saves = 0;
+  const f = await setup({ state, handler: (name, input) => {
+    if (name !== "exportPackage") return undefined;
+    if (state.cards.some(c => input.ids.includes(c.id) && c.status === "imported")) throw new Error("Imported cards cannot be packaged again");
+    return { fileName: "a.apkg", data: "AA==", ids: input.ids, fingerprints: ["hash"], revisions: input.ids.map((id: string) => packageRevision(state.cards.find(c => c.id === id) as any)), deck: input.deck, tags: [] };
+  } });
+  (f.window as any).HTMLAnchorElement.prototype.click = function () { saves++; };
+  try {
+    f.button("Download .apkg").click(); await tick();
+    const receipt = f.container.querySelector('.ab-sent[data-kind="download"]')!;
+    f.button("Download again", receipt).click(); await tick();
+    assert.equal(saves, 2, "eligible cards download again");
+    // Another window marks the card imported; this view has not refreshed.
+    Object.assign(state.cards[0], { status: "imported", deck: "Default" });
+    assert.equal(f.button("Download again", receipt).disabled, false);
+    f.button("Download again", receipt).click(); await tick();
+    assert.equal(saves, 2, "the backend refuses the stale download");
+    assert.match(f.container.textContent!, /cannot be packaged again/);
+    assert.equal(f.button("Download again", receipt).disabled, true, "the view refreshes and disables the receipt");
   } finally { URL.createObjectURL = create; URL.revokeObjectURL = revoke; await f.dispose(); }
 });
 
