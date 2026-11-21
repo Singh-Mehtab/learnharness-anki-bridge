@@ -26,7 +26,7 @@ Anki Bridge is a community plugin for [LearnHarness](https://github.com/amosblom
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/readme/how-it-works-dark.png">
   <source media="(prefers-color-scheme: light)" srcset="docs/images/readme/how-it-works-light.png">
-  <img src="docs/images/readme/how-it-works-light.png" alt="Diagram in two halves. In LearnHarness, step 1 is choosing ideas, and replies you flag during teaching mark their ideas. In step 2 a model drafts cards, and in step 3 you review them. A dashed line separates this from Anki. You press Send to add approved cards, or download an .apkg to import, and Anki schedules the reviews. Check Anki reviews reads them back when you ask. Only cards you approve cross the line.">
+  <img src="docs/images/readme/how-it-works-light.png" alt="Diagram in three parts separated by dashed lines. In LearnHarness, step 1 is choosing ideas, and replies you flag during teaching mark their ideas. In step 2 a model drafts cards, and in step 3 you edit, drop or approve each draft. In Anki, you press Send to add approved cards, or download an .apkg to import, and Anki schedules your reviews. Back in LearnHarness, you find weak spots: the ideas you keep missing in Anki, with a link to the session to relearn them.">
 </picture>
 
 ## Main ideas
