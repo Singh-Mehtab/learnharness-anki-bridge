@@ -45,6 +45,15 @@ test('coverage counts waiting, mixed sent/waiting and dropped-only cards without
   assert.equal(view([card({ status: 'dropped' })]).coverage.uncarded, true);
 });
 
+test('imported cards count in coverage with any or no paired profile', () => {
+  for (const destination of [null, paired, { ...paired, profile: 'Other' }]) {
+    const n = view([card({ status: 'imported', deck: 'Offline' })], { destination });
+    assert.equal(n.coverage.state, 'sent');
+    assert.deepEqual(n.cards, { waiting: 0, sent: 1, sentElsewhere: 0 });
+    assert.equal(n.coverage.canDismiss, false);
+  }
+});
+
 test('coverage is destination-aware, deck-independent and does not recreate deleted notes', () => {
   assert.equal(view([sent({ deck: 'Another', presence: 'deleted' })]).coverage.state, 'sent');
   assert.equal(view([sent({ presence: 'deleted' })]).coverage.deletedNotes, 1);
@@ -254,7 +263,7 @@ test('migrations from 1/2/3 retain supported data; corrupt and future dismissals
     const base = initialState(); const { dismissals: _d, ...old } = base;
     const raw = { ...old, schemaVersion: version, generationSettings: { cardsPerNode: 2, enabledKinds: ['recall'], model: null }, cards: [sent()], destination: paired };
     const migrated = migrateState(raw);
-    assert.equal(migrated.schemaVersion, 7); assert.deepEqual(migrated.dismissals, []);
+    assert.equal(migrated.schemaVersion, 8); assert.deepEqual(migrated.dismissals, []);
     assert.deepEqual(migrated.cards, raw.cards); assert.deepEqual(migrated.destination, paired);
     if (version >= 2) assert.deepEqual(migrated.generationSettings, base.generationSettings);
     if (version >= 3) assert.deepEqual(migrated.flags, raw.flags);
@@ -262,7 +271,7 @@ test('migrations from 1/2/3 retain supported data; corrupt and future dismissals
   const directory = await mkdtemp(path.join(os.tmpdir(), 'anki-coverage-state-')), file = path.join(directory, 'state.json');
   try {
     for (const bad of [{ ...initialState(), dismissals: [dismiss(), dismiss()] }, { ...initialState(), dismissals: [dismiss('bad')] },
-      { ...initialState(), dismissals: [{ ...dismiss(), dismissedAt: 'not-a-date' }] }, { ...initialState(), schemaVersion: 8 }]) {
+      { ...initialState(), dismissals: [{ ...dismiss(), dismissedAt: 'not-a-date' }] }, { ...initialState(), schemaVersion: 9 }]) {
       const raw = JSON.stringify(bad); await writeFile(file, raw);
       await assert.rejects(StateStore.open(directory), /Invalid|Unsupported/); assert.equal(await readFile(file, 'utf8'), raw);
     }

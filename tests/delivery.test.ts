@@ -88,6 +88,99 @@ async function fixture() {
     failFront: (v: string) => { failFront = v; }, dropAfterAdd: () => { dropAfterAdd = true; }, switchAfterAdd: () => { switchAfterAdd = true; }, gate: (v: Promise<void>) => { addGate = v; }, gateDecks: (v: Promise<void>) => { deckGate = v; }, gateVersion: (v: Promise<void>) => { versionGate = v; } };
 }
 
+test('mark imported and undo are atomic, offline, and reject later edits and sends', async () => {
+  const { packageFingerprint } = await import('../src/anki/apkg.ts');
+  const f = await fixture();
+  try {
+    const a = await f.draft('First?'), b = await f.draft('Second?'), draft = await f.draft('Draft?');
+    await f.approve([a, b]);
+    const before = f.store.snapshot();
+    const fingerprints = before.cards.slice(0, 2).map(packageFingerprint);
+    for (const ids of [[a, draft], [a, 'missing']]) {
+      await assert.rejects(f.service.command('markImported', { ids, deck: 'Deck' }));
+      assert.deepEqual(f.store.snapshot(), before);
+    }
+    const marked = await f.service.command('markImported', { ids: [a, b], deck: ' Deck::One ', fingerprints }) as { importMarkId: string };
+    for (const c of f.snap().cards.slice(0, 2)) {
+      assert.equal(c.status, 'imported'); assert.equal(c.deck, 'Deck::One');
+      assert.equal(c.noteId, undefined); assert.equal(c.destination, undefined);
+    }
+    assert.equal(f.calls.length, 0);
+    await assert.rejects(f.service.command('edit', { id: a }), /imported/);
+    await assert.rejects(f.service.command('drop', { ids: [a] }), /imported/);
+    await assert.rejects(f.service.command('approve', { ids: [a] }), /imported/);
+    await assert.rejects(f.send([a]), /Imported cards/);
+    const imported = f.store.snapshot();
+    await assert.rejects(f.service.command('unmarkImported', { ids: [a, draft], markId: marked.importMarkId }), /Only imported/);
+    assert.deepEqual(f.store.snapshot(), imported);
+    await f.service.command('unmarkImported', { ids: [a, b], markId: marked.importMarkId });
+    assert.deepEqual(f.snap().cards.slice(0, 2).map(c => [c.status, c.deck]), [['approved', undefined], ['approved', undefined]]);
+  } finally { await f.close(); }
+});
+
+test('undo restores failed send details and approved cards in a mixed batch', async () => {
+  const { packageFingerprint } = await import('../src/anki/apkg.ts');
+  const f = await fixture();
+  try {
+    const a = await f.draft('First?'), b = await f.draft('Second?'); await f.approve([a, b]);
+    await f.service.exclusive(() => f.service.save(s => {
+      Object.assign(s.cards.find(c => c.id === b)!, { status: 'failed', deck: 'Old', destination: { url: 'http://127.0.0.1:8766/', profile: 'Scratch' }, lastError: 'Connection lost', presence: 'unknown' });
+    }));
+    const before = f.store.snapshot().cards;
+    const marked = await f.service.command('markImported', { ids: [a, b], deck: 'Package', fingerprints: before.map(packageFingerprint) }) as { importMarkId: string };
+    await f.service.command('unmarkImported', { ids: [a, b], markId: marked.importMarkId });
+    assert.deepEqual(f.store.snapshot().cards, before);
+  } finally { await f.close(); }
+});
+
+test('an old undo cannot reverse a later import of the same card', async () => {
+  const { packageFingerprint } = await import('../src/anki/apkg.ts');
+  const f = await fixture();
+  try {
+    const id = await f.draft('Question?'); await f.approve([id]);
+    const fingerprints = [packageFingerprint(f.store.snapshot().cards[0])];
+    const first = await f.service.command('markImported', { ids: [id], deck: 'Deck', fingerprints }) as { importMarkId: string };
+    await f.service.command('unmarkImported', { ids: [id], markId: first.importMarkId });
+    const second = await f.service.command('markImported', { ids: [id], deck: 'Deck', fingerprints }) as { importMarkId: string };
+    assert.notEqual(first.importMarkId, second.importMarkId);
+    const before = f.store.snapshot();
+    await assert.rejects(f.service.command('unmarkImported', { ids: [id], markId: first.importMarkId }), /mark has changed/);
+    assert.deepEqual(f.store.snapshot(), before);
+  } finally { await f.close(); }
+});
+
+test('post-commit warnings belong only to the command that committed', async () => {
+  const { packageFingerprint } = await import('../src/anki/apkg.ts');
+  const f = await fixture();
+  try {
+    const id = await f.draft('Question?'); await f.approve([id]);
+    const fingerprints = [packageFingerprint(f.store.snapshot().cards[0])];
+    const replace = f.store.replace.bind(f.store);
+    f.store.replace = async state => { await replace(state); throw new Error('directory sync failed'); };
+    const marked = await f.service.command('markImported', { ids: [id], deck: 'Deck', fingerprints }) as { durabilityWarning?: string; importMarkId: string };
+    assert.match(marked.durabilityWarning!, /directory sync failed/);
+    await assert.rejects(f.service.command('markImported', { ids: [id], deck: 'Deck', fingerprints }), /Only approved/);
+    const undone = await f.service.command('unmarkImported', { ids: [id], markId: marked.importMarkId }) as { durabilityWarning?: string };
+    assert.match(undone.durabilityWarning!, /directory sync failed/);
+    assert.equal(f.snap().cards[0].status, 'approved');
+  } finally { await f.close(); }
+});
+
+test('a stale package cannot mark an edited and reapproved card imported', async () => {
+  const { exportPackage } = await import('../src/anki/apkg.ts');
+  const f = await fixture();
+  try {
+    const a = await f.draft('First?'), b = await f.draft('Second?');
+    await f.approve([a, b]);
+    const result = await exportPackage(f.store.snapshot(), { ids: [a, b], deck: 'Deck' });
+    await f.service.command('edit', { id: b, front: 'Changed?', back: 'Answer', extra: '' });
+    await f.approve([b]);
+    const before = f.store.snapshot();
+    await assert.rejects(f.service.command('markImported', { ids: result.ids, deck: result.deck, fingerprints: result.fingerprints }), /changed since/);
+    assert.deepEqual(f.store.snapshot(), before);
+  } finally { await f.close(); }
+});
+
 test('hand-written cards require explicit pairing and durable approval, then add one note at a time', async () => {
   const f = await fixture();
   try {
@@ -580,14 +673,14 @@ test('schema 7 records an existing note with unknown deck and preserves a 0.8.0 
     await f.service.close();
     await writeFile(stateFile, original);
     await f.reopen();
-    assert.deepEqual(f.store.snapshot(), { ...legacy, schemaVersion: 7 });
+    assert.deepEqual(f.store.snapshot(), { ...legacy, schemaVersion: 8 });
     assert.equal(await readFile(backup, 'utf8'), original);
 
     f.notes.push({ noteId: 500, fields: { LH_ID: imported }, deckName: 'Imported Deck', modelName: 'Imported Type', tags: [] });
     const result = await f.send([imported], 'Requested Deck');
     assert.deepEqual(result.delivery.found, [imported]);
     const persisted = JSON.parse(await readFile(stateFile, 'utf8')) as State;
-    assert.equal(persisted.schemaVersion, 7);
+    assert.equal(persisted.schemaVersion, 8);
     assert.deepEqual(persisted.cards[1], { ...legacy.cards[1], status: 'sent', noteId: 500, existingNote: true, presence: 'present', destination: legacy.destination });
     assert.throws(() => validateV080DeliveryContract(persisted), /Unsupported state format/);
     assert.throws(() => validateV080DeliveryContract({ ...persisted, schemaVersion: 6 }), /Missing delivery destination or deck/);

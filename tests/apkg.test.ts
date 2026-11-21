@@ -75,6 +75,12 @@ const contents = (db: DatabaseSync) => ({
   col: db.prepare('SELECT ver, models, decks, dconf, tags FROM col').get() as { ver: number; models: string; decks: string; dconf: string; tags: string },
 });
 
+test('a package refuses imported cards', async () => {
+  const state = syntheticState();
+  state.cards[0].status = 'imported'; state.cards[0].deck = 'Deck';
+  await assert.rejects(exportPackage(state, { ids: [ids.fact], deck: 'Deck' }));
+});
+
 test('a package holds the approved cards with their formatting, fields, tags, note type and Bridge IDs', async () => {
   const result = await exportPackage(syntheticState(), { ids: [ids.fact, ids.equation], deck: 'Synthetic::Deck A' }, NOW);
   assert.equal(result.fileName, 'anki-bridge-synthetic-deck-a.apkg');

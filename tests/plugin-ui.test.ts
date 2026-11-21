@@ -1,4 +1,5 @@
 import { systemTags } from "../src/anki/tags.ts";
+import { packageRevision } from "../src/anki/package-revision.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { Window } from "happy-dom";
@@ -22,7 +23,7 @@ function fixture() {
 }
 const tick = async () => { for (let i = 0; i < 6; i++) await new Promise<void>(resolve => setTimeout(resolve, 0)); };
 
-async function setup(options: { handler?: (name: string, input: any) => unknown; state?: ReturnType<typeof fixture>; connection?: () => unknown; ui?: Record<string, unknown> } = {}) {
+async function setup(options: { handler?: (name: string, input: any) => unknown; coverageGate?: () => Promise<void> | undefined; state?: ReturnType<typeof fixture>; connection?: () => unknown; ui?: Record<string, unknown> } = {}) {
   const window = new Window();
   Object.assign(globalThis, { document: window.document });
   const controller = new AbortController(), activation = new AbortController();
@@ -45,6 +46,7 @@ async function setup(options: { handler?: (name: string, input: any) => unknown;
     app: { openView: (id: string) => { openedView = id; }, openSettings: () => { settingsOpened++; } },
     call: async (name: string, input: any) => {
       if (name === "coverageContext") coverageReads++;
+      if (name === "coverageContext") await options.coverageGate?.();
       if (name === "coverageContext") return { nodes: [], missing: [], cardsPerNode: 2, paired: true, pairingWarning: false };
       if (name === "generationStatus") return { generationSettings: structuredClone(state.generationSettings), generations: [] };
       if (name === "sessions") return { sessions: [], unresolved: [] };
@@ -62,6 +64,8 @@ async function setup(options: { handler?: (name: string, input: any) => unknown;
       if (name === "edit") Object.assign(state.cards.find(c => c.id === input.id)!, { front: input.front, back: input.back, extra: input.extra, status: "draft" });
       if (name === "approve") state.cards.filter(c => input.ids.includes(c.id)).forEach(c => { c.status = "approved"; });
       if (name === "drop") state.cards.filter(c => input.ids.includes(c.id)).forEach(c => { c.status = "dropped"; });
+      if (name === "markImported") { state.cards.filter(c => input.ids.includes(c.id)).forEach(c => { c.status = "imported"; c.deck = input.deck; }); return structuredClone({ ...state, importMarkId: "test-mark" }); }
+      if (name === "unmarkImported") state.cards.filter(c => input.ids.includes(c.id)).forEach(c => { c.status = "approved"; delete c.deck; });
       if (name === "draft") state.cards.push(card(`manual-${state.cards.length}`, { front: input.front, back: input.back, extra: input.extra, kind: input.kind, nodeName: "Hand-written card", sessionName: "Manual" }));
       if (name === "send") {
         state.settings.lastDeck = input.deck;
@@ -1001,7 +1005,17 @@ test("Download .apkg works unpaired, saves the package, keeps cards approved and
   const realCreate = URL.createObjectURL, realRevoke = URL.revokeObjectURL;
   URL.createObjectURL = (blob: Blob) => { const url = `blob:test/${blobs.size}`; blobs.set(url, blob); return url; };
   URL.revokeObjectURL = () => {};
-  const f = await setup({ state, handler: (name, input) => name === "exportPackage" ? exportPackage(backend, input, 1_795_000_000_000) : undefined });
+  let failAfterCommit = false, exportCount = 0;
+  let markGate: Promise<void> | undefined;
+  const f = await setup({ state, handler: async (name, input) => {
+    if (name === "exportPackage") return exportPackage(backend, input, 1_795_000_000_000 + 60_000 * exportCount++);
+    if (name === "markImported" && markGate) await markGate;
+    if (failAfterCommit && (name === "markImported" || name === "unmarkImported")) {
+      state.cards.filter(c => input.ids.includes(c.id)).forEach(c => { c.status = name === "markImported" ? "imported" : "approved"; if (name === "markImported") c.deck = input.deck; else delete c.deck; });
+      return structuredClone({ ...state, ...(name === "markImported" ? { importMarkId: "test-mark" } : {}), durabilityWarning: "directory sync failed" });
+    }
+    return undefined;
+  } });
   const pending: Promise<void>[] = [];
   (f.window as any).HTMLAnchorElement.prototype.click = function (this: HTMLAnchorElement) {
     pending.push(blobs.get(this.href)!.arrayBuffer().then(b => { saved.push({ name: this.download, bytes: Buffer.from(b) }); }));
@@ -1028,25 +1042,212 @@ test("Download .apkg works unpaired, saves the package, keeps cards approved and
     assert.equal(saved.length, 1);
     assert.equal(saved[0].name, "anki-bridge-synthetic-deck.apkg");
     assert.equal(saved[0].bytes.readUInt32LE(0), 0x04034b50, "the saved file is the zip package");
-    const panel = f.container.querySelector(".ab-sent")!;
+    const panel = f.container.querySelector('.ab-sent[data-kind="download"]')!;
     assert.equal(panel.getAttribute("data-kind"), "download");
     assert.match(panel.textContent!, /Download requested: anki-bridge-synthetic-deck\.apkg, 2 cards/);
-    assert.match(panel.textContent!, /Cards stay approved in Bridge and can still be sent\. Open the file in Anki to import it/);
+    assert.match(panel.textContent!, /Downloading does not change card status\. Open the file in Anki to import it/);
     assert.doesNotMatch(panel.textContent!, /\bSaved\b/);
     assert.match(panel.textContent!, /Importing may duplicate cards already in Anki or update notes from an earlier package/);
     assert.doesNotMatch(panel.textContent!, /sent to Anki/);
     assert.equal(f.calls.some(c => c.name === "send"), false, "a download never sends");
     assert.deepEqual(Array.from(f.review().querySelectorAll(".ab-card")).map(c => c.getAttribute("data-status")), ["approved", "draft", "failed"], "nothing marked sent");
     assert.equal(f.button(/^Send 2 cards to Anki/).disabled, false, "the same cards remain available for sending once paired");
+    const draftRow = f.review().querySelector('.ab-card[data-card-id="0b6f7c1e-0000-4000-8000-00000000000b"]')!;
+    f.button("Approve", draftRow).click(); await tick();
+    assert.ok(f.button("Mark as imported", panel), "approving another card preserves the download receipt");
+    const first = f.review().querySelector('.ab-card[data-card-id="0b6f7c1e-0000-4000-8000-00000000000a"]')!;
+    f.button("Edit", first).click();
+    f.type(f.review().querySelector('textarea[aria-label="Front"]') as unknown as HTMLTextAreaElement, "Unsaved change");
+    f.button("Mark as imported", panel).click(); await tick();
+    assert.match(f.status()!, /Save or cancel your edits/);
+    assert.equal(f.calls.some(c => c.name === "markImported"), false);
+    assert.equal((f.review().querySelector('textarea[aria-label="Front"]') as unknown as HTMLTextAreaElement).value, "Unsaved change");
+    f.button("Cancel", f.review()).click();
+    failAfterCommit = true;
+    let release!: () => void; markGate = new Promise(resolve => { release = resolve; });
+    f.button("Mark as imported", panel).click();
+    assert.equal(f.button("Download again", panel).disabled, true, "cannot download while marking");
+    f.button("Dismiss", panel).click();
+    assert.equal((panel as unknown as HTMLElement).hidden, false, "cannot dismiss while marking");
+    release(); markGate = undefined; await tick();
+    assert.match(f.status()!, /directory sync failed/);
+    const importedPanel = f.container.querySelector('.ab-sent[data-kind="imported"]')!;
+    assert.match(importedPanel.textContent!, /2 cards marked as imported/);
+    assert.deepEqual(f.state.cards.map(c => c.status), ["imported", "approved", "imported"]);
+    const history = f.container.querySelector(".ab-history") as unknown as HTMLDetailsElement;
+    history.open = true; history.dispatchEvent(f.event("toggle"));
+    assert.match(history.textContent!, /Sent cards \(2\)/);
+    assert.match(history.textContent!, /Imported/);
+    assert.match(history.textContent!, /Synthetic::Deck/);
+    assert.equal(f.find("Show in Anki", history), undefined);
+    await f.more("Refresh cards"); await tick();
+    assert.ok(f.button("Undo", importedPanel), "refresh preserves Undo");
+    await f.more("Write a card by hand"); await tick();
+    const manual = f.dialog()!;
+    const [front, back] = Array.from(manual.querySelectorAll("textarea")) as unknown as HTMLTextAreaElement[];
+    front.value = "Manual front"; back.value = "Manual back";
+    f.button("Add card", manual).click(); await tick();
+    assert.ok(f.button("Undo", importedPanel), "an unrelated write preserves Undo");
+    f.button("Undo", importedPanel).click(); await tick();
+    assert.match(f.status()!, /directory sync failed/);
+    assert.deepEqual(f.state.cards.map(c => c.status), ["approved", "approved", "approved", "draft"]);
+    failAfterCommit = false;
+    assert.equal(f.find("Undo", importedPanel), undefined);
     f.button("Download again", panel).click(); await settle(2);
     assert.equal(saved.length, 2);
-    assert.equal(f.calls.filter(c => c.name === "exportPackage").length, 1, "the same file again, without a new export");
-    assert.deepEqual(saved[1], saved[0]);
-    f.button("Download .apkg").click(); await settle(3);
-    assert.equal(saved.length, 3, "the button stays available for the same approved batch");
-    f.button("Dismiss", f.container.querySelector(".ab-sent")!).click();
-    assert.equal((f.container.querySelector(".ab-sent") as unknown as HTMLElement).hidden, true);
+    assert.equal(f.calls.filter(c => c.name === "exportPackage").length, 2, "download again re-checks the cards through the backend");
+    const exports = f.calls.filter(c => c.name === "exportPackage");
+    assert.deepEqual(exports[1].input, exports[0].input, "the re-check repeats the original request, including the user's tags");
+    assert.deepEqual(saved[1], saved[0], "the original bytes are saved again");
+    f.button("Download .apkg").click(); await settle();
+    assert.equal(saved.length, 2, "a new export cannot replace the outstanding receipt");
+    assert.match(f.status()!, /previous download/);
+    f.button("Dismiss", panel).click();
+    assert.equal((panel as unknown as HTMLElement).hidden, true);
   } finally { URL.createObjectURL = realCreate; URL.revokeObjectURL = realRevoke; await f.dispose(); }
+});
+
+test("undo keeps a newer package receipt", async () => {
+  const state = fixture(); state.cards = [card("a", { status: "approved" }), card("b")];
+  const create = URL.createObjectURL, revoke = URL.revokeObjectURL;
+  URL.createObjectURL = () => "blob:test"; URL.revokeObjectURL = () => {};
+  const f = await setup({ state, handler: (name, input) => name === "exportPackage" ? { fileName: `${input.ids.join("")}.apkg`, data: "AA==", ids: input.ids, fingerprints: input.ids.map(() => "hash"), revisions: input.ids.map((id: string) => packageRevision(state.cards.find(c => c.id === id) as any)), deck: input.deck, tags: [] } : undefined });
+  (f.window as any).HTMLAnchorElement.prototype.click = function () {};
+  try {
+    f.button("Download .apkg").click(); await tick();
+    f.button("Mark as imported", f.container.querySelector('.ab-sent[data-kind="download"]')).click(); await tick();
+    f.button("Approve", f.review()).click(); await tick();
+    f.button("Download .apkg").click(); await tick();
+    const receipt = f.container.querySelector('.ab-sent[data-kind="download"]')!;
+    assert.match(receipt.textContent!, /b\.apkg/);
+    f.button("Undo", f.container.querySelector('.ab-sent[data-kind="imported"]')).click(); await tick();
+    assert.match(receipt.textContent!, /b\.apkg/, "undo must not replace a newer receipt");
+    assert.ok(f.button("Mark as imported", receipt));
+    state.cards[1].front = "Changed after download";
+    await f.more("Refresh cards"); await tick();
+    assert.equal(f.button("Download again", receipt).disabled, true);
+    state.cards[1].front = "Question b";
+    Object.assign(state.cards[1], { status: "sent", noteId: 123, deck: "Scratch", destination: paired() });
+    await f.more("Refresh cards"); await tick();
+    assert.equal(f.button("Download again", receipt).disabled, true);
+    assert.equal(f.button("Mark as imported", receipt).disabled, true);
+    assert.match(receipt.textContent!, /no longer eligible/);
+    assert.equal(f.button("Dismiss", receipt).disabled, false);
+  } finally { URL.createObjectURL = create; URL.revokeObjectURL = revoke; await f.dispose(); }
+});
+
+test("a receipt follows the exported revision, not the view's snapshot at download time", async () => {
+  const state = fixture(); state.cards = [card("a", { status: "approved", front: "Version A" })];
+  const create = URL.createObjectURL, revoke = URL.revokeObjectURL;
+  URL.createObjectURL = () => "blob:test"; URL.revokeObjectURL = () => {};
+  let saves = 0;
+  const f = await setup({ state, handler: (name, input) => name === "exportPackage" ? { fileName: "a.apkg", data: "AA==", ids: input.ids, fingerprints: ["hash"], revisions: input.ids.map((id: string) => packageRevision(state.cards.find(c => c.id === id) as any)), deck: input.deck, tags: [] } : undefined });
+  (f.window as any).HTMLAnchorElement.prototype.click = function () { saves++; };
+  try {
+    // Another view edits and reapproves the card; this view hasn't refreshed yet.
+    state.cards[0].front = "Version B";
+    f.button("Download .apkg").click(); await tick();
+    const receipt = f.container.querySelector('.ab-sent[data-kind="download"]')!;
+    assert.equal(f.button("Download again", receipt).disabled, true, "view still shows A, package holds B");
+    await f.more("Refresh cards"); await tick();
+    assert.equal(f.button("Download again", receipt).disabled, false, "current B matches the package");
+    assert.equal(f.button("Mark as imported", receipt).disabled, false);
+    state.cards[0].front = "Version A";
+    await f.more("Refresh cards"); await tick();
+    assert.equal(f.button("Download again", receipt).disabled, true, "returning to A must not serve the cached B bytes");
+    const before = saves;
+    f.button("Download again", receipt).click();
+    assert.equal(saves, before);
+  } finally { URL.createObjectURL = create; URL.revokeObjectURL = revoke; await f.dispose(); }
+});
+
+test("a stale receipt cannot re-download a card imported in another view", async () => {
+  const { exportPackage } = await import("../src/anki/apkg.ts");
+  const { initialState } = await import("../src/anki/state.ts");
+  const state = fixture(); state.cards = [card("a", { status: "approved" })];
+  const create = URL.createObjectURL, revoke = URL.revokeObjectURL;
+  URL.createObjectURL = () => "blob:test"; URL.revokeObjectURL = () => {};
+  let saves = 0;
+  const f = await setup({ state, handler: (name, input) => {
+    if (name !== "exportPackage") return undefined;
+    return exportPackage({ ...initialState(), cards: structuredClone(state.cards) } as unknown as Parameters<typeof exportPackage>[0], input, 1_795_000_000_000);
+  } });
+  (f.window as any).HTMLAnchorElement.prototype.click = function () { saves++; };
+  try {
+    const until = async (ok: () => boolean) => { for (let n = 0; n < 200 && !ok(); n++) await new Promise(r => setTimeout(r, 5)); };
+    f.button("Download .apkg").click(); await until(() => !!f.container.querySelector('.ab-sent[data-kind="download"]'));
+    const receipt = f.container.querySelector('.ab-sent[data-kind="download"]')!;
+    f.button("Download again", receipt).click(); await until(() => saves === 2);
+    assert.equal(saves, 2, "eligible cards download again");
+    // Another window marks the card imported; this view has not refreshed.
+    Object.assign(state.cards[0], { status: "imported", deck: "Default" });
+    assert.equal(f.button("Download again", receipt).disabled, false);
+    f.button("Download again", receipt).click(); await until(() => f.button("Download again", receipt).disabled === true);
+    assert.equal(saves, 2, "the backend refuses the stale download");
+    assert.match(f.container.textContent!, /already marked imported and cannot be downloaded again/);
+    assert.equal(f.button("Download again", receipt).disabled, true, "the view refreshes and disables the receipt");
+  } finally { URL.createObjectURL = create; URL.revokeObjectURL = revoke; await f.dispose(); }
+});
+
+test("a resync during Download again is not lost", async () => {
+  const state = fixture(); state.cards = [card("a", { status: "approved" })];
+  const create = URL.createObjectURL, revoke = URL.revokeObjectURL;
+  URL.createObjectURL = () => "blob:test"; URL.revokeObjectURL = () => {};
+  let gate: Promise<void> | undefined;
+  const f = await setup({ state, handler: async (name, input) => {
+    if (name !== "exportPackage") return undefined;
+    if (gate) await gate;
+    return { fileName: "a.apkg", data: "AA==", ids: input.ids, fingerprints: ["hash"], revisions: input.ids.map((id: string) => packageRevision(state.cards.find(c => c.id === id) as any)), deck: input.deck, tags: [] };
+  } });
+  (f.window as any).HTMLAnchorElement.prototype.click = function () {};
+  try {
+    f.button("Download .apkg").click(); await tick();
+    const receipt = f.container.querySelector('.ab-sent[data-kind="download"]')!;
+    let release!: () => void; gate = new Promise(r => { release = r; });
+    f.button("Download again", receipt).click(); await tick();
+    state.cards.push(card("b"));
+    const reads = f.calls.filter(c => c.name === "snapshot").length;
+    await f.resync();
+    release(); gate = undefined; for (let i = 0; i < 6; i++) await tick();
+    assert.ok(f.calls.filter(c => c.name === "snapshot").length > reads, "the pending refresh runs after the retry");
+    assert.ok(f.review().querySelector('.ab-card[data-card-id="b"]'), "the new card appears");
+  } finally { URL.createObjectURL = create; URL.revokeObjectURL = revoke; await f.dispose(); }
+});
+
+test("Undo works while coverage is still refreshing after a mark", async () => {
+  const state = fixture(); state.cards = [card("a", { status: "approved" })];
+  const create = URL.createObjectURL, revoke = URL.revokeObjectURL;
+  URL.createObjectURL = () => "blob:test"; URL.revokeObjectURL = () => {};
+  let hold: Promise<void> | undefined;
+  const f = await setup({ state, coverageGate: () => hold, handler: (name, input) => name === "exportPackage" ? { fileName: "a.apkg", data: "AA==", ids: input.ids, fingerprints: ["hash"], revisions: input.ids.map((id: string) => packageRevision(state.cards.find(c => c.id === id) as any)), deck: input.deck, tags: [] } : undefined });
+  (f.window as any).HTMLAnchorElement.prototype.click = function () {};
+  try {
+    f.button("Download .apkg").click(); await tick();
+    let release!: () => void; hold = new Promise(r => { release = r; });
+    f.button("Mark as imported", f.container.querySelector('.ab-sent[data-kind="download"]')).click(); await tick(); await tick();
+    const imported = f.container.querySelector('.ab-sent[data-kind="imported"]')!;
+    assert.ok(imported && !(imported as unknown as HTMLElement).hidden, "the confirmation is showing");
+    f.button("Undo", imported).click(); await tick(); await tick();
+    assert.ok(f.calls.some(c => c.name === "unmarkImported"), "Undo runs while coverage is held");
+    assert.equal(state.cards[0].status, "approved");
+    release(); hold = undefined; await tick();
+  } finally { URL.createObjectURL = create; URL.revokeObjectURL = revoke; await f.dispose(); }
+});
+
+test("a card imported in another view keeps unsaved edits visible for copying", async () => {
+  const state = fixture(); state.cards = [card("a", { status: "approved" })];
+  const f = await setup({ state });
+  try {
+    f.button("Edit", f.review()).click();
+    f.type(f.review().querySelector('textarea[aria-label="Front"]') as unknown as HTMLTextAreaElement, "Unsaved work");
+    Object.assign(state.cards[0], { status: "imported", deck: "Deck" });
+    await f.more("Refresh cards"); await tick();
+    assert.match(f.review().textContent!, /marked imported in another view/);
+    assert.equal((f.review().querySelector('textarea[aria-label="Front"]') as unknown as HTMLTextAreaElement).value, "Unsaved work");
+    assert.equal(f.find("Save", f.review()), undefined);
+    f.button("Cancel", f.review()).click();
+    assert.equal(f.review().querySelector("textarea"), null);
+  } finally { await f.dispose(); }
 });
 
 test("a found note is not called newly sent or assigned the requested deck and tags", async () => {

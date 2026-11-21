@@ -35,7 +35,7 @@ export interface CoverageContext {
 export interface CoverageSelectable { id: string; cards: CardCounts; coverage?: Coverage }
 export const isWaitingCard = (card: Pick<Card, 'status' | 'noteId'>): boolean =>
   card.status === 'sending' || (['draft', 'approved', 'failed'].includes(card.status) && card.noteId === undefined);
-export const isUnsentRecord = (card: Pick<Card, 'status'>): boolean => card.status !== 'sent' && card.status !== 'dropped';
+export const isUnsentRecord = (card: Pick<Card, 'status'>): boolean => card.status !== 'sent' && card.status !== 'imported' && card.status !== 'dropped';
 export const hasCards = (cards: CardCounts): boolean => cards.waiting > 0 || cards.sent > 0;
 export const canSelectNode = (node: CoverageSelectable): boolean => node.coverage?.selectable ?? true;
 export const isUncardedNode = (node: CoverageSelectable): boolean => node.coverage?.uncarded ?? !hasCards(node.cards);
@@ -79,17 +79,17 @@ export function projectCoverage(sources: readonly CoverageSource[], state: Pick<
     let unresolved = 0, olderSourceCards = 0, unknownSourceCards = 0, deletedNotes = 0, current = 0, currentOrUnknownSent = 0;
     for (const card of byNode.get(source.id) ?? []) {
       if (card.status === 'dropped') continue;
-      if (card.status === 'sent') {
-        if (!same(card)) { cards.sentElsewhere++; continue; }
+      if (card.status === 'sent' || card.status === 'imported') {
+        if (card.status === 'sent' && !same(card)) { cards.sentElsewhere++; continue; }
         cards.sent++; if (card.presence === 'deleted') deletedNotes++;
       } else {
         if (!isWaitingCard(card)) continue;
         cards.waiting++; if (card.status === 'sending') unresolved++;
       }
       const snapshot = card.sourceSnapshot;
-      if (!snapshot || snapshot.nodeId !== source.id) { unknownSourceCards++; if (card.status === 'sent') currentOrUnknownSent++; }
+      if (!snapshot || snapshot.nodeId !== source.id) { unknownSourceCards++; if (card.status === 'sent' || card.status === 'imported') currentOrUnknownSent++; }
       else if (missing) continue;
-      else if (snapshot.statementHash === source.statementHash) { current++; if (card.status === 'sent') currentOrUnknownSent++; }
+      else if (snapshot.statementHash === source.statementHash) { current++; if (card.status === 'sent' || card.status === 'imported') currentOrUnknownSent++; }
       else olderSourceCards++;
     }
     const dismissal = dismissals.get(source.id), dismissed = !missing && dismissal?.statementHash === source.statementHash;
