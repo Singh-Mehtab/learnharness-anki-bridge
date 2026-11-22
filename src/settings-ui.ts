@@ -276,23 +276,29 @@ export function mountSettings(ctx: PluginFrontendContext, container: HTMLElement
     return `Sending to profile ${profile}.`;
   }, "Checking Anki…") });
 
+  /** Clearing always asks first, from Clear or from saving an empty box. */
+  async function clearNotes(): Promise<string> {
+    if (!savedNotes()) { notes.value = ""; return ""; }
+    const ok = await confirmDialog(ctx, signal, { title: "Clear writer notes?", confirm: "Clear notes", destructive: true,
+      body: "The writer goes back to its built-in rules only. Cards you already have don't change." });
+    if (!ok || !alive()) return "";
+    // The dialog closes before the save returns, so nothing typed now can be lost.
+    notes.readOnly = true;
+    try { await apply("generationSettings", { writerNotes: "" }); }
+    finally { notes.readOnly = false; }
+    notes.value = "";
+    return "Writer notes cleared.";
+  }
   notesSave = button(ctx, notesActions, signal, { label: "Save notes", variant: "default", disabled: true, onClick: () => act(notesStatus, async () => {
+    if (!notes.value.trim()) return clearNotes();
     // The save sends this text, so it can't change underneath it.
     notes.readOnly = true;
     try { await apply("generationSettings", { writerNotes: notes.value }); }
     finally { notes.readOnly = false; }
     notes.value = savedNotes();
-    return savedNotes() ? "Writer notes saved." : "Writer notes cleared.";
+    return "Writer notes saved.";
   }, "Saving…") });
-  notesClear = button(ctx, notesActions, signal, { label: "Clear", disabled: true, onClick: () => act(notesStatus, async () => {
-    if (!savedNotes()) { notes.value = ""; return ""; }
-    const ok = await confirmDialog(ctx, signal, { title: "Clear writer notes?", confirm: "Clear notes", destructive: true,
-      body: "The writer goes back to its built-in rules only. Cards you already have don't change." });
-    if (!ok || !alive()) return "";
-    await apply("generationSettings", { writerNotes: "" });
-    notes.value = "";
-    return "Writer notes cleared.";
-  }) });
+  notesClear = button(ctx, notesActions, signal, { label: "Clear", disabled: true, onClick: () => act(notesStatus, clearNotes) });
 
   const shown = () => state?.destination ?? undefined;
   button(ctx, noteActions, signal, { label: "Add missing fields", onClick: () => act(noteStatus, async () => {

@@ -142,7 +142,7 @@ export function validateGenerations(settings: unknown, generations: unknown): vo
   if (!validGenerationSettings(settings) || !Array.isArray(generations)) throw new Error('Invalid generation state. The file has not been reset.');
   const ids = new Set<string>(), requests = new Set<string>();
   for (const g of generations) {
-    if (!object(g) || typeof g.id !== 'string' || !g.id || ids.has(g.id) || typeof g.createdAt !== 'string' || !strings(g.nodeIds) || !(validGenerationSettings(g.settings) || validV072GenerationSettings(g.settings) || validLegacyGenerationSettings(g.settings)) || !['running', 'completed', 'cancelled', 'interrupted', 'failed'].includes(String(g.status)) || !Array.isArray(g.tasks) || !Array.isArray(g.skipped) || g.skipped.some(s => !object(s) || typeof s.nodeId !== 'string' || typeof s.reason !== 'string')) throw new Error('Invalid generation batch.');
+    if (!object(g) || typeof g.id !== 'string' || !g.id || ids.has(g.id) || typeof g.createdAt !== 'string' || !strings(g.nodeIds) || !(validGenerationSettings(g.settings) || validV072GenerationSettings(g.settings) || validLegacyGenerationSettings(g.settings)) || !validWriterNotes((g.settings as { writerNotes?: unknown }).writerNotes) || !['running', 'completed', 'cancelled', 'interrupted', 'failed'].includes(String(g.status)) || !Array.isArray(g.tasks) || !Array.isArray(g.skipped) || g.skipped.some(s => !object(s) || typeof s.nodeId !== 'string' || typeof s.reason !== 'string')) throw new Error('Invalid generation batch.');
     if (g.backfillNodeIds !== undefined && (!strings(g.backfillNodeIds) || new Set(g.backfillNodeIds).size !== g.backfillNodeIds.length || g.backfillNodeIds.some(id => !(g.nodeIds as string[]).includes(id)))) throw new Error('Invalid generation backfill targets.');
     if (g.hidden !== undefined && typeof g.hidden !== 'boolean') throw new Error('Invalid generation visibility.');
     if (g.modelSpec !== undefined && !(object(g.modelSpec) && typeof g.modelSpec.provider === 'string' && !!g.modelSpec.provider && typeof g.modelSpec.id === 'string' && !!g.modelSpec.id && (g.modelSpec.thinkingLevel === undefined || typeof g.modelSpec.thinkingLevel === 'string'))) throw new Error('Invalid generation model.');
@@ -156,6 +156,8 @@ export function validateGenerations(settings: unknown, generations: unknown): vo
       if (t.duplicatesOmitted !== undefined && (t.status !== 'applied' || !Number.isSafeInteger(t.duplicatesOmitted) || Number(t.duplicatesOmitted) < 1)) throw new Error('Invalid duplicate omission count.');
       requests.add(t.requestId);
       const input = t.input as WriterInput, sources = t.sources as SourceSnapshot[];
+      // #54: every request in a run carries the run's notes, or none on runs from before #54.
+      if (input.writerNotes !== (g.settings as { writerNotes?: unknown }).writerNotes) throw new Error('Invalid generation task.');
       if (sources.length !== input.targets.length || new Set(sources.map(s => s.nodeId)).size !== sources.length || input.targets.some(n => !sources.some(s => s.nodeId === n.nodeId && s.statement === n.statement))) throw new Error('Generation sources do not match accepted input.');
       // Content rules are enforced once, at apply time. Persisted results get a shape check only,
       // so a later, stricter writer check never makes an old state file unreadable.

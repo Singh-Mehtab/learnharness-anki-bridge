@@ -5,7 +5,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { activate } from '../src/backend.ts';
 import { FakeHost, until } from './fake-host.ts';
-import { initialState, StateStore } from '../src/anki/state.ts';
+import { initialState, StateStore, validateState } from '../src/anki/state.ts';
 import { statementHash } from '../src/coverage/service.ts';
 import { estimateTokens, outputAllowance, pack } from '../src/writer/input.ts';
 import { writerNotesSection, writerPrompt } from '../src/writer/prompt.ts';
@@ -1053,5 +1053,16 @@ test('#54: split requests share the notes frozen at preflight, alongside earlier
     assert.match(g.tasks[1].batchContextDigest, /^[a-f0-9]{64}$/);
     assert.equal(snap.generationSettings.writerNotes, 'Something else entirely.');
     assert.equal(snap.cards.length, 1);
+    // History notes are checked whichever settings shape the run has, and must match every request's input.
+    const saved = JSON.parse(await readFile(statePath(directory), 'utf8'));
+    validateState(saved);
+    const tampered = (change: (h: any) => void) => { const copy = structuredClone(saved); change(copy.generations[0]); return copy; };
+    // A legacy-shaped run (only 'why' is valid there too) with non-string notes.
+    assert.throws(() => validateState(tampered(h => { h.settings.enabledKinds = ['why']; h.settings.writerNotes = 42; })), /generation batch/);
+    assert.throws(() => validateState(tampered(h => { h.settings.enabledKinds = ['why']; h.settings.writerNotes = ' padded '; })), /generation batch/);
+    assert.throws(() => validateState(tampered(h => { h.tasks[1].input.writerNotes = 'Different notes.'; })), /generation task/);
+    assert.throws(() => validateState(tampered(h => { delete h.settings.writerNotes; })), /generation task/);
+    // A run from before #54 has notes in neither place and still loads.
+    validateState(tampered(h => { delete h.settings.writerNotes; for (const t of h.tasks) delete t.input.writerNotes; }));
   } finally { await close(); }
 }));

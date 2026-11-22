@@ -1422,3 +1422,43 @@ test("#54: Settings saves and clears Writer notes, shows an example and the 2,00
     s.close();
   } finally { await f.dispose(); }
 });
+
+test("#54: saving blank Writer notes asks like Clear, and a slow clear keeps the box read-only", async () => {
+  let release: (() => void) | undefined;
+  const handler = async (name: string, input: any) => {
+    if (name !== "generationSettings" || input.writerNotes === undefined) return undefined;
+    if (release === undefined && input.writerNotes === "") await new Promise<void>(r => { release = r; });
+    const notes = String(input.writerNotes).trim();
+    if (notes) f.state.generationSettings.writerNotes = notes; else delete f.state.generationSettings.writerNotes;
+    return structuredClone(f.state);
+  };
+  const f: Awaited<ReturnType<typeof setup>> & { state: { generationSettings: { writerNotes?: string } } } = await setup({ handler: (n, i) => handler(n, i) }) as never;
+  try {
+    const s = await f.mountSettings();
+    const notes = s.host.querySelector('textarea[aria-label="Writer notes"]') as HTMLTextAreaElement;
+    const save = f.button("Save notes", s.host);
+    f.type(notes, "Keep these."); save.click(); await tick();
+    assert.equal(f.state.generationSettings.writerNotes, "Keep these.");
+    const saves = () => f.calls.filter(c => c.name === "generationSettings").length;
+    const before = saves();
+    // Emptying the box and pressing Save goes through the Clear confirmation; cancelling keeps the notes and the edit.
+    f.type(notes, "   "); assert.equal(save.disabled, false);
+    save.click(); await tick();
+    assert.match(f.dialog()!.textContent!, /built-in rules only/);
+    f.button("Cancel", f.dialog()!).click(); await tick();
+    assert.equal(saves(), before);
+    assert.equal(f.state.generationSettings.writerNotes, "Keep these.");
+    assert.equal(notes.value, "   ");
+    // Confirming clears. While the save is pending, the box can't be edited.
+    save.click(); await tick();
+    f.button("Clear notes", f.dialog()!).click(); await tick();
+    assert.ok(release, "the clear is pending");
+    assert.equal(notes.readOnly, true);
+    release!(); await tick();
+    assert.equal(notes.readOnly, false);
+    assert.equal("writerNotes" in f.state.generationSettings, false);
+    assert.equal(notes.value, "");
+    assert.match(s.host.textContent!, /Writer notes cleared\./);
+    s.close();
+  } finally { await f.dispose(); }
+});
