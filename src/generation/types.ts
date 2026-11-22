@@ -6,10 +6,21 @@ interface SettingsBase {
   cardsPerNode: number;
   model: { provider: string; id: string } | null;
 }
+/** FI-8 cloze setting. */
+export type ClozeSetting = 'off' | 'auto' | 'prefer';
+export const CLOZE_SETTINGS: readonly ClozeSetting[] = ['off', 'auto', 'prefer'];
 /** model null means the host's cheap model slot. */
 export interface GenerationSettings extends SettingsBase {
   enabledKinds: CoreCardKind[];
+  /** FI-8. Absent in files from 0.9.0 and earlier. In the active settings a
+   *  missing value means the default, auto; in generation history it means off,
+   *  because those runs predate cloze. New history entries store it explicitly. */
+  cloze?: ClozeSetting;
 }
+/** The active setting, with a missing value resolved to the default. */
+export const activeCloze = (settings: GenerationSettings): ClozeSetting => settings.cloze ?? 'auto';
+/** The setting a past generation ran with. Missing means off. */
+export const historyCloze = (settings: Generation['settings']): ClozeSetting => ('cloze' in settings && settings.cloze) || 'off';
 /** Settings saved by 0.7.2 (state schema 5): compose was offered and constant
  *  values had a toggle. Kept for generation history and migration. */
 export interface V072GenerationSettings extends SettingsBase {
@@ -31,6 +42,9 @@ export interface SourceSnapshot {
 }
 export interface GenerationTask {
   requestId: string;
+  /** FI-8: the worker definition this task runs on. Absent on tasks saved by
+   *  0.9.0 and earlier, which all used manual-card-writer. */
+  definitionId?: string;
   taskId?: string;
   status: 'pending' | 'running' | 'applied' | 'failed' | 'cancelled' | 'interrupted';
   input: WriterInput;
@@ -76,7 +90,8 @@ function validBaseSettings(v: unknown): v is SettingsBase & Record<string, unkno
     && (v.model === null || object(v.model) && typeof v.model.provider === 'string' && !!v.model.provider && typeof v.model.id === 'string' && !!v.model.id);
 }
 export function validGenerationSettings(v: unknown): v is GenerationSettings {
-  return validBaseSettings(v) && distinctKinds(v.enabledKinds) && v.enabledKinds.every(isCoreKind) && !('constantValues' in v);
+  return validBaseSettings(v) && distinctKinds(v.enabledKinds) && v.enabledKinds.every(isCoreKind) && !('constantValues' in v)
+    && (v.cloze === undefined || CLOZE_SETTINGS.includes(v.cloze as ClozeSetting));
 }
 export function validV072GenerationSettings(v: unknown): v is V072GenerationSettings {
   return validBaseSettings(v) && distinctKinds(v.enabledKinds) && v.enabledKinds.every(k => isCoreKind(k) || k === 'compose') && typeof v.constantValues === 'boolean';
@@ -90,10 +105,10 @@ export function validSource(v: unknown): v is SourceSnapshot {
 const storedKinds = (v: unknown): v is StoredCardKind[] => distinctKinds(v) && v.every(isStoredKind);
 const nodeRef = (v: unknown): boolean => object(v) && ['id', 'name', 'statement'].every(k => typeof v[k] === 'string');
 function validWriterInput(v: unknown): v is WriterInput {
-  if (!object(v) || v.version !== 1 || !Number.isInteger(v.maxCardsPerNode) || Number(v.maxCardsPerNode) < 1 || Number(v.maxCardsPerNode) > 4 || !storedKinds(v.enabledKinds) || (v.constantValues !== undefined && typeof v.constantValues !== 'boolean') || !Array.isArray(v.targets) || !v.targets.length) return false;
+  if (!object(v) || v.version !== 1 || !Number.isInteger(v.maxCardsPerNode) || Number(v.maxCardsPerNode) < 1 || Number(v.maxCardsPerNode) > 4 || !storedKinds(v.enabledKinds) || (v.constantValues !== undefined && typeof v.constantValues !== 'boolean') || (v.cloze !== undefined && v.cloze !== 'auto' && v.cloze !== 'prefer') || !Array.isArray(v.targets) || !v.targets.length) return false;
   const ids = new Set<string>();
   return v.targets.every(t => {
-    if (!object(t) || typeof t.nodeId !== 'string' || !t.nodeId || ids.has(t.nodeId) || !['name', 'statement'].every(k => typeof t[k] === 'string') || !strings(t.aliases) || !Array.isArray(t.existingCards) || t.existingCards.some(c => !object(c) || !isStoredKind(c.kind) || typeof c.front !== 'string' || typeof c.back !== 'string') || !Array.isArray(t.neighbours) || !t.neighbours.every(nodeRef) || !Array.isArray(t.concludedBy) || t.concludedBy.some(c => !object(c) || typeof c.chainId !== 'string' || !Array.isArray(c.premises) || !c.premises.every(nodeRef)) || !Array.isArray(t.feeds) || t.feeds.some(c => !object(c) || typeof c.chainId !== 'string' || !nodeRef(c.conclusion) || !Array.isArray(c.withPremises) || !c.withPremises.every(nodeRef)) || !storedKinds(t.allowedKinds) || t.allowedKinds.some(k => !(v.enabledKinds as string[]).includes(k)) || (t.source !== undefined && typeof t.source !== 'string')) return false;
+    if (!object(t) || typeof t.nodeId !== 'string' || !t.nodeId || ids.has(t.nodeId) || !['name', 'statement'].every(k => typeof t[k] === 'string') || !strings(t.aliases) || !Array.isArray(t.existingCards) || t.existingCards.some(c => !object(c) || !isStoredKind(c.kind) || typeof c.front !== 'string' || typeof c.back !== 'string' || (c.format !== undefined && c.format !== 'basic' && c.format !== 'cloze')) || !Array.isArray(t.neighbours) || !t.neighbours.every(nodeRef) || !Array.isArray(t.concludedBy) || t.concludedBy.some(c => !object(c) || typeof c.chainId !== 'string' || !Array.isArray(c.premises) || !c.premises.every(nodeRef)) || !Array.isArray(t.feeds) || t.feeds.some(c => !object(c) || typeof c.chainId !== 'string' || !nodeRef(c.conclusion) || !Array.isArray(c.withPremises) || !c.withPremises.every(nodeRef)) || !storedKinds(t.allowedKinds) || t.allowedKinds.some(k => !(v.enabledKinds as string[]).includes(k)) || (t.source !== undefined && typeof t.source !== 'string')) return false;
     if ((t.flagged !== undefined && typeof t.flagged !== 'boolean') || (t.flagNote !== undefined && typeof t.flagNote !== 'string')
       || (t.flagged === true ? t.maxCards !== FLAGGED_CARD_CAP : t.maxCards !== undefined)) return false;
     ids.add(t.nodeId); return true;
@@ -104,7 +119,8 @@ function validResultShape(result: unknown, input: WriterInput): boolean {
   const ids = new Set(input.targets.map(t => t.nodeId));
   return result.targets.every(t => object(t) && typeof t.nodeId === 'string' && ids.has(t.nodeId) && Array.isArray(t.cards)
     && (t.skipReason === undefined || typeof t.skipReason === 'string')
-    && t.cards.every(c => object(c) && isStoredKind(c.kind) && typeof c.front === 'string' && typeof c.back === 'string' && (c.extra === undefined || typeof c.extra === 'string')));
+    && t.cards.every(c => object(c) && isStoredKind(c.kind) && typeof c.front === 'string' && typeof c.back === 'string' && (c.extra === undefined || typeof c.extra === 'string')
+      && (c.format === undefined || c.format === 'basic' || c.format === 'cloze')));
 }
 export function validateGenerations(settings: unknown, generations: unknown): void {
   if (!validGenerationSettings(settings) || !Array.isArray(generations)) throw new Error('Invalid generation state. The file has not been reset.');
@@ -117,7 +133,7 @@ export function validateGenerations(settings: unknown, generations: unknown): vo
     if (g.modelSpec === undefined && g.status === 'running' && !g.settings.model) throw new Error('Invalid generation model.');
     ids.add(g.id);
     for (const t of g.tasks) {
-      if (!object(t) || typeof t.requestId !== 'string' || !t.requestId || requests.has(t.requestId) || (t.taskId !== undefined && typeof t.taskId !== 'string') || !['pending', 'running', 'applied', 'failed', 'cancelled', 'interrupted'].includes(String(t.status)) || !validWriterInput(t.input) || !Array.isArray(t.sources) || !t.sources.every(validSource) || !Number.isSafeInteger(t.outputAllowance) || Number(t.outputAllowance) <= 0 || (t.error !== undefined && typeof t.error !== 'string') || (t.status === 'applied' && !object(t.result))) throw new Error('Invalid generation task.');
+      if (!object(t) || typeof t.requestId !== 'string' || !t.requestId || requests.has(t.requestId) || (t.taskId !== undefined && typeof t.taskId !== 'string') || (t.definitionId !== undefined && typeof t.definitionId !== 'string') || !['pending', 'running', 'applied', 'failed', 'cancelled', 'interrupted'].includes(String(t.status)) || !validWriterInput(t.input) || !Array.isArray(t.sources) || !t.sources.every(validSource) || !Number.isSafeInteger(t.outputAllowance) || Number(t.outputAllowance) <= 0 || (t.error !== undefined && typeof t.error !== 'string') || (t.status === 'applied' && !object(t.result))) throw new Error('Invalid generation task.');
       if (t.resultPending !== undefined && (t.resultPending !== true || t.status !== 'interrupted')) throw new Error('Invalid pending generation result.');
       if (t.duplicatesOmitted !== undefined && (t.status !== 'applied' || !Number.isSafeInteger(t.duplicatesOmitted) || Number(t.duplicatesOmitted) < 1)) throw new Error('Invalid duplicate omission count.');
       requests.add(t.requestId);

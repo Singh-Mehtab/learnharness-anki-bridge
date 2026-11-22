@@ -673,14 +673,14 @@ test('schema 7 records an existing note with unknown deck and preserves a 0.8.0 
     await f.service.close();
     await writeFile(stateFile, original);
     await f.reopen();
-    assert.deepEqual(f.store.snapshot(), { ...legacy, schemaVersion: 8 });
+    assert.deepEqual(f.store.snapshot(), { ...legacy, schemaVersion: 9 });
     assert.equal(await readFile(backup, 'utf8'), original);
 
     f.notes.push({ noteId: 500, fields: { LH_ID: imported }, deckName: 'Imported Deck', modelName: 'Imported Type', tags: [] });
     const result = await f.send([imported], 'Requested Deck');
     assert.deepEqual(result.delivery.found, [imported]);
     const persisted = JSON.parse(await readFile(stateFile, 'utf8')) as State;
-    assert.equal(persisted.schemaVersion, 8);
+    assert.equal(persisted.schemaVersion, 9);
     assert.deepEqual(persisted.cards[1], { ...legacy.cards[1], status: 'sent', noteId: 500, existingNote: true, presence: 'present', destination: legacy.destination });
     assert.throws(() => validateV080DeliveryContract(persisted), /Unsupported state format/);
     assert.throws(() => validateV080DeliveryContract({ ...persisted, schemaVersion: 6 }), /Missing delivery destination or deck/);

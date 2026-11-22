@@ -336,7 +336,7 @@ test('schema 1 state migrates without losing pairing or cards, and malformed gen
     assert.equal(snap.cards.length, 1); assert.equal(snap.destination.profile, 'Throwaway'); assert.deepEqual(snap.generations, []);
   } finally { await close(); }
   const saved = JSON.parse(await readFile(statePath(directory), 'utf8'));
-  assert.equal(saved.schemaVersion, 8);
+  assert.equal(saved.schemaVersion, 9);
   saved.generations = [{ id: 'g', bogus: true }];
   const broken = JSON.stringify(saved);
   await writeFile(statePath(directory), broken);
@@ -448,7 +448,7 @@ test('v5 (0.7.2) state drops the constants toggle and compose from settings only
   const c = host.context(directory), close = await activate(c.ctx);
   try {
     const saved = JSON.parse(await readFile(statePath(directory), 'utf8'));
-    assert.equal(saved.schemaVersion, 8);
+    assert.equal(saved.schemaVersion, 9);
     assert.equal(await readFile(path.join(directory, 'state.v5.bak'), 'utf8'), bytes);
     assert.deepEqual(saved.generationSettings, { cardsPerNode: 3, enabledKinds: ['fact', 'why'], model: oldSettings.model });
     assert.deepEqual(saved.generations[0].settings, oldSettings, 'history keeps what the batch was run with');
@@ -514,7 +514,7 @@ test('v4 backup and restart recover a frozen legacy worker without changing its 
     const c = host.context(directory), close = await activate(c.ctx);
     try {
       const saved = JSON.parse(await readFile(statePath(directory), 'utf8'));
-      assert.equal(saved.schemaVersion, 8);
+      assert.equal(saved.schemaVersion, 9);
       assert.equal(await readFile(path.join(directory, 'state.v4.bak'), 'utf8'), bytes);
       assert.deepEqual(saved.generationSettings, { cardsPerNode: 3, enabledKinds: ['fact', 'equation'], model: legacySettings.model });
       assert.deepEqual(saved.generations[0].settings, legacySettings);
