@@ -190,10 +190,18 @@ export class DeliveryService {
     const model = (n: unknown) => typeof n === 'object' && n !== null ? (n as { modelName?: unknown }).modelName : undefined;
     const has = (n: unknown, name: string) => Object.hasOwn(fields(n) ?? {}, name);
     const other = card.format === 'cloze' ? MODEL_NAME : CLOZE_MODEL_NAME;
-    const mismatch = notes.length !== found.length || notes.some((n, i) => {
-      if (typeof n !== 'object' || n === null || (n as { noteId?: unknown }).noteId !== found[i] || !fields(n)) return true;
+    // Missing or mismatched metadata is not proof of a conflict: recovery must
+    // remain unresolved until Anki provides reliable information (S10).
+    if (notes.length !== found.length || notes.some((n, i) =>
+      typeof n !== 'object' || n === null || (n as { noteId?: unknown }).noteId !== found[i] ||
+      typeof model(n) !== 'string' || !model(n) || !fields(n))) {
+      throw new Error('Cannot verify existing Anki note metadata. Check unconfirmed sends again.');
+    }
+    const mismatch = notes.some(n => {
       if (model(n) === other) return true;
-      return card.format === 'cloze' ? model(n) !== CLOZE_MODEL_NAME : has(n, 'Text') && !has(n, 'Front');
+      if (card.format === 'cloze') return model(n) !== CLOZE_MODEL_NAME;
+      // A renamed Basic is safe only if its fields unambiguously identify it (S9).
+      return model(n) !== MODEL_NAME && has(n, 'Text');
     });
     if (!mismatch) return false;
     const message = card.format === 'cloze'
