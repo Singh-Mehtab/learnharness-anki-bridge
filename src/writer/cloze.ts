@@ -6,7 +6,7 @@
 // markup itself, so it never has to find the end of a blank by counting braces.
 
 import { inlineSpans, renderMarkdown } from "../anki/render.ts";
-import { FORBIDDEN, answerSegments, givesAwayAnswer } from "./validate.ts";
+import { FORBIDDEN, givesAwayAnswer } from "./validate.ts";
 import { CLOZE_KINDS, type DraftCard } from "./types.ts";
 
 export const BLANK = "{{blank}}";
@@ -113,7 +113,8 @@ function mathBackLeaks(front: string, back: string): boolean {
   const target = normaliseTex(back);
   if (!target) return false;
   // \u0001 keeps the tokens either side of the blank from joining up.
-  const visible = answerSegments(front.replace(BLANK, "\u0001"));
+  const marked = front.replace(BLANK, "\u0001");
+  const visible = segments(marked).filter(s => !s.code).map(s => normaliseTex(marked.slice(s.start + s.open.length, s.end - s.close.length)));
   if (target.length >= 3) return visible.some((v) => v.includes(target));
   return visible.some((v) => v.split("\u0001").some((part) => part === target || part.split("=").some((side) => side === target)));
 }

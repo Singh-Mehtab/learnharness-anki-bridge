@@ -314,10 +314,8 @@ export class GenerationService {
         }
         if (!validGenerationSettings(settings)) throw new Error('Choose 1–4 cards per node, one or more available card types, a cloze setting, and a model, or null for the cheap model.');
         const before = activeCloze(this.store.snapshot().generationSettings);
-        await this.delivery.save(s => { s.generationSettings = settings; });
-        // A cloze change invalidates saved preflights outright, so switching back
-        // can't revive an estimate made before the change (round 1 S4).
-        if (activeCloze(settings) !== before) this.preflights.clear();
+        try { await this.delivery.save(s => { s.generationSettings = settings; }); }
+        finally { if (activeCloze(this.store.snapshot().generationSettings) !== before) this.preflights.clear(); }
       } else if (name === 'preflight') {
         keys(value, ['nodeIds', 'backfillNodeIds']);
         const ids = nodeIds(value.nodeIds); return this.preflight(ids, backfillIds(value.backfillNodeIds, ids));

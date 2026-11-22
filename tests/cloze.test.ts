@@ -167,3 +167,8 @@ test("round 1 S7: a line break anywhere in the hidden part is refused", () => {
     assert.ok(clozeProblems({ kind: "fact", format: "cloze", front: "The solvent is {{blank}} at this step.", back, extra: "" } as never).includes("the hidden part must be one line"), JSON.stringify(back));
   }
 });
+
+test("round 2 S8: currency before maths cannot hide a visible answer leak", () => {
+  const card = { kind: "fact", format: "cloze", front: "At $5, use $x = mc^2 = {{blank}}$.", back: "mc^2", extra: "" } as const;
+  assert.ok(clozeCardProblems(card as never).some(p => /gives the hidden part away/.test(p)));
+});

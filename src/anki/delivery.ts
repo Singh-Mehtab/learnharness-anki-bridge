@@ -190,10 +190,14 @@ export class DeliveryService {
     const model = (n: unknown) => typeof n === 'object' && n !== null ? (n as { modelName?: unknown }).modelName : undefined;
     const has = (n: unknown, name: string) => Object.hasOwn(fields(n) ?? {}, name);
     const other = card.format === 'cloze' ? MODEL_NAME : CLOZE_MODEL_NAME;
-    const mismatch = notes.some(n => model(n) === other || fields(n) && (card.format === 'cloze' ? !has(n, 'Text') : has(n, 'Text') && !has(n, 'Front')));
+    const mismatch = notes.length !== found.length || notes.some((n, i) => {
+      if (typeof n !== 'object' || n === null || (n as { noteId?: unknown }).noteId !== found[i] || !fields(n)) return true;
+      if (model(n) === other) return true;
+      return card.format === 'cloze' ? model(n) !== CLOZE_MODEL_NAME : has(n, 'Text') && !has(n, 'Front');
+    });
     if (!mismatch) return false;
     const message = card.format === 'cloze'
-      ? 'This card is already in Anki as a basic note. Delete that note in Anki or switch the card back to basic.'
+      ? notes.some(n => model(n) === MODEL_NAME) ? 'This card is already in Anki as a basic note. Delete that note in Anki or switch the card back to basic.' : 'Cannot verify that the existing Anki note is LearnHarness Cloze. Check its note type in Anki before retrying.'
       : 'This card is already in Anki as a cloze note. Delete that note in Anki or switch the card back to cloze.';
     await this.patchCard(card.id, { status: 'failed', lastError: message });
     return true;

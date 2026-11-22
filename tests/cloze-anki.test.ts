@@ -125,6 +125,8 @@ test('FI-8 (round 1, S1): a note of the other plugin type is refused even with a
     f.notes.push(structuredClone(existing));
     assert.deepEqual((await f.send([card])).delivery.failed, [card]);
     assert.match(f.store.snapshot().cards[0]!.lastError!, /already in Anki as a basic note/);
+    f.notes[0]!.modelName = 'Renamed Basic';
+    assert.deepEqual((await f.send([card])).delivery.failed, [card], 'an ambiguous renamed model must not be adopted as cloze');
     // An interrupted send whose LH_ID now finds the basic note is not marked as delivered.
     const state = structuredClone(f.store.snapshot());
     Object.assign(state.cards[0]!, { status: 'sending', destination: state.destination, deck: 'Scratch', lastError: undefined });
@@ -133,7 +135,7 @@ test('FI-8 (round 1, S1): a note of the other plugin type is refused even with a
     const saved = f.store.snapshot().cards[0]!;
     assert.equal(saved.status, 'failed');
     assert.equal(saved.noteId, undefined);
-    assert.match(saved.lastError!, /already in Anki as a basic note/);
+    assert.match(saved.lastError!, /Cannot verify/);
     assert.equal(f.calls.filter(c => c.action === 'addNote').length, 0);
   } finally { await f.close(); }
 });
