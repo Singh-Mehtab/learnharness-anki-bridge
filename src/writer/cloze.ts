@@ -6,7 +6,7 @@
 // markup itself, so it never has to find the end of a blank by counting braces.
 
 import { renderMarkdown } from "../anki/render.ts";
-import { answerSegments, givesAwayAnswer } from "./validate.ts";
+import { FORBIDDEN, answerSegments, givesAwayAnswer } from "./validate.ts";
 import { CLOZE_KINDS, type DraftCard } from "./types.ts";
 
 export const BLANK = "{{blank}}";
@@ -55,10 +55,32 @@ export function laidOutFront(front: string): string {
   const place = blankPlace(front);
   if (place?.where !== "math") return front;
   const { start, end, open, close } = place.segment;
+  if (!topLevel(front, start, end)) return front;
   const tex = front.slice(start + open.length, end - close.length).trim();
   const before = front.slice(0, start).trim();
   const after = front.slice(end).trim();
   return [before, `$$${tex}$$`, /^[\s.,;:!?]*$/.test(after) ? "" : after].filter(Boolean).join("\n\n");
+}
+
+/** True when the maths segment [start, end) renders at the top level of its
+ *  paragraph, so splitting the front around it cannot cut bold, a link or any
+ *  other inline element in half (spec S23). */
+function topLevel(front: string, start: number, end: number): boolean {
+  let html: string;
+  try { html = renderMarkdown(`${front.slice(0, start)}${OPEN}${front.slice(start, end)}${CLOSE}${front.slice(end)}`); }
+  catch { return false; }
+  const open = html.indexOf(OPEN);
+  const close = html.indexOf(CLOSE);
+  if (open < 0 || close < open) return false;
+  if (/<[a-z/]/i.test(html.slice(open, close))) return false;
+  const stack: string[] = [];
+  for (const m of html.slice(0, open).matchAll(/<(\/?)([a-z][a-z0-9]*)\b[^>]*>/gi)) {
+    const name = m[2]!.toLowerCase();
+    if (VOID.has(name)) continue;
+    if (!m[1]) stack.push(name);
+    else stack.pop();
+  }
+  return stack.length === 1 && stack[0] === "p";
 }
 
 /** Front as shown on the question side, for previews. */
@@ -116,6 +138,43 @@ function markerProblem(html: string): string | undefined {
   return undefined;
 }
 
+/** Maths spans in rendered HTML, after the renderer has normalised every
+ *  delimiter to \(...\) or \[...\]. */
+const RENDERED_MATH = /\\\([\s\S]*?\\\)|\\\[[\s\S]*?\\\]/g;
+
+/** C6 (S19): both markers inside one maths span, or both outside every span
+ *  with no span straddling either marker. */
+function spansProblem(html: string): string | undefined {
+  const open = html.indexOf(OPEN);
+  const close = html.indexOf(CLOSE);
+  for (const m of html.matchAll(RENDERED_MATH)) {
+    const start = m.index!;
+    const end = start + m[0].length;
+    const hasOpen = open > start && open < end;
+    const hasClose = close > start && close < end;
+    if (hasOpen !== hasClose) return "the blank splits a maths segment: hide a whole TeX expression, or put the blank wholly inside or outside the maths";
+  }
+  return undefined;
+}
+
+/** C2 content rule and C3-C8 for one cloze card, with the assembled forbidden-
+ *  content and Extra checks. One function for worker validation, result
+ *  application, manual creation and editing (C6). Messages are correction text. */
+export function clozeCardProblems(card: DraftCard): string[] {
+  const problems = clozeProblems(card);
+  // Front and back are checked assembled with maths skipped, so a TeX back such
+  // as n![z^n](1-z)^{-1} is not mistaken for a Markdown image.
+  const prose = assemble(card.front, card.back).replace(MATH_ONLY, " ");
+  for (const [pattern, label] of FORBIDDEN) {
+    if ([prose, card.extra ?? ""].some((f) => pattern.test(f))) problems.push(`${label} are not allowed`);
+  }
+  try { renderMarkdown(card.extra ?? "", { checkMath: true }); }
+  catch (error) { problems.push(error instanceof Error ? error.message : String(error)); }
+  return [...new Set(problems)];
+}
+
+const MATH_ONLY = /\\\[[\s\S]+?\\\]|\\\([^\n]+?\\\)|\$\$[\s\S]+?\$\$|\$[^$\n]+?\$/g;
+
 /** C2 content rule and C3-C8 for one cloze card. Messages are correction text. */
 export function clozeProblems(card: DraftCard): string[] {
   const problems: string[] = [];
@@ -160,7 +219,7 @@ export function clozeProblems(card: DraftCard): string[] {
     problems.push(error instanceof Error ? error.message : String(error));
     return problems;
   }
-  const marker = markerProblem(marked);
+  const marker = markerProblem(marked) ?? spansProblem(marked);
   if (marker) problems.push(marker);
   else if (marked.replace(/[\u0002\u0003]/g, "") !== plain) problems.push("the blank changes how the text is formatted; move it or reword");
   for (const m of plain.matchAll(/href="([^"]*)"/g)) {

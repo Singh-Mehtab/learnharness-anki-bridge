@@ -4,6 +4,7 @@ import {
   blankPlace,
   clozeLeaks,
   clozeProblems,
+  clozeCardProblems,
   clozeTextField,
   laidOutFront,
   questionPreview,
@@ -112,4 +113,25 @@ test("maths blanks are laid out as a lead-in and a display equation", () => {
   assert.equal(clozeTextField("In natural units with energy in eV, \\([t] = {{blank}}\\)", "\\mathrm{eV^{-1}}"),
     "<p>In natural units with energy in eV,</p>\n<p>\\[[t] = {{c1::\\mathrm{eV^{-1}<!-- -->}<!-- -->}}\\]</p>");
   assert.equal(questionPreview("Rest energy: \\(E_0 = {{blank}}\\)"), "Rest energy:\n\n$$E_0 = [...]$$");
+});
+
+test("an equation inside bold or a link stays inline (S23)", () => {
+  for (const front of ["In **SI units, \\([\\hbar] = {{blank}}\\)**.", "See [\\(E_0 = {{blank}}\\)](https://example.org)."]) {
+    assert.equal(laidOutFront(front), front);
+  }
+  const field = clozeTextField("In **SI units, \\([\\hbar] = {{blank}}\\)**.", "\\mathrm{J\\,s}");
+  assert.ok(!field.includes("<em></em>") && !field.includes("\\["), field);
+  assert.ok(field.includes("<strong>"), field);
+  ok("In **SI units, \\([\\hbar] = {{blank}}\\)**.", "\\mathrm{J\\,s}");
+});
+
+test("a blank that splits a maths segment is rejected (S19)", () => {
+  bad("Let {{blank}} + y$ denote the total.", "$x", /splits a maths segment/);
+  ok("Let {{blank}} denote the total.", "\\(x + y\\)");
+});
+
+test("assembled forbidden-content check skips maths (C6)", () => {
+  assert.deepEqual(clozeCardProblems(cloze("\\(a_n = {{blank}}\\)", "n![z^n](1-z)^{-1}")), []);
+  assert.ok(clozeCardProblems(cloze("See ![x](y.png) for {{blank}}.", "this")).some((p) => /images/.test(p)));
+  assert.ok(clozeCardProblems({ ...cloze("\\(E_0 = {{blank}}\\)", "mc^2"), extra: "```mermaid\ngraph\n```" }).some((p) => /Mermaid/i.test(p)));
 });

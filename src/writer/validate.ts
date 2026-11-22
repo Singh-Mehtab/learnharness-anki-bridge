@@ -10,11 +10,10 @@
 import { renderMarkdown } from "../anki/render.ts";
 import type { DraftCard, WriterInput, WriterTarget } from "./types.ts";
 import { capFor, kindMisfit } from "./kinds.ts";
-import { assemble, clozeProblems } from "./cloze.ts";
+import { clozeCardProblems } from "./cloze.ts";
 
 // Code blocks come first: dollars, backticks and LaTeX inside them are code.
 const FENCE = /^ {0,3}(`{3,}|~{3,})[^\n]*\n([\s\S]*?)^ {0,3}\1[ \t]*$/gm;
-const MATH_ONLY = /\\\[[\s\S]+?\\\]|\\\([^\n]+?\\\)|\$\$[\s\S]+?\$\$|\$[^$\n]+?\$/g;
 const SEGMENT = /\\\[[\s\S]+?\\\]|\\\([^\n]+?\\\)|\$\$[\s\S]+?\$\$|\$[^$\n]+?\$|`[^`\n]+`/g;
 
 /** Maths and code segments, normalised for comparison. */
@@ -71,7 +70,7 @@ export function containsName(front: string, name: string): boolean {
   return n.length > 0 && ` ${normalise(front)} `.includes(` ${n} `);
 }
 
-const FORBIDDEN: Array<[RegExp, string]> = [
+export const FORBIDDEN: Array<[RegExp, string]> = [
   [/!\[[^\]]*\]\(/, "images"],
   [/<img\b/i, "images"],
   [/\bmermaid\b/i, "Mermaid"],
@@ -97,14 +96,7 @@ export function cardProblems(card: DraftCard, target: WriterTarget, input: Write
   if (format !== undefined && format !== "basic" && format !== "cloze") problems.push(`${quote}: format must be "basic" or "cloze"`);
   if (format === "cloze") {
     if (!input.cloze) problems.push(`${quote}: cloze cards are off for this request; write a basic card`);
-    for (const p of clozeProblems(card)) problems.push(`${quote}: ${p}`);
-    // Front and back are checked assembled, maths skipped (C6); extra as usual.
-    const assembled = assemble(card.front, card.back).replace(MATH_ONLY, " ");
-    for (const [pattern, label] of FORBIDDEN) {
-      if ([assembled, card.extra ?? ""].some((f) => pattern.test(f))) problems.push(`${quote}: ${label} are not allowed`);
-    }
-    try { renderMarkdown(card.extra ?? "", { checkMath: true }); }
-    catch (error) { problems.push(`${quote}: ${error instanceof Error ? error.message : String(error)}`); }
+    for (const p of clozeCardProblems(card)) problems.push(`${quote}: ${p}`);
     return problems;
   }
   if (givesAwayAnswer(card.front, card.back)) {
