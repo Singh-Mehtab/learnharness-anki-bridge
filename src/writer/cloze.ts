@@ -5,7 +5,7 @@
 // {{blank}}, back is the hidden part. The plugin builds Anki's {{c1::...}}
 // markup itself, so it never has to find the end of a blank by counting braces.
 
-import { renderMarkdown } from "../anki/render.ts";
+import { inlineSpans, renderMarkdown } from "../anki/render.ts";
 import { FORBIDDEN, answerSegments, givesAwayAnswer } from "./validate.ts";
 import { CLOZE_KINDS, type DraftCard } from "./types.ts";
 
@@ -13,21 +13,13 @@ export const BLANK = "{{blank}}";
 const OPEN = "\u0002";
 const CLOSE = "\u0003";
 
-/** Inline maths ranges in a front: \(...\), \[...\], $$...$$, $...$. Code spans
- *  are skipped. Ranges are [start, end) over the whole segment with delimiters. */
+/** Maths and code ranges in a front, found by the renderer's own scanner so a
+ *  blank counts as maths exactly when Anki will show it as maths (round 1 S2:
+ *  "$5, use $x=..." is currency then maths, not one maths span). Ranges are
+ *  [start, end) over the whole segment with delimiters. */
 interface Segment { start: number; end: number; open: string; close: string; code?: boolean }
-const SEGMENT = /\\\[[\s\S]+?\\\]|\\\([^\n]+?\\\)|\$\$[\s\S]+?\$\$|\$[^$\n]+?\$|`[^`\n]+`/g;
 
-function segments(text: string): Segment[] {
-  const out: Segment[] = [];
-  for (const m of text.matchAll(SEGMENT)) {
-    const s = m[0];
-    const code = s.startsWith("`");
-    const open = code ? "`" : s.startsWith("\\") ? s.slice(0, 2) : s.startsWith("$$") ? "$$" : "$";
-    out.push({ start: m.index!, end: m.index! + s.length, open, close: code ? "`" : open === "\\(" ? "\\)" : open === "\\[" ? "\\]" : open, code });
-  }
-  return out;
-}
+const segments = (text: string): Segment[] => inlineSpans(text);
 
 export type BlankPlace = { where: "prose" } | { where: "math"; segment: Segment } | { where: "code" };
 
@@ -84,13 +76,14 @@ function topLevel(front: string, start: number, end: number): boolean {
 }
 
 /** Front as shown on the question side, for previews. */
-export const questionPreview = (front: string): string => laidOutFront(front).replace(BLANK, "[...]");
+export const questionPreview = (front: string): string => laidOutFront(front).split(BLANK).join("[...]");
 
 /** The answer side, for previews: the full text with the hidden part put back,
  *  bold when it sits in prose. Inside maths the raw TeX goes back in place. */
 export function answerPreview(front: string, back: string): string {
   const prose = blankPlace(front)?.where === "prose";
-  return laidOutFront(front).replace(BLANK, () => prose ? `**${back}**` : back);
+  // A draft mid-edit can hold more than one blank; the rest show as [...] (round 1 S6).
+  return laidOutFront(front).replace(BLANK, () => prose ? `**${back}**` : back).split(BLANK).join("[...]");
 }
 
 /** Basic to cloze (spec: Switching format): the old front becomes the text, to be
@@ -181,7 +174,11 @@ export function clozeCardProblems(card: DraftCard): string[] {
   const problems = clozeProblems(card);
   // Front and back are checked assembled with maths skipped, so a TeX back such
   // as n![z^n](1-z)^{-1} is not mistaken for a Markdown image.
-  const prose = assemble(card.front, card.back).replace(MATH_ONLY, " ");
+  const assembled = assemble(card.front, card.back);
+  let prose = "";
+  let at = 0;
+  for (const span of segments(assembled).filter((x) => !x.code)) { prose += `${assembled.slice(at, span.start)} `; at = span.end; }
+  prose += assembled.slice(at);
   for (const [pattern, label] of FORBIDDEN) {
     if ([prose, card.extra ?? ""].some((f) => pattern.test(f))) problems.push(`${label} are not allowed`);
   }
@@ -189,8 +186,6 @@ export function clozeCardProblems(card: DraftCard): string[] {
   catch (error) { problems.push(error instanceof Error ? error.message : String(error)); }
   return [...new Set(problems)];
 }
-
-const MATH_ONLY = /\\\[[\s\S]+?\\\]|\\\([^\n]+?\\\)|\$\$[\s\S]+?\$\$|\$[^$\n]+?\$/g;
 
 /** C2 content rule and C3-C8 for one cloze card. Messages are correction text. */
 export function clozeProblems(card: DraftCard): string[] {
@@ -204,7 +199,8 @@ export function clozeProblems(card: DraftCard): string[] {
   const count = front.split(BLANK).length - 1;
   if (count !== 1) { problems.push(`a cloze front must contain ${BLANK} exactly once (found ${count})`); return problems; }
   if (back.includes(BLANK) || (card.extra ?? "").includes(BLANK)) problems.push(`${BLANK} belongs only in the front`);
-  if (/\n/.test(back.trim())) problems.push("the hidden part must be one line");
+  // Untrimmed: a trailing line break would render as <br> inside the blank (round 1 S7).
+  if (/[\r\n]/.test(back)) problems.push("the hidden part must be one line");
   if (/^\s*(?:#{1,6}\s|[-+*]\s|\d+[.)]\s|```|~~~)/.test(back) || /\$\$|\\\[|\\\]/.test(back)) {
     problems.push("the hidden part must be inline text or inline maths, not a list, heading, code block or display maths");
   }

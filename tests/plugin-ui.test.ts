@@ -1006,8 +1006,9 @@ test("Download .apkg works unpaired, saves the package, keeps cards approved and
   URL.createObjectURL = (blob: Blob) => { const url = `blob:test/${blobs.size}`; blobs.set(url, blob); return url; };
   URL.revokeObjectURL = () => {};
   let failAfterCommit = false, exportCount = 0;
-  let markGate: Promise<void> | undefined;
+  let markGate: Promise<void> | undefined, exportGate: Promise<void> | undefined;
   const f = await setup({ state, handler: async (name, input) => {
+    if (name === "exportPackage" && exportGate) await exportGate;
     if (name === "exportPackage") return exportPackage(backend, input, 1_795_000_000_000 + 60_000 * exportCount++);
     if (name === "markImported" && markGate) await markGate;
     if (failAfterCommit && (name === "markImported" || name === "unmarkImported")) {
@@ -1068,6 +1069,19 @@ test("Download .apkg works unpaired, saves the package, keeps cards approved and
     assert.equal(f.calls.filter(c => c.name === "exportPackage").length, exportsBefore);
     assert.equal((f.review().querySelector('textarea[aria-label="Front"]') as unknown as HTMLTextAreaElement).value, "Unsaved change");
     f.button("Cancel", f.review()).click();
+    // Round 1 S3: an edit started while Download again's export runs stops the save.
+    let releaseExport!: () => void;
+    exportGate = new Promise<void>(resolve => { releaseExport = resolve; });
+    const savedBefore = saved.length;
+    f.button("Download again", panel).click(); await tick();
+    f.button("Edit", f.review().querySelector('.ab-card[data-card-id="0b6f7c1e-0000-4000-8000-00000000000a"]')!).click(); await tick();
+    releaseExport(); exportGate = undefined;
+    // Nothing is saved here, so wait for the message rather than for a file.
+    for (let i = 0; i < 400 && !/Save or cancel/.test(f.status() ?? ""); i++) await new Promise(resolve => setTimeout(resolve, 5));
+    await settle();
+    assert.equal(saved.length, savedBefore, "no file is saved while the card is being edited");
+    assert.match(f.status()!, /Save or cancel your edits before downloading these cards again/);
+    f.button("Cancel", f.review()).click(); await tick();
     failAfterCommit = true;
     let release!: () => void; markGate = new Promise(resolve => { release = resolve; });
     f.button("Mark as imported", panel).click();
@@ -1100,9 +1114,10 @@ test("Download .apkg works unpaired, saves the package, keeps cards approved and
     assert.equal(f.find("Undo", importedPanel), undefined);
     f.button("Download again", panel).click(); await settle(2);
     assert.equal(saved.length, 2);
-    assert.equal(f.calls.filter(c => c.name === "exportPackage").length, 2, "download again re-checks the cards through the backend");
+    // The third export is the successful re-check; the second was stopped by the edit above.
+    assert.equal(f.calls.filter(c => c.name === "exportPackage").length, 3, "download again re-checks the cards through the backend");
     const exports = f.calls.filter(c => c.name === "exportPackage");
-    assert.deepEqual(exports[1].input, exports[0].input, "the re-check repeats the original request, including the user's tags");
+    assert.deepEqual(exports[2].input, exports[0].input, "the re-check repeats the original request, including the user's tags");
     assert.deepEqual(saved[1], saved[0], "the original bytes are saved again");
     f.button("Download .apkg").click(); await settle();
     assert.equal(saved.length, 2, "a new export cannot replace the outstanding receipt");

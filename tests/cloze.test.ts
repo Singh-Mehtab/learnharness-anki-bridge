@@ -145,3 +145,25 @@ test("previews and the basic conversion used by the editor, Review and Topics", 
   assert.deepEqual(toBasic({ front: "In SI units, \\([\\hbar] = {{blank}}\\)", back: "\\mathrm{J\\,s}" }), { front: "In SI units, \\([\\hbar] = [...]\\)", back: "\\(\\mathrm{J\\,s}\\)" });
   assert.deepEqual(toBasic({ front: "femto- means {{blank}}.", back: "\\(10^{-15}\\)" }), { front: "femto- means [...].", back: "\\(10^{-15}\\)" });
 });
+
+test("round 1 S2: currency before inline maths does not hide a maths blank", () => {
+  const bad = { kind: "fact", format: "cloze", front: "At $5, use $x={{blank}}}$.", back: "\\frac{1}{2", extra: "" } as const;
+  assert.equal(blankPlace(bad.front)?.where, "math");
+  assert.ok(clozeCardProblems(bad as never).some((p) => /must balance/.test(p)), "unbalanced TeX is refused");
+  const good = { kind: "fact", format: "cloze", front: "At $5 each, use $x = {{blank}}$.", back: "\\frac{1}{2}", extra: "" } as const;
+  assert.deepEqual(clozeCardProblems(good as never), []);
+  assert.equal(laidOutFront(good.front), "At $5 each, use\n\n$$x = {{blank}}$$");
+  // A real span still classes a prose blank as prose.
+  assert.equal(blankPlace("Costs $5 or {{blank}} in total.")?.where, "prose");
+});
+
+test("round 1 S6: previews never show a second {{blank}} left mid-edit", () => {
+  assert.equal(questionPreview("A {{blank}} and {{blank}}."), "A [...] and [...].");
+  assert.equal(answerPreview("A {{blank}} and {{blank}}.", "x"), "A x and [...].", "not bold: with two blanks its place is unknown");
+});
+
+test("round 1 S7: a line break anywhere in the hidden part is refused", () => {
+  for (const back of ["water\n", "water\r", "wa\r\nter"]) {
+    assert.ok(clozeProblems({ kind: "fact", format: "cloze", front: "The solvent is {{blank}} at this step.", back, extra: "" } as never).includes("the hidden part must be one line"), JSON.stringify(back));
+  }
+});

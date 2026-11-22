@@ -115,6 +115,29 @@ test('FI-8: a cloze card whose LH_ID finds a basic note reports a conflict and s
   } finally { await f.close(); }
 });
 
+test('FI-8 (round 1, S1): a note of the other plugin type is refused even with added fields, and recovery checks too', async () => {
+  const f = await fixture();
+  try {
+    const card = await f.draft(HBAR);
+    await f.service.command('approve', { ids: [card] });
+    // LearnHarness Basic with a Text field added by hand is still a basic note.
+    const existing: Note = { noteId: 9, fields: { Front: '<p>old</p>', Back: 'x', Text: '', LH_ID: card }, deckName: 'Scratch', modelName: 'LearnHarness Basic', tags: [] };
+    f.notes.push(structuredClone(existing));
+    assert.deepEqual((await f.send([card])).delivery.failed, [card]);
+    assert.match(f.store.snapshot().cards[0]!.lastError!, /already in Anki as a basic note/);
+    // An interrupted send whose LH_ID now finds the basic note is not marked as delivered.
+    const state = structuredClone(f.store.snapshot());
+    Object.assign(state.cards[0]!, { status: 'sending', destination: state.destination, deck: 'Scratch', lastError: undefined });
+    await f.store.replace(state);
+    await f.service.command('reconcile');
+    const saved = f.store.snapshot().cards[0]!;
+    assert.equal(saved.status, 'failed');
+    assert.equal(saved.noteId, undefined);
+    assert.match(saved.lastError!, /already in Anki as a basic note/);
+    assert.equal(f.calls.filter(c => c.action === 'addNote').length, 0);
+  } finally { await f.close(); }
+});
+
 test('FI-8: Settings repair and styling actions take an explicit note type', async () => {
   const f = await fixture();
   try {

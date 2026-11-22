@@ -377,6 +377,9 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
       const fresh = await ctx.call<ExportResult>("exportPackage", { ids: result.ids, deck: result.deck, tags: result.requestTags });
       if (!alive()) return;
       if (fresh.fingerprints.join() !== result.fingerprints.join()) throw new Error("These cards changed after the download. Dismiss this receipt and download again");
+      // An edit or format switch started while the export ran would make the file
+      // differ from the editor (round 1 S3).
+      if (result.ids.some(id => editing.has(id))) { feedback.show("Save or cancel your edits before downloading these cards again.", "error"); return; }
       saveFile(result.fileName, bytes);
     } catch (error) {
       if (!alive()) return;
@@ -391,6 +394,8 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
     const requestTags = validateTags(tagList());
     const result: PackageResult = { ...await ctx.call<ExportResult>("exportPackage", { ids, deck: deckName(), tags: requestTags }), requestTags };
     if (!alive()) return "";
+    // Checked again after the export, in case an edit started while it ran (round 1 S3).
+    if (result.ids.some(id => editing.has(id))) throw new Error("Save or cancel your edits first.");
     const bytes = base64Bytes(result.data);
     saveFile(result.fileName, bytes);
     showDownloaded(result, bytes);

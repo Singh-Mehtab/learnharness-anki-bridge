@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { AnkiClient, AnkiError, normalizeUrl } from './client.ts';
 import { noteFields, packageFingerprint } from './apkg.ts';
-import { ensureNoteType, noteTypeFor, noteTypeInput, repairFields, updateStyling } from './note-type.ts';
+import { CLOZE_MODEL_NAME, MODEL_NAME, ensureNoteType, noteTypeFor, noteTypeInput, repairFields, updateStyling } from './note-type.ts';
 import type { NoteTypeSpec } from './note-type.ts';
 import { clozeCardProblems } from '../writer/cloze.ts';
 import { renderMarkdown } from './render.ts';
@@ -182,11 +182,15 @@ export class DeliveryService {
     const notes = await client.call<unknown>('notesInfo', { notes: found });
     await this.destination(client);
     if (!Array.isArray(notes)) throw new Error('Invalid notesInfo response.');
-    // A cloze card needs a Text field. A basic card is refused only when the note is
-    // plainly cloze (Text and no Front), so basic adoption behaves as in 0.9.0.
+    // A note of the other plugin type is always refused, whatever fields were added to
+    // it (S1, round 1). Otherwise a cloze card needs a Text field, and a basic card is
+    // refused only when the note is plainly cloze (Text and no Front), so basic
+    // adoption behaves as in 0.9.0.
     const fields = (n: unknown): object | undefined => typeof n === 'object' && n !== null && typeof (n as { fields?: unknown }).fields === 'object' && (n as { fields: object | null }).fields || undefined;
+    const model = (n: unknown) => typeof n === 'object' && n !== null ? (n as { modelName?: unknown }).modelName : undefined;
     const has = (n: unknown, name: string) => Object.hasOwn(fields(n) ?? {}, name);
-    const mismatch = notes.some(n => fields(n) && (card.format === 'cloze' ? !has(n, 'Text') : has(n, 'Text') && !has(n, 'Front')));
+    const other = card.format === 'cloze' ? MODEL_NAME : CLOZE_MODEL_NAME;
+    const mismatch = notes.some(n => model(n) === other || fields(n) && (card.format === 'cloze' ? !has(n, 'Text') : has(n, 'Text') && !has(n, 'Front')));
     if (!mismatch) return false;
     const message = card.format === 'cloze'
       ? 'This card is already in Anki as a basic note. Delete that note in Anki or switch the card back to basic.'
@@ -198,6 +202,8 @@ export class DeliveryService {
     const matched: string[] = [];
     for (const card of this.store.snapshot().cards.filter(c => c.status === 'sending')) {
       const found = await this.find(client, card, destination);
+      // Recovery adopts through the same note type check as a send (S1, round 1).
+      if (found.length && await this.formatConflict(client, card, found)) continue;
       if (found.length) { await this.recordFound(card.id, found, destination); matched.push(card.id); }
       else await this.patchCard(card.id, { status: 'failed', lastError: 'No note found for the interrupted send. You can retry this card.' });
     }

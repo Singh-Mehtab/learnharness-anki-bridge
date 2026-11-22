@@ -766,7 +766,11 @@ test('FI-8: Off uses the unchanged basic writer; auto and prefer use the cloze w
     // The default is auto: the cloze writer, sized from its own instructions.
     const auto = await c.call('preflight', { nodeIds: ['n_a'] });
     await c.call('generationSettings', { cloze: 'off' });
-    await assert.rejects(c.call('generate', { preflightId: auto.preflightId }), /stale/);
+    await assert.rejects(c.call('generate', { preflightId: auto.preflightId }), /stale|expired/);
+    // Round 1 S4: switching back doesn't revive the earlier estimate.
+    await c.call('generationSettings', { cloze: 'auto' });
+    await assert.rejects(c.call('generate', { preflightId: auto.preflightId }), /expired/);
+    await c.call('generationSettings', { cloze: 'off' });
     const off = await c.call('preflight', { nodeIds: ['n_a'] });
     assert.ok(auto.inputTokens > off.inputTokens, `${auto.inputTokens} > ${off.inputTokens}`);
     await c.call('generate', { preflightId: off.preflightId });

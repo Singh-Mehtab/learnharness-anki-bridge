@@ -42,6 +42,49 @@ function math(text: string, index: number): { html: string; end: number } | unde
   return { html: `${display ? "\\[" : "\\("}${escapeHtml(content)}${display ? "\\]" : "\\)"}`, end: end + close.length };
 }
 
+/** Code and maths spans of one line of Markdown, as the renderer finds them, with
+ *  offsets into `source`. Used by the cloze checks so that a blank is classed as
+ *  maths exactly when the renderer will treat it as maths (FI-8, round 1 S2). */
+export function inlineSpans(source: string): { start: number; end: number; open: string; close: string; code: boolean }[] {
+  const spans: { start: number; end: number; open: string; close: string; code: boolean }[] = [];
+  // The first pass mirrors inline(): escapes are copied and code spans protected.
+  // Code is replaced by \0 of the same length, so offsets stay the same and maths
+  // can't cross it (math() rejects content with \0, as it does the real tokens).
+  const text = source.replace(/\0/g, "\uFFFD");
+  let masked = "";
+  for (let index = 0; index < text.length;) {
+    if (text[index] === "\\" && index + 1 < text.length) { masked += text.slice(index, index + 2); index += 2; continue; }
+    if (text[index] === "`") {
+      const run = /^`+/.exec(text.slice(index))![0];
+      let end = index + run.length;
+      while ((end = text.indexOf(run, end)) !== -1) {
+        if (text[end - 1] !== "`" && text[end + run.length] !== "`") break;
+        end += run.length;
+      }
+      if (end !== -1) {
+        spans.push({ start: index, end: end + run.length, open: run, close: run, code: true });
+        masked += "\0".repeat(end + run.length - index);
+        index = end + run.length;
+        continue;
+      }
+    }
+    masked += text[index++];
+  }
+  for (let index = 0; index < masked.length;) {
+    let tex: ReturnType<typeof math>;
+    try { tex = math(masked, index); } catch { tex = undefined; }
+    if (tex) {
+      const open = /^(?:\\\[|\\\(|\$\$|\$)/.exec(masked.slice(index))![0];
+      const close = open === "\\[" ? "\\]" : open === "\\(" ? "\\)" : open;
+      spans.push({ start: index, end: tex.end, open, close, code: false });
+      index = tex.end; continue;
+    }
+    if (masked[index] === "\\" && /[\\`*_{}\[\]()#+\-.!$>]/.test(masked[index + 1] ?? "")) { index += 2; continue; }
+    index++;
+  }
+  return spans.sort((a, b) => a.start - b.start);
+}
+
 function inline(source: string, checkMath: boolean): string {
   const tokens: string[] = [];
   const protect = (html: string) => `\0${tokens.push(html) - 1}\0`;

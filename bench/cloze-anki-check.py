@@ -17,9 +17,11 @@ rows = json.load(open(sys.argv[1]))
 col = Collection(os.path.join(tempfile.mkdtemp(), "check.anki2"))
 model = col.models.by_name("Cloze")
 deck = col.decks.id("Check")
-failed = 0
+failed = skipped = 0
 for row in rows:
     if row["text"] is None:
+        # A row the validator refused never reached Anki, so it is not a pass.
+        skipped += 1
         print(f"SKIP {row['id']}: validator problems: {row['problems']}")
         continue
     note = col.new_note(model)
@@ -42,5 +44,5 @@ for row in rows:
         print(f"FAIL {row['id']}\n  field: {row['text']}\n  " + "\n  ".join(problems))
     else:
         print(f"ok   {row['id']}")
-print(f"{len(rows) - failed}/{len(rows)} ok")
-sys.exit(1 if failed else 0)
+print(f"{len(rows) - failed - skipped}/{len(rows)} ok" + (f", {skipped} skipped" if skipped else ""))
+sys.exit(1 if failed or skipped else 0)
