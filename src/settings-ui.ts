@@ -36,6 +36,7 @@ interface SettingsSnapshot { settings: Settings; destination: Destination | null
 
 export function mountSettings(ctx: PluginFrontendContext, container: HTMLElement, signal: AbortSignal, peers: Peers): () => void {
   const root = el("div", undefined, "anki-bridge ab-settings");
+  root.append(el("span", `Version ${ctx.manifest.version}`, "ab-muted"));
   container.append(root);
   let state: SettingsSnapshot | undefined;
   let disposed = false, busy = false, tagsQueued = false, loads = 0;
