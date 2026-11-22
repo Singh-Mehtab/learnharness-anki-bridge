@@ -40,6 +40,7 @@
   .card[data-verdict="drop"] { background: #f9ece9; }
   .kind { display: inline-block; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; padding: 1px 7px; border-radius: 10px; background: #e7e2d8; color: #4d4740; margin-right: 6px; }
   .kind.trial { background: #e3e9f4; color: var(--accent); }
+  .kind.cloze { background: #f1e4f4; color: #6b2f7a; }
   .warn { font-size: 11px; color: var(--drop); font-weight: 600; margin-left: 6px; }
   .label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; margin-top: 8px; }
   .front { font-size: 15.5px; margin-top: 4px; }
@@ -83,7 +84,7 @@
 <main>
   <p class="help">
     For each card: <b>keep</b> (send as is), <b>small edit</b> (a word or two), <b>big edit</b> (rewrite needed), <b>drop</b>.
-    Tick <b>leak</b> if the front gives the answer away, <b>error</b> if anything on the card is wrong, <b>unclear</b> if the front could fairly have another answer.
+    Tick <b>leak</b> if the front gives the answer away, <b>error</b> if anything on the card is wrong, <b>unclear</b> if the front could fairly have another answer. On fact and equation cards, tick <b>→ cloze</b> or <b>→ basic</b> (key <kbd>o</kbd>) if the card should have been the other format.
     Keys: click a card, then <kbd>1</kbd>–<kbd>4</kbd> for the verdict (moves to the next card), <kbd>L</kbd> <kbd>E</kbd> <kbd>U</kbd> toggle flags, <kbd>J</kbd>/<kbd>K</kbd> move.
     Word counts over the targets (front 30, back 15) show in amber. Scores save as you go.
   </p>
@@ -115,6 +116,18 @@ function md(text) {
   return s.replace(/\u0000(\d+)\u0000/g, (_, i) => keep[Number(i)]);
 }
 
+// FI-8 cloze cards: front holds {{blank}}; back is the hidden part, raw TeX
+// when the blank sits inside maths.
+const BLANK = "{{blank}}";
+const CLOZE_KINDS = new Set(["fact", "equation"]);
+function blankInMath(front) {
+  const before = front.slice(0, front.indexOf(BLANK));
+  return (before.split("\\(").length - before.split("\\)").length) > 0;
+}
+function clozeBack(card) {
+  const hidden = blankInMath(card.front) ? `\\(${card.back}\\)` : card.back;
+  return `${md(card.front.replace(BLANK, card.back))}<div class="label">Hidden part</div>${md(hidden)}`;
+}
 function words(n, target) { return n > target ? `<span class="long">${n}</span>` : `${n}`; }
 
 function save(entry) {
@@ -155,11 +168,12 @@ function cardEl(entry, card, sourceText) {
   el.innerHTML = `
     <div>
       <span class="kind ${TRIAL.has(card.kind) ? "trial" : ""}">${esc(card.kind)}</span>
+      ${card.format === "cloze" ? '<span class="kind cloze">cloze</span>' : ""}
       ${card.unvalidated ? '<span class="warn">failed validation after retries</span>' : ""}
       <span class="words">front ${words(card.frontWords, 30)} · back ${words(card.backWords, 15)} words</span>
-      <div class="front">${md(card.front)}</div>
-      <div class="label">Back</div>
-      <div class="back ${document.getElementById("hide").checked ? "hidden" : ""}">${md(card.back)}</div>
+      <div class="front">${md(card.format === "cloze" ? card.front.replace(BLANK, "[...]") : card.front)}</div>
+      <div class="label">${card.format === "cloze" ? "Revealed (hidden part below)" : "Back"}</div>
+      <div class="back ${document.getElementById("hide").checked ? "hidden" : ""}">${card.format === "cloze" ? clozeBack(card) : md(card.back)}</div>
       ${card.extra ? `<div class="label">Extra</div><div class="extra">${md(card.extra)}</div>` : ""}
     </div>
     <div class="controls">
@@ -168,6 +182,7 @@ function cardEl(entry, card, sourceText) {
         <label><input type="checkbox" data-f="leak" ${sc.leak ? "checked" : ""}>leak</label>
         <label><input type="checkbox" data-f="error" ${sc.error ? "checked" : ""}>error</label>
         <label><input type="checkbox" data-f="unclear" ${sc.unclear ? "checked" : ""}>unclear</label>
+        ${CLOZE_KINDS.has(card.kind) ? `<label title="should have been ${card.format === "cloze" ? "basic" : "cloze"}"><input type="checkbox" data-f="otherFormat" ${sc.otherFormat ? "checked" : ""}>${card.format === "cloze" ? "→ basic" : "→ cloze"}</label>` : ""}
       </div>
       <input type="text" placeholder="note (optional)" value="${esc(sc.note ?? "")}">
     </div>`;
@@ -246,6 +261,7 @@ document.addEventListener("keydown", (ev) => {
   else if (focusEl && ev.key === "l") focusEl._flag("leak");
   else if (focusEl && ev.key === "e") focusEl._flag("error");
   else if (focusEl && ev.key === "u") focusEl._flag("unclear");
+  else if (focusEl && ev.key === "o" && focusEl.querySelector('[data-f="otherFormat"]')) focusEl._flag("otherFormat");
   else return;
   ev.preventDefault();
 });

@@ -3,7 +3,9 @@
 
 import { CORE_KINDS, type CardKind } from "./types.ts";
 
-export function resultSchemaFor(kinds: readonly CardKind[] = CORE_KINDS) {
+/** cloze: the FI-8 cloze writer's schema, whose cards may carry a format.
+ *  Without it the schema is exactly the basic writer's. */
+export function resultSchemaFor(kinds: readonly CardKind[] = CORE_KINDS, options: { cloze?: boolean } = {}) {
   return {
     type: "object",
     additionalProperties: false,
@@ -26,6 +28,7 @@ export function resultSchemaFor(kinds: readonly CardKind[] = CORE_KINDS) {
                 required: ["kind", "front", "back"],
                 properties: {
                   kind: { type: "string", enum: [...kinds] },
+                  ...(options.cloze ? { format: { type: "string", enum: ["basic", "cloze"], description: "Omit or basic for a question card; cloze for a statement whose front holds {{blank}}." } } : {}),
                   front: { type: "string", minLength: 1 },
                   back: { type: "string", minLength: 1 },
                   extra: { type: "string" },

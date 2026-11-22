@@ -10,9 +10,11 @@
 import { renderMarkdown } from "../anki/render.ts";
 import type { DraftCard, WriterInput, WriterTarget } from "./types.ts";
 import { capFor, kindMisfit } from "./kinds.ts";
+import { assemble, clozeProblems } from "./cloze.ts";
 
 // Code blocks come first: dollars, backticks and LaTeX inside them are code.
 const FENCE = /^ {0,3}(`{3,}|~{3,})[^\n]*\n([\s\S]*?)^ {0,3}\1[ \t]*$/gm;
+const MATH_ONLY = /\\\[[\s\S]+?\\\]|\\\([^\n]+?\\\)|\$\$[\s\S]+?\$\$|\$[^$\n]+?\$/g;
 const SEGMENT = /\\\[[\s\S]+?\\\]|\\\([^\n]+?\\\)|\$\$[\s\S]+?\$\$|\$[^$\n]+?\$|`[^`\n]+`/g;
 
 /** Maths and code segments, normalised for comparison. */
@@ -89,6 +91,22 @@ export function cardProblems(card: DraftCard, target: WriterTarget, input: Write
   if (blankFront) problems.push("a card has a blank front");
   if (blankBack) problems.push(`${quote}: blank back`);
   if (blankFront || blankBack) return problems;
+  // FI-8: C1 format value, C2a mode gate (writer output only), then the cloze
+  // content checks, which replace the standalone front/back checks below.
+  const format = (card as { format?: unknown }).format;
+  if (format !== undefined && format !== "basic" && format !== "cloze") problems.push(`${quote}: format must be "basic" or "cloze"`);
+  if (format === "cloze") {
+    if (!input.cloze) problems.push(`${quote}: cloze cards are off for this request; write a basic card`);
+    for (const p of clozeProblems(card)) problems.push(`${quote}: ${p}`);
+    // Front and back are checked assembled, maths skipped (C6); extra as usual.
+    const assembled = assemble(card.front, card.back).replace(MATH_ONLY, " ");
+    for (const [pattern, label] of FORBIDDEN) {
+      if ([assembled, card.extra ?? ""].some((f) => pattern.test(f))) problems.push(`${quote}: ${label} are not allowed`);
+    }
+    try { renderMarkdown(card.extra ?? "", { checkMath: true }); }
+    catch (error) { problems.push(`${quote}: ${error instanceof Error ? error.message : String(error)}`); }
+    return problems;
+  }
   if (givesAwayAnswer(card.front, card.back)) {
     problems.push(`${quote}: the front gives the answer away (every key term of the back is already on the front)`);
   }
@@ -142,7 +160,7 @@ export function findProblems(result: unknown, input: WriterInput): string[] {
       if (typeof card.front === "string" && card.front.trim()) {
         // Same front or answer alone is not proof of a duplicate. Earlier
         // requests are handled independently at apply time against live cards.
-        const key = JSON.stringify([card.kind, card.front, card.back, card.extra ?? ""]);
+        const key = JSON.stringify([card.kind, card.format ?? "basic", card.front, card.back, card.extra ?? ""]);
         if (seenCards.has(key)) problems.push(`Target ${nodeId}: repeats a card in this result: "${card.front.slice(0, 60)}".`);
         seenCards.add(key);
       }
