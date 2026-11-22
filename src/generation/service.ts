@@ -9,16 +9,29 @@ import { pack, sourcePassage, estimateTokens, targetsAllowance } from '../writer
 import { writerInstructions, writerPrompt } from '../writer/prompt.ts';
 import { resultSchemaFor } from '../writer/schema.ts';
 import { validateResult } from '../writer/validate.ts';
+import { clozeCardProblems } from '../writer/cloze.ts';
 import { capFor } from '../writer/kinds.ts';
 import { CORE_KINDS, isCoreKind, isStoredKind } from '../writer/types.ts';
 import type { Batch } from '../writer/input.ts';
 import type { WriterInput, WriterResult } from '../writer/types.ts';
-import { validGenerationSettings } from './types.ts';
+import { activeCloze, validGenerationSettings } from './types.ts';
 import type { Generation, GenerationSettings, GenerationTask, SourceSnapshot } from './types.ts';
 import { graphCoverage, statementHash } from '../coverage/service.ts';
 import { MAX_SELECTED_NODES } from '../coverage/flow.ts';
 
 const WORKER = 'manual-card-writer';
+/** FI-8: the cloze-enabled writer, for auto and prefer. WORKER stays byte-identical
+ *  to 0.9.0 and serves Off mode and every task saved before cloze. */
+const CLOZE_WORKER = 'manual-card-writer-cloze';
+type Definition = typeof WORKER | typeof CLOZE_WORKER;
+const definitionFor = (input: WriterInput): Definition => input.cloze ? CLOZE_WORKER : WORKER;
+/** Instructions and schema per definition, built once. */
+const definitions = (): Record<Definition, { instructions: string; resultSchema: unknown }> => ({
+  [WORKER]: { instructions: writerInstructions(), resultSchema: resultSchemaFor() },
+  [CLOZE_WORKER]: { instructions: writerInstructions({ cloze: true }), resultSchema: resultSchemaFor(undefined, { cloze: true }) },
+});
+/** A task saved by 0.9.0 or earlier has no definitionId: it ran on WORKER. */
+const taskDefinition = (t: GenerationTask): string => t.definitionId ?? WORKER;
 const digest = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const errorText = (e: unknown) => e instanceof Error ? e.message : String(e);
 class ResultSavePending extends Error {}
@@ -83,10 +96,13 @@ export class GenerationService {
   }
   async activate(): Promise<void> {
     this.active();
-    this.unregister = this.ctx.workers.register({ id: WORKER, instructions: writerInstructions(),
-      resultSchema: resultSchemaFor() as unknown as Parameters<PluginBackendContext['workers']['register']>[0]['resultSchema'],
+    const defs = definitions();
+    const unregister = (Object.keys(defs) as Definition[]).map(id => this.ctx.workers.register({ id, instructions: defs[id].instructions,
+      resultSchema: defs[id].resultSchema as Parameters<PluginBackendContext['workers']['register']>[0]['resultSchema'],
+      // Both validate against the task input: without a cloze mode, a cloze card is rejected (C2a).
       validateResult: (result, context) => validateResult(result, context),
-    });
+    }));
+    this.unregister = () => { for (const u of unregister) u(); };
     await this.delivery.exclusive(async () => {
       // A result-save retry can commit its tasks before the separate finish write.
       for (const g of this.store.snapshot().generations.filter(g => g.status === 'running' || g.tasks.some(t => t.resultPending)
@@ -105,7 +121,7 @@ export class GenerationService {
   }
   private findWorker(t: GenerationTask): PluginTaskSnapshot | undefined {
     const w = this.ctx.workers.list().find(w => w.requestId === t.requestId);
-    if (!w || w.definitionId !== WORKER || digest(w.input) !== digest(t.input)) return undefined;
+    if (!w || w.definitionId !== taskDefinition(t) || digest(w.input) !== digest(t.input)) return undefined;
     return w;
   }
   private generation(id: unknown): Generation {
@@ -143,10 +159,15 @@ export class GenerationService {
     const task = this.generation(id).tasks.find(t => t.requestId === requestId)!;
     if (task.status === 'applied') return;
     try {
-      if (worker.status !== 'succeeded' || worker.requestId !== requestId || worker.definitionId !== WORKER || digest(worker.input) !== digest(task.input)) throw new Error('Worker identity or input does not match this generation.');
+      if (worker.status !== 'succeeded' || worker.requestId !== requestId || worker.definitionId !== taskDefinition(task) || digest(worker.input) !== digest(task.input)) throw new Error('Worker identity or input does not match this generation.');
       validateResult(worker.result, { input: task.input });
       const result = worker.result as WriterResult;
-      for (const target of result.targets) for (const c of target.cards) { renderMarkdown(c.front); renderMarkdown(c.back); renderMarkdown(c.extra ?? ''); }
+      for (const target of result.targets) for (const c of target.cards) {
+        // A cloze back can be raw TeX, so cloze cards get the assembled check instead (C6).
+        if (c.format === 'cloze') { const problems = clozeCardProblems(c); if (problems.length) throw new Error(problems.join(' ')); }
+        else { renderMarkdown(c.front); renderMarkdown(c.back); }
+        renderMarkdown(c.extra ?? '');
+      }
     } catch (error) {
       await this.patch(id, requestId, { status: 'failed', resultPending: undefined, error: errorText(error) });
       return;
@@ -157,8 +178,8 @@ export class GenerationService {
     const currentHashes = new Map<string, string>();
     try { for (const n of this.ctx.learning.graph().propositions) currentHashes.set(n.id, statementHash(n.statement)); }
     catch { /* An unavailable graph prevents duplicate suppression, not recovery of valid cards. */ }
-    const contentKey = (c: { kind: string; front: string; back: string; extra?: string }) =>
-      JSON.stringify([c.kind, c.front, c.back, c.extra ?? '']);
+    const contentKey = (c: { kind: string; format?: string; front: string; back: string; extra?: string }) =>
+      JSON.stringify([c.kind, c.format ?? 'basic', c.front, c.back, c.extra ?? '']);
     // Cards, omissions and the unfiltered worker result share one commit.
     await this.delivery.save(s => {
       const stored = s.generations.find(g => g.id === id)!.tasks.find(t => t.requestId === requestId)!;
@@ -185,7 +206,7 @@ export class GenerationService {
           }
           s.cards.push({ id: randomUUID(), nodeId: source.nodeId, nodeName: source.name,
             sessionId: source.sessionId, sessionName: source.sessionName, statementHash: source.statementHash,
-            sourceSnapshot: source, generationId: id, requestId, kind: c.kind,
+            sourceSnapshot: source, generationId: id, requestId, kind: c.kind, ...(c.format === 'cloze' ? { format: 'cloze' as const } : {}),
             front: c.front, back: c.back, extra: c.extra ?? '', status: 'draft' });
         }
       }
@@ -196,7 +217,9 @@ export class GenerationService {
 
   private async prepare(ids: string[], backfillNodeIds: string[]): Promise<Prepared> {
     this.active();
-    const settings = this.store.snapshot().generationSettings;
+    // History stores the resolved mode, so a later default change can't rewrite it.
+    const stored = this.store.snapshot().generationSettings, mode = activeCloze(stored);
+    const settings: GenerationSettings = { ...stored, cloze: mode };
     const catalog = await this.ctx.inference.catalog();
     this.active();
     // Like core Flashcards: follow the host's cheap slot unless the learner overrides it.
@@ -227,14 +250,18 @@ export class GenerationService {
     }
     const notes = this.flagNotes?.();
     const packed = pack(graph, ids, id => ({ source: sources.find(s => s.nodeId === id)?.source, flagged: notes?.has(id), flagNote: notes?.get(id) || undefined,
-      existingCards: cards.filter(c => c.nodeId === id).reverse().slice(0, 6).map(c => ({ kind: c.kind, front: c.front, back: c.back })) }),
+      existingCards: cards.filter(c => c.nodeId === id).reverse().slice(0, 6).map(c => c.format !== 'cloze' ? { kind: c.kind, front: c.front, back: c.back }
+        // Off mode's writer doesn't know the placeholder, so it sees the blank as [...].
+        : mode === 'off' ? { kind: c.kind, front: c.front.replace('{{blank}}', '[...]'), back: c.back } : { kind: c.kind, front: c.front, back: c.back, format: 'cloze' as const }) }),
     { maxCardsPerNode: settings.cardsPerNode, enabledKinds: settings.enabledKinds, contextWindow: model.contextWindow, maxTokens: model.maxTokens });
     const batches: Batch[] = [], skipped = [...packed.skipped];
     // The pure packer budgets source material. Also account for prompt/schema overhead
     // and the growing output reserve when the selected model has known limits.
-    const overhead = estimateTokens(writerInstructions() + JSON.stringify(resultSchemaFor()));
+    // Preflight sizes the definition the task will start on (FI-8).
+    const definition = definitions()[mode === 'off' ? WORKER : CLOZE_WORKER];
+    const overhead = estimateTokens(definition.instructions + JSON.stringify(definition.resultSchema));
     for (const original of packed.batches) {
-      let current: WriterInput = { ...original.input, targets: [] };
+      let current: WriterInput = { ...original.input, ...(mode === 'off' ? {} : { cloze: mode }), targets: [] };
       const batch = (input: WriterInput): Batch => ({ input, inputTokens: estimateTokens(writerPrompt(input)) + overhead, outputAllowance: targetsAllowance(input.targets, settings.cardsPerNode) });
       const fits = (b: Batch) => (model.contextWindow === null || b.inputTokens + b.outputAllowance <= model.contextWindow) && (model.maxTokens === null || b.outputAllowance <= model.maxTokens);
       for (const target of original.input.targets) {
@@ -275,7 +302,7 @@ export class GenerationService {
         return { ...graphCoverage(this.ctx.learning.graph(), this.store.snapshot()), catalog };
       }
       if (name === 'generationSettings') {
-        keys(value, ['cardsPerNode', 'enabledKinds', 'model', 'toggleKind']);
+        keys(value, ['cardsPerNode', 'enabledKinds', 'model', 'toggleKind', 'cloze']);
         const { toggleKind, ...patch } = value;
         const settings = { ...this.store.snapshot().generationSettings, ...patch };
         if (toggleKind !== undefined) {
@@ -285,7 +312,7 @@ export class GenerationService {
           settings.enabledKinds = CORE_KINDS.filter(k => k === t.kind ? t.enabled : settings.enabledKinds.includes(k));
           if (!settings.enabledKinds.length) throw new Error('Keep at least one card type on.');
         }
-        if (!validGenerationSettings(settings)) throw new Error('Choose 1–4 cards per node, one or more available card types, and a model, or null for the cheap model.');
+        if (!validGenerationSettings(settings)) throw new Error('Choose 1–4 cards per node, one or more available card types, a cloze setting, and a model, or null for the cheap model.');
         await this.delivery.save(s => { s.generationSettings = settings; });
       } else if (name === 'preflight') {
         keys(value, ['nodeIds', 'backfillNodeIds']);
@@ -335,7 +362,7 @@ export class GenerationService {
         if (!fresh.batches.length) throw new Error('No targets fit this preflight. Review the skipped reasons.');
         const g: Generation = { id: p.id, createdAt: new Date().toISOString(), status: 'running', nodeIds: p.nodeIds, backfillNodeIds: p.backfillNodeIds,
           settings: fresh.settings, modelSpec: fresh.spec, skipped: fresh.skipped,
-          tasks: fresh.batches.map(b => ({ requestId: randomUUID(), status: 'pending', input: b.input, outputAllowance: b.outputAllowance,
+          tasks: fresh.batches.map(b => ({ requestId: randomUUID(), definitionId: definitionFor(b.input), status: 'pending', input: b.input, outputAllowance: b.outputAllowance,
             sources: fresh.sources.filter(s => b.input.targets.some(t => t.nodeId === s.nodeId)) })) };
         try { await this.delivery.save(s => { s.generations.push(g); }); }
         catch (error) {
@@ -397,7 +424,7 @@ export class GenerationService {
         if (!t) { await this.finish(id); return; }
         let w: PluginTaskSnapshot;
         try {
-          w = this.ctx.workers.start(WORKER, { requestId: t.requestId, input: t.input, prompt: writerPrompt(t.input),
+          w = this.ctx.workers.start(taskDefinition(t), { requestId: t.requestId, input: t.input, prompt: writerPrompt(t.input),
             model: this.generation(id).modelSpec ?? this.generation(id).settings.model!, purpose: 'user', maxTurns: 3, timeoutMs: 180_000,
             options: { maxTokens: t.outputAllowance } as Parameters<PluginBackendContext['workers']['start']>[1]['options'] });
         } catch (error) { await this.patch(id, t.requestId, { status: 'failed', error: errorText(error) }); return null; }
