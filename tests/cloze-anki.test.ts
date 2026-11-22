@@ -21,7 +21,7 @@ async function fixture() {
   const notes: Note[] = [];
   const calls: { action: string; params: any }[] = [];
   let nextId = 100;
-  let invalidNotesInfo = false;
+  let invalidNotesInfo = false, wrongId = false;
   const server = createServer(async (req, res) => {
     let raw = ''; for await (const part of req) raw += part;
     const { action, params = {} } = JSON.parse(raw);
@@ -47,7 +47,7 @@ async function fixture() {
       else if (action === 'findNotes') { const id = /LH_ID:([\da-f-]+)/i.exec(params.query)?.[1]; result = notes.filter(n => n.fields.LH_ID === id).map(n => n.noteId); }
       else if (action === 'notesInfo' && invalidNotesInfo) result = [{}];
       else if (action === 'notesInfo') result = notes.filter(n => params.notes.includes(n.noteId)).map(n => ({ noteId: n.noteId, modelName: n.modelName, tags: n.tags, cards: [n.noteId + 1000],
-        fields: Object.fromEntries(Object.entries(n.fields).map(([k, v], order) => [k, { value: v, order }])) }));
+        fields: Object.fromEntries(Object.entries(n.fields).map(([k, v], order) => [k, { value: wrongId && k === 'LH_ID' ? 'changed' : v, order }])) }));
       else if (action === 'addNote') {
         const m = model(params.note.modelName);
         assert.deepEqual(Object.keys(params.note.fields).sort(), [...m.fields].sort(), 'fields match the note type');
@@ -65,7 +65,7 @@ async function fixture() {
   const draft = async (input: Record<string, unknown>) => ((await service.command('draft', { extra: '', nodeId: 'node-1', nodeName: 'Units', sessionName: 'Lecture', ...input })) as PublicSnapshot).cards.at(-1)!.id;
   const send = (ids: string[]) => service.command('send', { ids, deck: 'Scratch', tags: [], expectedDestination: service.snapshot().destination }) as Promise<SendResult>;
   const close = async () => { await service.close(); server.closeAllConnections(); await new Promise<void>(r => server.close(() => r())); await rm(directory, { recursive: true, force: true }); };
-  return { service, store, models, notes, calls, draft, send, close, invalidNotesInfo: (value: boolean) => { invalidNotesInfo = value; } };
+  return { service, store, models, notes, calls, draft, send, close, invalidNotesInfo: (value: boolean) => { invalidNotesInfo = value; }, wrongId: (value: boolean) => { wrongId = value; } };
 }
 
 const HBAR = { kind: 'fact', format: 'cloze', front: 'In SI units, \\([\\hbar] = {{blank}}\\)', back: '\\mathrm{J\\,s}' };
@@ -198,6 +198,7 @@ test('round 3 S9 and S10: ambiguous renamed cloze is not adopted as basic; incon
     await f.service.command('approve', { ids: [card] });
     f.notes.push({ noteId: 9, fields: { Front: 'x', Text: '{{c1::x}}', LH_ID: card }, deckName: 'Scratch', modelName: 'Renamed Cloze', tags: [] });
     assert.deepEqual((await f.send([card])).delivery.failed, [card]);
+    assert.match(f.store.snapshot().cards[0]!.lastError!, /Cannot verify the existing Anki note type/);
     const state = structuredClone(f.store.snapshot());
     Object.assign(state.cards[0]!, { status: 'sending', destination: state.destination, deck: 'Scratch' });
     await f.store.replace(state);
@@ -205,6 +206,10 @@ test('round 3 S9 and S10: ambiguous renamed cloze is not adopted as basic; incon
     await assert.rejects(f.service.command('reconcile'), /verify existing Anki note metadata/);
     assert.equal(f.store.snapshot().cards[0]!.status, 'sending');
     f.invalidNotesInfo(false);
+    f.wrongId(true);
+    await assert.rejects(f.service.command('reconcile'), /verify existing Anki note metadata/);
+    assert.equal(f.store.snapshot().cards[0]!.status, 'sending');
+    f.wrongId(false);
     await f.service.command('reconcile');
     assert.equal(f.store.snapshot().cards[0]!.status, 'failed');
   } finally { await f.close(); }

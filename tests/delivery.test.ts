@@ -60,7 +60,7 @@ async function fixture() {
         finishAdd();
         if (switchAfterAdd) profile = 'Different';
         if (dropAfterAdd) { dropAfterAdd = false; res.destroy(); return; }
-      } else if (action === 'notesInfo') result = notes.filter(n => params.notes.includes(n.noteId)).map(n => ({ noteId: n.noteId, fields: n.fields, tags: n.tags, modelName: n.modelName, cards: [n.noteId + 1000] }));
+      } else if (action === 'notesInfo') result = notes.filter(n => params.notes.includes(n.noteId)).map(n => ({ noteId: n.noteId, fields: Object.fromEntries(Object.entries(n.fields).map(([k, value], order) => [k, { value, order }])), tags: n.tags, modelName: n.modelName, cards: [n.noteId + 1000] }));
       else if (action === 'guiBrowse') result = notes.filter(n => params.query.includes(`"LH_ID:${n.fields.LH_ID}"`)).map(n => n.noteId + 1000);
       else if (['updateModelStyling', 'updateModelTemplates'].includes(action)) result = null;
       else throw new Error('Unexpected API action: ' + action);

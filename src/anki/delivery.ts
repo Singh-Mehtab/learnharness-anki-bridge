@@ -194,7 +194,8 @@ export class DeliveryService {
     // remain unresolved until Anki provides reliable information (S10).
     if (notes.length !== found.length || notes.some((n, i) =>
       typeof n !== 'object' || n === null || (n as { noteId?: unknown }).noteId !== found[i] ||
-      typeof model(n) !== 'string' || !model(n) || !fields(n))) {
+      typeof model(n) !== 'string' || !model(n) || !fields(n) ||
+      (fields(n) as Record<string, { value?: unknown }>).LH_ID?.value !== card.id)) {
       throw new Error('Cannot verify existing Anki note metadata. Check unconfirmed sends again.');
     }
     const mismatch = notes.some(n => {
@@ -206,7 +207,7 @@ export class DeliveryService {
     if (!mismatch) return false;
     const message = card.format === 'cloze'
       ? notes.some(n => model(n) === MODEL_NAME) ? 'This card is already in Anki as a basic note. Delete that note in Anki or switch the card back to basic.' : 'Cannot verify that the existing Anki note is LearnHarness Cloze. Check its note type in Anki before retrying.'
-      : 'This card is already in Anki as a cloze note. Delete that note in Anki or switch the card back to cloze.';
+      : notes.some(n => model(n) === CLOZE_MODEL_NAME) ? 'This card is already in Anki as a cloze note. Delete that note in Anki or switch the card back to cloze.' : 'Cannot verify the existing Anki note type. Check it in Anki before retrying.';
     await this.patchCard(card.id, { status: 'failed', lastError: message });
     return true;
   }
