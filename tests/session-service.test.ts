@@ -76,12 +76,12 @@ test('version 1 state migrates to flags without losing cards; newer versions are
   const h = host(), c = context(dir, h.learning), close = await activate(c.ctx);
   try {
     const saved = JSON.parse(await readFile(file, 'utf8'));
-    assert.equal(saved.schemaVersion, 8);
+    assert.equal(saved.schemaVersion, 9);
     assert.deepEqual(saved.flags, []);
     assert.deepEqual(saved.cards, v1.cards);
     assert.equal(saved.settings.apiKey, 'k');
   } finally { await close(); }
-  const future = JSON.stringify({ ...v1, schemaVersion: 9, flags: [] });
+  const future = JSON.stringify({ ...v1, schemaVersion: 10, flags: [] });
   await writeFile(file, future);
   await assert.rejects(activate(context(dir, h.learning).ctx), /Unsupported/);
   assert.equal(await readFile(file, 'utf8'), future);
@@ -95,7 +95,7 @@ test('schema 2 migrates through 6, resets kind defaults and retains cap and card
   await writeFile(file, JSON.stringify(v2));
   const store = await StateStore.open(dir);
   try {
-    assert.deepEqual(store.snapshot(), { ...v2, schemaVersion: 8, flags: [], dismissals: [], generationSettings: { ...base.generationSettings, cardsPerNode: 4 } });
+    assert.deepEqual(store.snapshot(), { ...v2, schemaVersion: 9, flags: [], dismissals: [], generationSettings: { ...base.generationSettings, cardsPerNode: 4 } });
     assert.deepEqual(JSON.parse(await readFile(file, 'utf8')), store.snapshot());
     const delivery = new DeliveryService(store), h = host();
     const session = new SessionService(h.learning as never, store, delivery);

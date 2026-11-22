@@ -1,7 +1,9 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { AnkiClient, AnkiError, normalizeUrl } from './client.ts';
-import { packageFingerprint } from './apkg.ts';
-import { ensureNoteType, MODEL_NAME, repairFields, updateStyling } from './note-type.ts';
+import { noteFields, packageFingerprint } from './apkg.ts';
+import { CLOZE_MODEL_NAME, MODEL_NAME, ensureNoteType, noteTypeFor, noteTypeInput, repairFields, updateStyling } from './note-type.ts';
+import type { NoteTypeSpec } from './note-type.ts';
+import { clozeCardProblems } from '../writer/cloze.ts';
 import { renderMarkdown } from './render.ts';
 import { StateStore, sameDestination } from './state.ts';
 import { expandTagTemplate, systemTags, validateTags } from './tags.ts';
@@ -22,8 +24,24 @@ export interface SendResult extends PublicSnapshot {
   delivery: { added: string[]; found: string[]; skipped: string[]; failed: string[]; deck: string | null; tags: string[] };
 }
 export interface DraftInput {
-  front: string; back: string; extra?: string; kind?: CardKind;
+  front: string; back: string; extra?: string; kind?: CardKind; format?: 'basic' | 'cloze';
   nodeId?: string; nodeName?: string; sessionId?: string; sessionName?: string; statementHash?: string;
+}
+/** FI-8: 'cloze' or undefined (basic). */
+function formatInput(value: unknown): 'cloze' | undefined {
+  if (value === undefined || value === 'basic') return undefined;
+  if (value === 'cloze') return 'cloze';
+  throw new Error('Invalid card format.');
+}
+/** Content checks for a hand-written or edited card. Cloze cards get the shared
+ *  assembled check (C2-C8); basic cards keep the standalone render checks. */
+function checkContent(card: { kind: string; format?: 'cloze'; front: string; back: string; extra: string }): void {
+  if (card.format === 'cloze') {
+    const problems = clozeCardProblems({ kind: card.kind as CardKind, format: 'cloze', front: card.front, back: card.back, extra: card.extra });
+    if (problems.length) throw new Error(`Cloze card: ${problems.join('; ')}.`);
+    return;
+  }
+  renderMarkdown(card.front); renderMarkdown(card.back); renderMarkdown(card.extra);
 }
 function requiredText(value: unknown, name: string): string {
   if (typeof value !== 'string' || !value.trim()) throw new Error(`${name} must not be blank.`);
@@ -51,7 +69,6 @@ function data(value: unknown): Record<string, unknown> {
 }
 // Not limited to the note type name, so a renamed note type cannot hide an earlier add.
 const query = (id: string) => `"LH_ID:${id}"`;
-const htmlText = (text: string) => text.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
 
 
 /** No Anki update/delete/scheduling operations. All delivery identities are durable before I/O. */
@@ -155,10 +172,51 @@ export class DeliveryService {
   private async recordFound(id: string, found: number[], destination: Destination): Promise<void> {
     await this.patchCard(id, { status: 'sent', noteId: found[0], destination, existingNote: true, presence: 'present', lastError: found.length > 1 ? 'More than one Anki note has this delivery ID. No new note was added.' : undefined });
   }
+  /** FI-8 (S22): a note found by LH_ID must be the card's kind of note. A basic
+   *  package imported without Mark as imported leaves the card editable, so it can
+   *  be switched to cloze and then find the old basic note. Field names tell the two
+   *  apart even if the note type was renamed. On a mismatch the card fails with a
+   *  conflict; nothing is added and the Anki note is left as it is. */
+  private async formatConflict(client: AnkiClient, card: Card, found: number[]): Promise<boolean> {
+    await this.destination(client);
+    const notes = await client.call<unknown>('notesInfo', { notes: found });
+    await this.destination(client);
+    if (!Array.isArray(notes)) throw new Error('Invalid notesInfo response.');
+    // A note of the other plugin type is always refused, whatever fields were added to
+    // it (S1, round 1). Otherwise a cloze card needs a Text field, and a basic card is
+    // refused only when the note is plainly cloze (Text and no Front), so basic
+    // adoption behaves as in 0.9.0.
+    const fields = (n: unknown): object | undefined => typeof n === 'object' && n !== null && typeof (n as { fields?: unknown }).fields === 'object' && (n as { fields: object | null }).fields || undefined;
+    const model = (n: unknown) => typeof n === 'object' && n !== null ? (n as { modelName?: unknown }).modelName : undefined;
+    const has = (n: unknown, name: string) => Object.hasOwn(fields(n) ?? {}, name);
+    const other = card.format === 'cloze' ? MODEL_NAME : CLOZE_MODEL_NAME;
+    // Missing or mismatched metadata is not proof of a conflict: recovery must
+    // remain unresolved until Anki provides reliable information (S10).
+    if (notes.length !== found.length || notes.some((n, i) =>
+      typeof n !== 'object' || n === null || (n as { noteId?: unknown }).noteId !== found[i] ||
+      typeof model(n) !== 'string' || !model(n) || !fields(n) ||
+      (fields(n) as Record<string, { value?: unknown }>).LH_ID?.value !== card.id)) {
+      throw new Error('Cannot verify existing Anki note metadata. Check unconfirmed sends again.');
+    }
+    const mismatch = notes.some(n => {
+      if (model(n) === other) return true;
+      if (card.format === 'cloze') return model(n) !== CLOZE_MODEL_NAME;
+      // A renamed Basic is safe only if its fields unambiguously identify it (S9).
+      return model(n) !== MODEL_NAME && has(n, 'Text');
+    });
+    if (!mismatch) return false;
+    const message = card.format === 'cloze'
+      ? notes.some(n => model(n) === MODEL_NAME) ? 'This card is already in Anki as a basic note. Delete that note in Anki or switch the card back to basic.' : 'Cannot verify that the existing Anki note is LearnHarness Cloze. Check its note type in Anki before retrying.'
+      : notes.some(n => model(n) === CLOZE_MODEL_NAME) ? 'This card is already in Anki as a cloze note. Delete that note in Anki or switch the card back to cloze.' : 'Cannot verify the existing Anki note type. Check it in Anki before retrying.';
+    await this.patchCard(card.id, { status: 'failed', lastError: message });
+    return true;
+  }
   private async recover(client: AnkiClient, destination: Destination): Promise<string[]> {
     const matched: string[] = [];
     for (const card of this.store.snapshot().cards.filter(c => c.status === 'sending')) {
       const found = await this.find(client, card, destination);
+      // Recovery adopts through the same note type check as a send (S1, round 1).
+      if (found.length && await this.formatConflict(client, card, found)) continue;
       if (found.length) { await this.recordFound(card.id, found, destination); matched.push(card.id); }
       else await this.patchCard(card.id, { status: 'failed', lastError: 'No note found for the interrupted send. You can retry this card.' });
     }
@@ -221,12 +279,13 @@ export class DeliveryService {
         const front = requiredText(value.front, 'Front');
         const back = requiredText(value.back, 'Back');
         const extra = optionalText(value.extra, 'Extra');
-        // Validate rendering before a card can be approved or sent.
-        renderMarkdown(front); renderMarkdown(back); renderMarkdown(extra);
         const kind = value.kind ?? 'fact';
         if (!isStoredKind(kind)) throw new Error('Invalid card kind.');
+        const format = formatInput(value.format);
+        // Validate rendering before a card can be approved or sent.
+        checkContent({ kind, format, front, back, extra });
         const id = randomUUID();
-        const card: Card = { id, front, back, extra, kind, status: 'draft',
+        const card: Card = { id, front, back, extra, kind, ...(format ? { format } : {}), status: 'draft',
           nodeId: optionalText(value.nodeId, 'Node ID', `manual:${id}`),
           nodeName: optionalText(value.nodeName, 'Node name', 'Hand-written card'),
           sessionId: optionalText(value.sessionId, 'Session ID', 'manual'),
@@ -277,8 +336,18 @@ export class DeliveryService {
         if (card.status === 'dropped') throw new Error('Dropped cards cannot be edited.');
         if (card.status === 'sent' || card.noteId !== undefined) throw new Error('This card was sent and cannot be edited here. Edit it in Anki.');
         const front = requiredText(value.front, 'Front'), back = requiredText(value.back, 'Back'), extra = optionalText(value.extra, 'Extra');
-        renderMarkdown(front); renderMarkdown(back); renderMarkdown(extra);
-        await this.patchCard(card.id, { front, back, extra, status: 'draft', lastError: undefined });
+        // FI-8: an edit may switch an unsent draft between basic and cloze. Format and
+        // fields change in one write. An edit without format keeps the card's format.
+        const format = value.format === undefined ? card.format : formatInput(value.format);
+        checkContent({ kind: card.kind, format, front, back, extra });
+        await this.save(state => {
+          const index = state.cards.findIndex(c => c.id === card.id);
+          if (index < 0) throw new Error('Card not found.');
+          const next: Card = { ...state.cards[index], front, back, extra, status: 'draft' };
+          delete next.lastError; delete next.format;
+          if (format) next.format = format;
+          state.cards[index] = next;
+        });
       } else if (name === 'drop') {
         const cards = idsInput(value.ids).map(id => this.card(id));
         if (cards.some(c => c.status === 'imported')) throw new Error('This card was imported and cannot be edited here. Edit it in Anki.');
@@ -311,39 +380,42 @@ export class DeliveryService {
         if (cards.some(c => !['approved', 'failed'].includes(c.status))) throw new Error('Approve every selected draft before sending.');
         const skipped = ids.filter(id => !found.includes(id) && !cards.some(c => c.id === id));
         const added: string[] = [], failed: string[] = [], tags = new Set<string>();
+        const ready = new Set<NoteTypeSpec>();
         let deckReady = false;
         for (const selected of cards) {
           this.active();
           const card = this.card(selected.id);
           // A retry always looks up its durable UUID before any new addNote.
           const existing = await this.find(client, card, destination);
-          if (existing.length) { await this.recordFound(card.id, existing, destination); found.push(card.id); continue; }
+          if (existing.length) {
+            if (await this.formatConflict(client, card, existing)) { failed.push(card.id); continue; }
+            await this.recordFound(card.id, existing, destination); found.push(card.id); continue;
+          }
           await this.destination(client);
           // Model fields may have been edited in Anki while this batch was running.
-          await ensureNoteType(client);
+          const spec = noteTypeFor(card);
+          if (!ready.has(spec)) { await ensureNoteType(client, spec); ready.add(spec); }
           if (!deckReady) {
             await this.destination(client);
             await client.call('createDeck', { deck });
             await this.save(s => { s.settings.lastDeck = deck; });
             deckReady = true;
           }
-          const noteTags = [...new Set([...chosenTags, ...(settings.systemTags === false ? [] : systemTags(card.kind))])];
-          const fields = {
-            Front: renderMarkdown(card.front), Back: renderMarkdown(card.back), Extra: renderMarkdown(card.extra),
-            Source: htmlText(`${card.sessionName} / ${card.nodeName}`), LH_ID: card.id, LH_Node: htmlText(card.nodeId),
-          };
+          const noteTags = [...new Set([...chosenTags, ...(settings.systemTags === false ? [] : systemTags(card.kind, card.format))])];
+          const fields = noteFields(card);
           await this.patchCard(card.id, { status: 'sending', deck, destination, lastError: undefined });
           let result: unknown;
           try {
             await this.destination(client);
-            result = await client.call('addNote', { note: { deckName: deck, modelName: MODEL_NAME, fields,
+            result = await client.call('addNote', { note: { deckName: deck, modelName: spec.name, fields,
               tags: noteTags,
               options: { allowDuplicate: false, duplicateScope: 'deck', duplicateScopeOptions: { deckName: deck, checkChildren: false, checkAllModels: false } } } });
           } catch (error) {
             // API rejections are definite, but still look up the UUID before failing.
             if (error instanceof AnkiError && error.kind === 'api') {
               const existing = await this.find(client, this.card(card.id), destination);
-              if (existing.length) { await this.recordFound(card.id, existing, destination); found.push(card.id); }
+              if (existing.length && await this.formatConflict(client, this.card(card.id), existing)) failed.push(card.id);
+              else if (existing.length) { await this.recordFound(card.id, existing, destination); found.push(card.id); }
               else { await this.patchCard(card.id, { status: 'failed', lastError: this.message(error) }); failed.push(card.id); }
               continue;
             }
@@ -393,7 +465,8 @@ export class DeliveryService {
         if (paired) expectDestination(value.expectedDestination, paired, 'Paired destination changed. Check it and confirm again.');
         const client = this.client();
         await this.destination(client);
-        if (name === 'repairFields') await repairFields(client); else await updateStyling(client);
+        const spec = noteTypeInput(value.noteType);
+        if (name === 'repairFields') await repairFields(client, spec); else await updateStyling(client, spec);
       } else throw new Error('Unknown Anki Bridge operation.');
       return this.snapshot();
     });

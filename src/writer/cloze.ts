@@ -1,0 +1,269 @@
+// FI-8 cloze cards: placeholder handling, content checks and the Anki Text
+// field. Pure: no host imports. See docs/fi-8-cloze-design.md.
+//
+// A cloze draft keeps the basic card shape: front is the statement with one
+// {{blank}}, back is the hidden part. The plugin builds Anki's {{c1::...}}
+// markup itself, so it never has to find the end of a blank by counting braces.
+
+import { inlineSpans, renderMarkdown } from "../anki/render.ts";
+import { FORBIDDEN, givesAwayAnswer } from "./validate.ts";
+import { CLOZE_KINDS, type DraftCard } from "./types.ts";
+
+export const BLANK = "{{blank}}";
+const OPEN = "\u0002";
+const CLOSE = "\u0003";
+
+/** Maths and code ranges in a front, found by the renderer's own scanner so a
+ *  blank counts as maths exactly when Anki will show it as maths (round 1 S2:
+ *  "$5, use $x=..." is currency then maths, not one maths span). Ranges are
+ *  [start, end) over the whole segment with delimiters. */
+interface Segment { start: number; end: number; open: string; close: string; code?: boolean }
+
+const segments = (text: string): Segment[] => inlineSpans(text);
+
+export type BlankPlace = { where: "prose" } | { where: "math"; segment: Segment } | { where: "code" };
+
+/** Where the single blank sits. Undefined if the front does not have exactly one. */
+export function blankPlace(front: string): BlankPlace | undefined {
+  const first = front.indexOf(BLANK);
+  if (first < 0 || front.indexOf(BLANK, first + 1) >= 0) return undefined;
+  const seg = segments(front).find((s) => first >= s.start && first + BLANK.length <= s.end);
+  if (!seg) return { where: "prose" };
+  return seg.code ? { where: "code" } : { where: "math", segment: seg };
+}
+
+export const isCloze = (card: Pick<DraftCard, "format">): boolean => card.format === "cloze";
+
+/** Front with the hidden part put back. */
+export const assemble = (front: string, back: string, marked = false): string =>
+  front.replace(BLANK, () => marked ? `${OPEN}${back}${CLOSE}` : back);
+
+/** Layout of maths blanks (spec: "Layout of maths blanks"). When the blank is
+ *  inside maths, that segment becomes display maths on its own line, the text
+ *  before it a lead-in paragraph and the text after it a following paragraph,
+ *  dropped if it is only punctuation. Other fronts are returned unchanged. The
+ *  writer and the validator see the one-line front; rendering uses this. */
+export function laidOutFront(front: string): string {
+  const place = blankPlace(front);
+  if (place?.where !== "math") return front;
+  const { start, end, open, close } = place.segment;
+  if (!topLevel(front, start, end)) return front;
+  const tex = front.slice(start + open.length, end - close.length).trim();
+  const before = front.slice(0, start).trim();
+  const after = front.slice(end).trim();
+  return [before, `$$${tex}$$`, /^[\s.,;:!?]*$/.test(after) ? "" : after].filter(Boolean).join("\n\n");
+}
+
+/** True when the maths segment [start, end) renders at the top level of its
+ *  paragraph, so splitting the front around it cannot cut bold, a link or any
+ *  other inline element in half (spec S23). */
+function topLevel(front: string, start: number, end: number): boolean {
+  let html: string;
+  try { html = renderMarkdown(`${front.slice(0, start)}${OPEN}${front.slice(start, end)}${CLOSE}${front.slice(end)}`); }
+  catch { return false; }
+  const open = html.indexOf(OPEN);
+  const close = html.indexOf(CLOSE);
+  if (open < 0 || close < open) return false;
+  if (/<[a-z/]/i.test(html.slice(open, close))) return false;
+  const stack: string[] = [];
+  for (const m of html.slice(0, open).matchAll(/<(\/?)([a-z][a-z0-9]*)\b[^>]*>/gi)) {
+    const name = m[2]!.toLowerCase();
+    if (VOID.has(name)) continue;
+    if (!m[1]) stack.push(name);
+    else stack.pop();
+  }
+  return stack.length === 1 && stack[0] === "p";
+}
+
+/** Front as shown on the question side, for previews. */
+export const questionPreview = (front: string): string => laidOutFront(front).split(BLANK).join("[...]");
+
+/** The answer side, for previews: the full text with the hidden part put back,
+ *  bold when it sits in prose. Inside maths the raw TeX goes back in place. */
+export function answerPreview(front: string, back: string): string {
+  const prose = blankPlace(front)?.where === "prose";
+  // A draft mid-edit can hold more than one blank; the rest show as [...] (round 1 S6).
+  return laidOutFront(front).replace(BLANK, () => prose ? `**${back}**` : back).split(BLANK).join("[...]");
+}
+
+/** Basic to cloze (spec: Switching format): the old front becomes the text, to be
+ *  reworded with a blank, and the old back the hidden part. */
+export const toCloze = (fields: { front: string; back: string }) => ({ front: fields.front, back: fields.back });
+/** Cloze to basic: the text with the blank shown as [...], and the hidden part,
+ *  wrapped in \(...\) when the blank was inside maths. */
+export function toBasic(fields: { front: string; back: string }): { front: string; back: string } {
+  const inMath = blankPlace(fields.front)?.where === "math";
+  return { front: fields.front.split(BLANK).join("[...]"), back: inMath ? `\\(${fields.back}\\)` : fields.back };
+}
+
+function balancedBraces(tex: string): boolean {
+  let depth = 0;
+  for (let i = 0; i < tex.length; i++) {
+    if (tex[i] === "\\") { i++; continue; }
+    if (tex[i] === "{") depth++;
+    else if (tex[i] === "}" && --depth < 0) return false;
+  }
+  return depth === 0;
+}
+
+const normaliseTex = (tex: string) => tex.replace(/\\(?:left|right|[,;!]|displaystyle)/g, "").replace(/\s+/g, "");
+
+/** C7 for a blank inside maths: the visible maths already shows the back. */
+function mathBackLeaks(front: string, back: string): boolean {
+  const target = normaliseTex(back);
+  if (!target) return false;
+  // \u0001 keeps the tokens either side of the blank from joining up.
+  const marked = front.replace(BLANK, "\u0001");
+  const visible = segments(marked).filter(s => !s.code).map(s => normaliseTex(marked.slice(s.start + s.open.length, s.end - s.close.length)));
+  if (target.length >= 3) return visible.some((v) => v.includes(target));
+  return visible.some((v) => v.split("\u0001").some((part) => part === target || part.split("=").some((side) => side === target)));
+}
+
+/** C7: the visible text gives the hidden part away. */
+export function clozeLeaks(front: string, back: string): boolean {
+  const place = blankPlace(front);
+  if (place?.where === "math") return mathBackLeaks(front, back);
+  return givesAwayAnswer(front.replace(BLANK, " "), back);
+}
+
+const VOID = new Set(["br", "hr", "img"]);
+
+/** C6: the markers survive once each in text content and the answer range does
+ *  not cut through markup. Returns a problem, or undefined. */
+function markerProblem(html: string): string | undefined {
+  const open = html.indexOf(OPEN);
+  const close = html.indexOf(CLOSE);
+  if (open < 0 || close < 0 || html.indexOf(OPEN, open + 1) >= 0 || html.indexOf(CLOSE, close + 1) >= 0 || close < open) {
+    return "the blank must sit in plain text or maths, not inside link syntax or other Markdown";
+  }
+  const insideTag = (i: number) => html.lastIndexOf("<", i) > html.lastIndexOf(">", i);
+  if (insideTag(open) || insideTag(close)) return "the blank must not be inside a link URL or other attribute";
+  const stack: string[] = [];
+  for (const m of html.slice(open, close).matchAll(/<(\/?)([a-z][a-z0-9]*)\b[^>]*>/gi)) {
+    const name = m[2]!.toLowerCase();
+    if (VOID.has(name)) continue;
+    if (!m[1]) stack.push(name);
+    else if (stack.pop() !== name) return "the blank cuts through formatting: put whole bold, code or link markup inside the hidden part or outside it";
+  }
+  if (stack.length) return "the blank cuts through formatting: put whole bold, code or link markup inside the hidden part or outside it";
+  return undefined;
+}
+
+/** Maths spans in rendered HTML, after the renderer has normalised every
+ *  delimiter to \(...\) or \[...\]. */
+const RENDERED_MATH = /\\\([\s\S]*?\\\)|\\\[[\s\S]*?\\\]/g;
+
+/** C6 (S19): both markers inside one maths span, or both outside every span
+ *  with no span straddling either marker. */
+function spansProblem(html: string): string | undefined {
+  const open = html.indexOf(OPEN);
+  const close = html.indexOf(CLOSE);
+  for (const m of html.matchAll(RENDERED_MATH)) {
+    const start = m.index!;
+    const end = start + m[0].length;
+    const hasOpen = open > start && open < end;
+    const hasClose = close > start && close < end;
+    if (hasOpen !== hasClose) return "the blank splits a maths segment: hide a whole TeX expression, or put the blank wholly inside or outside the maths";
+  }
+  return undefined;
+}
+
+/** C2 content rule and C3-C8 for one cloze card, with the assembled forbidden-
+ *  content and Extra checks. One function for worker validation, result
+ *  application, manual creation and editing (C6). Messages are correction text. */
+export function clozeCardProblems(card: DraftCard): string[] {
+  const problems = clozeProblems(card);
+  // Front and back are checked assembled with maths skipped, so a TeX back such
+  // as n![z^n](1-z)^{-1} is not mistaken for a Markdown image.
+  const assembled = assemble(card.front, card.back);
+  let prose = "";
+  let at = 0;
+  for (const span of segments(assembled).filter((x) => !x.code)) { prose += `${assembled.slice(at, span.start)} `; at = span.end; }
+  prose += assembled.slice(at);
+  for (const [pattern, label] of FORBIDDEN) {
+    if ([prose, card.extra ?? ""].some((f) => pattern.test(f))) problems.push(`${label} are not allowed`);
+  }
+  try { renderMarkdown(card.extra ?? "", { checkMath: true }); }
+  catch (error) { problems.push(error instanceof Error ? error.message : String(error)); }
+  return [...new Set(problems)];
+}
+
+/** C2 content rule and C3-C8 for one cloze card. Messages are correction text. */
+export function clozeProblems(card: DraftCard): string[] {
+  const problems: string[] = [];
+  const front = card.front;
+  const back = card.back;
+  if (!CLOZE_KINDS.includes(card.kind as never)) problems.push(`only ${CLOZE_KINDS.join(" and ")} cards can be cloze`);
+  for (const field of [front, back, card.extra ?? ""]) {
+    if (/[\u0002\u0003]/.test(field)) { problems.push("control characters are not allowed"); return problems; }
+  }
+  const count = front.split(BLANK).length - 1;
+  if (count !== 1) { problems.push(`a cloze front must contain ${BLANK} exactly once (found ${count})`); return problems; }
+  if (back.includes(BLANK) || (card.extra ?? "").includes(BLANK)) problems.push(`${BLANK} belongs only in the front`);
+  // Untrimmed: a trailing line break would render as <br> inside the blank (round 1 S7).
+  if (/[\r\n]/.test(back)) problems.push("the hidden part must be one line");
+  if (/^\s*(?:#{1,6}\s|[-+*]\s|\d+[.)]\s|```|~~~)/.test(back) || /\$\$|\\\[|\\\]/.test(back)) {
+    problems.push("the hidden part must be inline text or inline maths, not a list, heading, code block or display maths");
+  }
+  if (/\n/.test(front.trim()) || /\$\$|\\\[/.test(front)) problems.push("a cloze card is one line with inline maths only");
+  const place = blankPlace(front)!;
+  if (place.where === "code") problems.push(`put ${BLANK} outside inline code; the hidden part can carry its own inline code`);
+  if (place.where === "math" && /\\\(|\\\)|\\\[|\\\]|(?<!\\)\$/.test(back)) {
+    problems.push(`the blank is inside maths, so the hidden part is raw TeX without \\( \\) or $ delimiters`);
+  }
+  if (place.where === "math" && !balancedBraces(back)) {
+    problems.push("the hidden part must be a whole TeX group: its { and } must balance");
+  }
+  if (place.where === "prose") {
+    // C5: each side of the blank must be well formed on its own, or Anki shows
+    // half a maths segment when the answer is hidden.
+    for (const [label, text] of [["hidden part", back], ["visible text", front.replace(BLANK, "x")]] as const) {
+      try { renderMarkdown(text, { checkMath: true }); }
+      catch (error) { problems.push(`the ${label} must be complete on its own: ${error instanceof Error ? error.message : String(error)}`); }
+    }
+  }
+  if (problems.length) return problems;
+  // C6: render the marked assembly once; it must match the unmarked render.
+  let marked: string;
+  let plain: string;
+  try {
+    marked = renderMarkdown(assemble(laidOutFront(front), back, true), { checkMath: true });
+    plain = renderMarkdown(assemble(laidOutFront(front), back), { checkMath: true });
+  } catch (error) {
+    problems.push(error instanceof Error ? error.message : String(error));
+    return problems;
+  }
+  const marker = markerProblem(marked) ?? spansProblem(marked);
+  if (marker) problems.push(marker);
+  else if (marked.replace(/[\u0002\u0003]/g, "") !== plain) problems.push("the blank changes how the text is formatted; move it or reword");
+  for (const m of plain.matchAll(/href="([^"]*)"/g)) {
+    if (/\}\}|\{\{|::/.test(m[1]!)) problems.push("a link URL in a cloze card must not contain }}, {{ or ::");
+  }
+  if (clozeLeaks(front, back)) problems.push("the visible text gives the hidden part away");
+  return problems;
+}
+
+const COMMENT = "<!-- -->";
+
+/** The Anki Text field: rendered HTML with exactly one {{c1::...}}. Assumes
+ *  clozeProblems(card) is empty. */
+export function clozeTextField(front: string, back: string): string {
+  let html = renderMarkdown(assemble(laidOutFront(front), back, true));
+  const escapeAll = (pattern: RegExp, fix: (s: string) => string, text: string) => {
+    let prev: string;
+    do { prev = text; text = text.replace(pattern, fix); } while (text !== prev);
+    return text;
+  };
+  html = escapeAll(/\}\}/, () => `}${COMMENT}}`, html);
+  html = escapeAll(/\{\{(?=c\d)/i, () => `{${COMMENT}{`, html);
+  const o = html.indexOf(OPEN);
+  const c = html.indexOf(CLOSE);
+  let answer = escapeAll(/::/, () => `:${COMMENT}:`, html.slice(o + 1, c));
+  if (answer.endsWith("}")) answer += COMMENT;
+  if (answer.startsWith(":")) answer = COMMENT + answer;
+  let before = html.slice(0, o);
+  if (before.endsWith("{")) before += COMMENT;
+  let after = html.slice(c + 1);
+  if (after.startsWith("}")) after = COMMENT + after;
+  return `${before}{{c1::${answer}}}${after}`;
+}

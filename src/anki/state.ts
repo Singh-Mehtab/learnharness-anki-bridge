@@ -3,7 +3,7 @@ import fs, { link, mkdir, open, readFile, realpath, rename, unlink } from 'node:
 import path from 'node:path';
 import { defaultGenerationSettings, fromV072Settings, validateGenerations, validLegacyGenerationSettings, validSource, validV072GenerationSettings } from '../generation/types.ts';
 import type { Generation, GenerationSettings, SourceSnapshot } from '../generation/types.ts';
-import { DEFAULT_KINDS, isStoredKind } from '../writer/types.ts';
+import { CLOZE_KINDS, DEFAULT_KINDS, isStoredKind } from '../writer/types.ts';
 import type { StoredCardKind } from '../writer/types.ts';
 import { validateFlags } from '../session/flow.ts';
 import type { Flag } from '../session/flow.ts';
@@ -21,6 +21,9 @@ export interface Card {
   nodeName: string;
   sessionName: string;
   kind: CardKind;
+  /** FI-8 (state schema 9): absent means basic. A cloze front holds one {{blank}}
+   *  and back is the hidden part. */
+  format?: 'cloze';
   front: string;
   back: string;
   extra: string;
@@ -40,7 +43,7 @@ export interface Card {
   requestId?: string;
 }
 export interface State {
-  schemaVersion: 8;
+  schemaVersion: 9;
   generationSettings: GenerationSettings;
   generations: Generation[];
   flags: Flag[];
@@ -51,7 +54,7 @@ export interface State {
   cards: Card[];
 }
 export const initialState = (): State => ({
-  schemaVersion: 8,
+  schemaVersion: 9,
   generationSettings: defaultGenerationSettings(),
   generations: [],
   flags: [],
@@ -67,9 +70,9 @@ function destination(v: unknown): v is Destination {
   return object(v) && text(v.url) && !!v.url && text(v.profile) && !!v.profile;
 }
 export function validateState(value: unknown): asserts value is State {
-  validateStateFormat(value, 8);
+  validateStateFormat(value, 9);
 }
-function validateStateFormat(value: unknown, version: 6 | 7 | 8): void {
+function validateStateFormat(value: unknown, version: 6 | 7 | 8 | 9): void {
   if (!object(value) || value.schemaVersion !== version) throw new Error('Unsupported state format. Keep state.json and use a compatible Anki Bridge version.');
   validateGenerations(value.generationSettings, value.generations);
   validateFlags(value.flags);
@@ -78,7 +81,7 @@ function validateStateFormat(value: unknown, version: 6 | 7 | 8): void {
   if (!object(settings) || !['url', 'apiKey', 'lastDeck'].every(k => text(settings[k])) || settings.tagTemplate !== undefined && !text(settings.tagTemplate) || settings.systemTags !== undefined && typeof settings.systemTags !== 'boolean' || !(value.destination === null || destination(value.destination)) || !Array.isArray(value.cards)) throw new Error('Invalid Anki Bridge state.');
   const ids = new Set<string>();
   for (const card of value.cards) {
-    if (!object(card) || !['id', 'nodeId', 'statementHash', 'sessionId', 'nodeName', 'sessionName', 'front', 'back', 'extra'].every(k => text(card[k])) || !/^[\da-f]{8}-(?:[\da-f]{4}-){3}[\da-f]{12}$/i.test(card.id as string) || ids.has(card.id as string) || !isStoredKind(card.kind) || !(version === 8 ? ['draft', 'approved', 'sending', 'sent', 'imported', 'failed', 'dropped'] : ['draft', 'approved', 'sending', 'sent', 'failed', 'dropped']).includes(card.status as string)) throw new Error('Invalid card state.');
+    if (!object(card) || !['id', 'nodeId', 'statementHash', 'sessionId', 'nodeName', 'sessionName', 'front', 'back', 'extra'].every(k => text(card[k])) || !/^[\da-f]{8}-(?:[\da-f]{4}-){3}[\da-f]{12}$/i.test(card.id as string) || ids.has(card.id as string) || !isStoredKind(card.kind) || !(version >= 8 ? ['draft', 'approved', 'sending', 'sent', 'imported', 'failed', 'dropped'] : ['draft', 'approved', 'sending', 'sent', 'failed', 'dropped']).includes(card.status as string)) throw new Error('Invalid card state.');
     ids.add(card.id as string);
     if (card.sourceSnapshot !== undefined && !validSource(card.sourceSnapshot) || card.generationId !== undefined && !text(card.generationId) || card.requestId !== undefined && !text(card.requestId)) throw new Error('Invalid generation card metadata.');
     if (card.destination !== undefined && !destination(card.destination)) throw new Error('Invalid card destination.');
@@ -87,12 +90,13 @@ function validateStateFormat(value: unknown, version: 6 | 7 | 8): void {
     if (['sent', 'sending'].includes(card.status as string) && (!destination(card.destination) || (!deckMayBeUnknown && (!text(card.deck) || !card.deck)))) throw new Error('Missing delivery destination or deck.');
     if (card.existingNote !== undefined && (card.existingNote !== true || card.status !== 'sent')) throw new Error('Invalid existing-note metadata.');
     if (card.status === 'imported' && (!text(card.deck) || !card.deck.trim() || card.noteId !== undefined || card.destination !== undefined || card.existingNote !== undefined || card.presence !== undefined)) throw new Error('Invalid imported card metadata.');
-    if (card.importMarkId !== undefined && (version !== 8 || card.status !== 'imported' || !text(card.importMarkId) || !/^[\da-f]{8}-(?:[\da-f]{4}-){3}[\da-f]{12}$/i.test(card.importMarkId))) throw new Error('Invalid import mark ID.');
+    if (card.importMarkId !== undefined && (version < 8 || card.status !== 'imported' || !text(card.importMarkId) || !/^[\da-f]{8}-(?:[\da-f]{4}-){3}[\da-f]{12}$/i.test(card.importMarkId))) throw new Error('Invalid import mark ID.');
     if (card.importPrevious !== undefined) {
       const previous = card.importPrevious;
-      if (version !== 8 || card.status !== 'imported' || !object(previous) || !['approved', 'failed'].includes(previous.status as string) || previous.deck !== undefined && !text(previous.deck) || previous.destination !== undefined && !destination(previous.destination) || previous.lastError !== undefined && !text(previous.lastError) || previous.presence !== undefined && !['present', 'deleted', 'unknown'].includes(previous.presence as string)) throw new Error('Invalid import undo metadata.');
+      if (version < 8 || card.status !== 'imported' || !object(previous) || !['approved', 'failed'].includes(previous.status as string) || previous.deck !== undefined && !text(previous.deck) || previous.destination !== undefined && !destination(previous.destination) || previous.lastError !== undefined && !text(previous.lastError) || previous.presence !== undefined && !['present', 'deleted', 'unknown'].includes(previous.presence as string)) throw new Error('Invalid import undo metadata.');
     }
     if (card.status === 'sent' && card.noteId === undefined) throw new Error('Sent card has no Anki note ID.');
+    if (card.format !== undefined && (version < 9 || card.format !== 'cloze' || !(CLOZE_KINDS as readonly string[]).includes(card.kind as string))) throw new Error('Invalid card format.');
     if (card.deck !== undefined && !text(card.deck) || card.lastError !== undefined && !text(card.lastError) || card.presence !== undefined && !['present', 'deleted', 'unknown'].includes(card.presence as string)) throw new Error('Invalid delivery metadata.');
   }
 }
@@ -131,6 +135,12 @@ export function migrateState(raw: unknown): State {
   if (object(value) && value.schemaVersion === 7) {
     validateStateFormat(value, 7);
     value = { ...value, schemaVersion: 8 };
+  }
+  if (object(value) && value.schemaVersion === 8) {
+    // FI-8: 9 adds cloze cards. Nothing changes in the file; the new number stops
+    // 0.9.0 from sending a cloze card through the basic note type.
+    validateStateFormat(value, 8);
+    value = { ...value, schemaVersion: 9 };
   }
   validateState(value);
   return value;

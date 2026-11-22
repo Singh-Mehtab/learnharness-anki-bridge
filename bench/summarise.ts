@@ -11,10 +11,10 @@ import { LENGTH_TARGETS } from "../src/writer/index.ts";
 import type { BenchCard, BenchRun, CardScore, Scores } from "./types.ts";
 
 const { values, positionals } = parseArgs({ options: { scores: { type: "string", default: "human" } }, allowPositionals: true });
-if (values.scores !== "human" && values.scores !== "sol") throw new Error("--scores must be human or sol");
-const automated = values.scores === "sol";
-const scoreFile = automated ? "scores.sol.json" : "scores.json";
-const summaryFile = automated ? "summary.sol.md" : "summary.md";
+if (!["human", "sol", "claude"].includes(values.scores!)) throw new Error("--scores must be human, sol or claude");
+const automated = values.scores !== "human";
+const scoreFile = automated ? `scores.${values.scores}.json` : "scores.json";
+const summaryFile = automated ? `summary.${values.scores}.md` : "summary.md";
 const root = resolve("bench-output");
 const dirs = positionals.length
   ? positionals.map((d) => resolve(d))
@@ -58,7 +58,22 @@ for (const dir of dirs) {
   const modelSkips = run.skips.filter((s) => s.by === "model");
   const skipAgree = modelSkips.filter((s) => scores.skips[`${s.set}:${s.nodeId}`]?.agree === true).length;
   const skipsApproved = skipAgree === modelSkips.length;
-  const pass = allScored && generationComplete && skipsApproved && keepRate >= 2 / 3 && !leaks.length && !keptErrors.length;
+  // FI-8 format criteria, for cloze-enabled runs only.
+  const clozeMode = run.cloze && run.cloze !== "off" ? run.cloze : undefined;
+  const clozeCards = cards.filter((c) => c.format === "cloze");
+  const clozeBad = clozeCards.filter((c) => sc(c).leak || sc(c).unclear);
+  const clozeToBasic = clozeCards.filter((c) => sc(c).otherFormat);
+  const basicFE = cards.filter((c) => c.format !== "cloze" && (c.kind === "fact" || c.kind === "equation"));
+  const basicToCloze = basicFE.filter((c) => sc(c).otherFormat);
+  const positive = new Set(run.clozePositive ?? []);
+  const positiveAccepted = clozeCards.filter((c) => positive.has(`${c.set}:${c.nodeId}`) && kept(sc(c)));
+  const clozeChecks = clozeMode ? [
+    ["No cloze card marked leak or unclear", clozeBad.length === 0, `${clozeBad.length}`],
+    ["Cloze cards marked → basic at most 1 in 5", clozeToBasic.length * 5 <= clozeCards.length, `${clozeToBasic.length}/${clozeCards.length}`],
+    ...(clozeMode === "prefer" ? [["Basic fact/equation cards marked → cloze at most 1 in 5", basicToCloze.length * 5 <= basicFE.length, `${basicToCloze.length}/${basicFE.length}`]] : []),
+    ...(clozeMode === "auto" ? [["At least one kept cloze card on the positive fixtures", positiveAccepted.length > 0, `${positiveAccepted.length}`]] : []),
+  ] as Array<[string, boolean, string]> : [];
+  const pass = allScored && generationComplete && skipsApproved && keepRate >= 2 / 3 && !leaks.length && !keptErrors.length && clozeChecks.every(([, ok]) => ok);
   const calls = run.modelCalls ?? run.batches.reduce((n, b) => n + b.attempts.length, 0);
   const firstTry = run.batches.filter((b) => b.accepted && b.attempts.length === 1).length;
 
@@ -66,7 +81,7 @@ for (const dir of dirs) {
     `# Bench summary: ${run.runId}`,
     "",
     `Mode ${run.mode}, model ${run.model}, writer ${run.writerVersion ?? "0.1.0"}, cap ${run.maxCardsPerNode} per node, kinds ${run.enabledKinds.join(", ")}.`,
-    automated ? "Evaluation: automated Sol scores, not human acceptance. Human scores are separate and unchanged." : "Evaluation: human scores only. Automated scores are not substituted for unassessed cards.",
+    automated ? `Evaluation: automated ${values.scores === "sol" ? "Sol" : "Claude"} scores, not human acceptance. Human scores are separate and unchanged.` : "Evaluation: human scores only. Automated scores are not substituted for unassessed cards.",
     `${cards.length} cards for ${new Set(cards.map((c) => `${c.set}:${c.nodeId}`)).size} nodes; ${run.skips.length} skipped (${modelSkips.length} by the model${modelSkips.length ? `, evaluator agreed with ${skipAgree}` : ""}).`,
     `${run.batches.length} requests, ${calls} calls, ${firstTry} passed validation first time; ${cards.filter((c) => c.unvalidated).length} cards never passed.`,
     "",
@@ -79,6 +94,7 @@ for (const dir of dirs) {
     `- Answer leaks: ${leaks.length} (needs 0) ${leaks.length ? "✗" : "✓"}`,
     `- Factual errors in kept cards: ${keptErrors.length} (needs 0) ${keptErrors.length ? "✗" : "✓"}`,
     `- Errors in any card: ${cards.filter((c) => sc(c).error).length}; unclear: ${cards.filter((c) => sc(c).unclear).length}`,
+    ...(clozeMode ? ["", `### Cloze (${clozeMode}): ${clozeCards.length} cloze, ${basicFE.length} basic fact/equation cards`, "", ...clozeChecks.map(([label, ok, value]) => `- ${label}: ${value} ${ok ? "✓" : "✗"}`), "- Anki rendering: run bench/cloze-fields.ts and bench/cloze-anki-check.py (not part of this verdict)."] : []),
     "",
     "## By subject",
     "",

@@ -13,7 +13,7 @@ test('schema 8 migrates v7 with exact backup and validates imported metadata', a
   try {
     await writeFile(path.join(root, 'state.json'), bytes);
     const store = await StateStore.open(root);
-    assert.deepEqual(store.snapshot(), { ...old, schemaVersion: 8 });
+    assert.deepEqual(store.snapshot(), { ...old, schemaVersion: 9 });
     assert.equal(await readFile(path.join(root, 'state.v7.bak'), 'utf8'), bytes);
     await store.close();
     const imported = { ...card, status: 'imported', deck: 'Deck' };
@@ -75,4 +75,34 @@ test('a reloaded backend can retry a relinquished state lock', async t => {
     const next = await fresh.StateStore.open(root);
     await next.close();
   } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test('FI-8: schema 9 migrates v8 with exact backup; cloze format needs schema 9 and a fact or equation kind', async () => {
+  const { activeCloze, historyCloze, validGenerationSettings } = await import('../src/generation/types.ts');
+  const root = await mkdtemp(path.join(os.tmpdir(), 'anki-bridge-v9-'));
+  const card = { id: '0b6f7c1e-0000-4000-8000-000000000002', nodeId: 'n', statementHash: 'h', sessionId: 's', nodeName: 'N', sessionName: 'S', kind: 'fact', front: 'F', back: 'B', extra: '', status: 'draft' };
+  const old = { ...initialState(), schemaVersion: 8, cards: [card] };
+  const bytes = JSON.stringify(old, null, 2) + '\n';
+  try {
+    await writeFile(path.join(root, 'state.json'), bytes);
+    const store = await StateStore.open(root);
+    assert.deepEqual(store.snapshot(), { ...old, schemaVersion: 9 });
+    assert.equal(await readFile(path.join(root, 'state.v8.bak'), 'utf8'), bytes);
+    await store.close();
+  } finally { await rm(root, { recursive: true, force: true }); }
+  const cloze = { ...card, format: 'cloze', front: 'femto- means {{blank}}.', back: '\\(10^{-15}\\)' };
+  validateState({ ...initialState(), cards: [cloze] });
+  validateState({ ...initialState(), cards: [{ ...cloze, kind: 'equation' }] });
+  for (const bad of [{ ...cloze, kind: 'why' }, { ...cloze, format: 'basic' }, { ...cloze, format: 'Cloze' }]) {
+    assert.throws(() => validateState({ ...initialState(), cards: [bad] }), /format/);
+  }
+  assert.throws(() => migrateState({ ...old, cards: [cloze] }), /format/);
+  // A missing setting is auto in the active settings and off in history; neither is rewritten.
+  const settings = initialState().generationSettings;
+  assert.equal(settings.cloze, undefined);
+  assert.equal(activeCloze(settings), 'auto');
+  assert.equal(historyCloze(settings), 'off');
+  assert.equal(historyCloze({ ...settings, cloze: 'prefer' }), 'prefer');
+  assert.ok(validGenerationSettings({ ...settings, cloze: 'off' }));
+  assert.ok(!validGenerationSettings({ ...settings, cloze: 'always' }));
 });

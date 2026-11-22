@@ -1,4 +1,4 @@
-// Settings page: connection, destination profile, tags, extra card types and note type upkeep.
+// Settings page: connection, destination profile, tags, extra card types, cloze cards and note type upkeep.
 // Card review lives on the main page; nothing here sends cards.
 import type { PluginFrontendContext } from "../sdk/index.d.ts";
 import { exampleCard, KIND_HELP, KIND_NAMES } from "./kinds-ui.ts";
@@ -32,7 +32,14 @@ export function connectionText(url: string, result: Connection | Error): { text:
   return { tone: "success", text: `Connected. Profile ${result.profile}, ${plural(result.decks.length, "deck")}.` };
 }
 
-interface SettingsSnapshot { settings: Settings; destination: Destination | null; generationSettings?: { enabledKinds: CoreCardKind[] } }
+interface SettingsSnapshot { settings: Settings; destination: Destination | null; generationSettings?: { enabledKinds: CoreCardKind[]; cloze?: ClozeSetting } }
+type ClozeSetting = "off" | "auto" | "prefer";
+/** FI-8: the three stops of the Cloze cards slider. A missing setting means auto. */
+export const CLOZE_STOPS: { value: ClozeSetting; label: string; help: string }[] = [
+  { value: "off", label: "Off", help: "Every card is a question and answer." },
+  { value: "auto", label: "Writer chooses", help: "Cloze where the notation already says what is asked, such as [ħ] = [...]." },
+  { value: "prefer", label: "Prefer cloze", help: "Cloze for every fact and equation card that can be one." },
+];
 
 export function mountSettings(ctx: PluginFrontendContext, container: HTMLElement, signal: AbortSignal, peers: Peers): () => void {
   const root = el("div", undefined, "anki-bridge ab-settings");
@@ -102,15 +109,55 @@ export function mountSettings(ctx: PluginFrontendContext, container: HTMLElement
   }
   kinds.append(kindStatus);
 
+  // Cloze cards (FI-8)
+  const cloze = el("section", undefined, "ab-panel");
+  const clozeRange = el("input", undefined, "ab-range");
+  clozeRange.type = "range"; clozeRange.min = "0"; clozeRange.max = "2"; clozeRange.step = "1";
+  clozeRange.setAttribute("aria-label", "Cloze cards");
+  const clozeStops = el("div", undefined, "ab-range-stops");
+  clozeStops.setAttribute("aria-hidden", "true");
+  for (const stop of CLOZE_STOPS) clozeStops.append(el("span", stop.label));
+  const clozeHelp = el("p", undefined, "ab-muted");
+  const clozeStatus = status();
+  cloze.append(el("h3", "Cloze cards", "ab-panel-title"),
+    el("p", "A cloze card hides one part of a statement, such as the units in [ħ] = [...]. Only fact and equation cards can be cloze.", "ab-muted ab-panel-intro"),
+    clozeRange, clozeStops, clozeHelp, clozeStatus);
+  const clozeIndex = () => Math.max(0, CLOZE_STOPS.findIndex(s => s.value === (state?.generationSettings?.cloze ?? "auto")));
+  function showClozeStop(index: number): void {
+    const stop = CLOZE_STOPS[index]!;
+    clozeRange.value = String(index);
+    clozeRange.setAttribute("aria-valuetext", stop.label);
+    clozeHelp.textContent = stop.help;
+    clozeStops.querySelectorAll("span").forEach((span, i) => { span.dataset.selected = String(i === index); });
+  }
+  function syncCloze(): void {
+    cloze.hidden = !state?.generationSettings;
+    if (state?.generationSettings) showClozeStop(clozeIndex());
+  }
+  clozeRange.oninput = () => showClozeStop(Number(clozeRange.value));
+  clozeRange.onchange = () => {
+    const stop = CLOZE_STOPS[Number(clozeRange.value)]!;
+    if (busy) { syncCloze(); clozeStatus.show("Wait for the current action to finish.", "error"); return; }
+    if (stop.value === (state?.generationSettings?.cloze ?? "auto")) return;
+    void act(clozeStatus, async () => {
+      await apply("generationSettings", { cloze: stop.value });
+      return `Cloze cards: ${stop.label}.`;
+    }, "Saving…").then(() => { if (alive()) syncCloze(); });
+  };
+
   // Note type upkeep
   const noteType = el("section", undefined, "ab-panel ab-panel-quiet");
   const noteActions = el("div", undefined, "ab-actions");
   const noteStatus = status();
+  const noteChoice = el("select", undefined, "ab-input ab-select");
+  noteChoice.setAttribute("aria-label", "Note type to repair");
+  for (const [value, label] of [["basic", "LearnHarness Basic"], ["cloze", "LearnHarness Cloze"]]) { const o = el("option", label); o.value = value!; noteChoice.append(o); }
+  const chosenNoteType = () => noteChoice.value === "cloze" ? "LearnHarness Cloze" : "LearnHarness Basic";
   noteType.append(el("h3", "Note type", "ab-panel-title"),
-    el("p", "Use only if Anki Bridge reports a problem with the LearnHarness Basic note type.", "ab-muted ab-panel-intro"),
-    noteActions, noteStatus);
+    el("p", "Use only if Anki Bridge reports a problem with the LearnHarness Basic or LearnHarness Cloze note type.", "ab-muted ab-panel-intro"),
+    field("Note type", noteChoice), noteActions, noteStatus);
 
-  root.append(connection, destination, tags, kinds, noteType);
+  root.append(connection, destination, tags, kinds, cloze, noteType);
 
   let saveButton: ButtonHandle, testButton: ButtonHandle, pairButton: ButtonHandle, removeKey: ButtonHandle | undefined;
   let savedUrl = "";
@@ -206,19 +253,19 @@ export function mountSettings(ctx: PluginFrontendContext, container: HTMLElement
 
   const shown = () => state?.destination ?? undefined;
   button(ctx, noteActions, signal, { label: "Add missing fields", onClick: () => act(noteStatus, async () => {
-    const target = shown();
+    const target = shown(), noteType = noteChoice.value, name = chosenNoteType();
     const ok = await confirmDialog(ctx, signal, { title: "Add missing fields", confirm: "Add fields",
-      body: `Add missing fields to LearnHarness Basic in ${target ? `profile ${target.profile}` : "the paired profile"}.` });
+      body: `Add missing fields to ${name} in ${target ? `profile ${target.profile}` : "the paired profile"}.` });
     if (!ok || !alive()) return "";
-    await ctx.call("repairFields", { expectedDestination: target });
+    await ctx.call("repairFields", { noteType, expectedDestination: target });
     return "Fields checked.";
   }) });
   button(ctx, noteActions, signal, { label: "Reset styling and templates", onClick: () => act(noteStatus, async () => {
-    const target = shown();
+    const target = shown(), noteType = noteChoice.value, name = chosenNoteType();
     const ok = await confirmDialog(ctx, signal, { title: "Reset styling and templates", confirm: "Reset", destructive: true,
-      body: `Replace LearnHarness Basic styling and templates in ${target ? `profile ${target.profile}` : "the paired profile"}. Your edits to them in Anki are lost.` });
+      body: `Replace ${name} styling and templates in ${target ? `profile ${target.profile}` : "the paired profile"}. Your edits to them in Anki are lost.` });
     if (!ok || !alive()) return "";
-    await ctx.call("updateStyling", { confirmed: true, expectedDestination: target });
+    await ctx.call("updateStyling", { noteType, confirmed: true, expectedDestination: target });
     return "Styling and templates reset.";
   }) });
 
@@ -270,7 +317,7 @@ export function mountSettings(ctx: PluginFrontendContext, container: HTMLElement
       destinationText.append("No profile chosen. Open one in Anki, then choose it here.");
     }
     pairButton.update({ label: d ? "Switch to the open profile" : "Use the open profile" });
-    syncKinds(); urlAdvice(); syncButtons();
+    syncKinds(); syncCloze(); urlAdvice(); syncButtons();
   }
   async function load(): Promise<void> {
     const sequence = ++loads;

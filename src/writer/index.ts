@@ -9,3 +9,4 @@ export * from "./prompt.ts";
 export * from "./schema.ts";
 export * from "./validate.ts";
 export * from "./dedupe.ts";
+export * from "./cloze.ts";

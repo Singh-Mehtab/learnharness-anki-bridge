@@ -12,7 +12,9 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { crc32, deflateRawSync } from 'node:zlib';
-import { BACK, CSS, FIELDS, FRONT, MODEL_NAME, TEMPLATE_NAME } from './note-type.ts';
+import { BASIC_NOTE_TYPE, CLOZE_NOTE_TYPE, noteTypeFor } from './note-type.ts';
+import type { NoteTypeSpec } from './note-type.ts';
+import { clozeTextField } from '../writer/cloze.ts';
 import { renderMarkdown } from './render.ts';
 import { packageRevision } from './package-revision.ts';
 import { expandTagTemplate, systemTags, validateTags } from './tags.ts';
@@ -20,6 +22,9 @@ import type { Card, State } from './state.ts';
 
 /** Fixed so every package from this plugin carries the same note type ID. */
 export const PACKAGE_MODEL_ID = 1794873600000;
+/** FI-8: the LearnHarness Cloze note type's fixed ID. */
+export const PACKAGE_CLOZE_MODEL_ID = 1794873600001;
+const modelId = (spec: NoteTypeSpec) => spec.isCloze ? PACKAGE_CLOZE_MODEL_ID : PACKAGE_MODEL_ID;
 const DEFAULT_DECK_ID = 1;
 
 export interface PackageCard { card: Card; fields: string[]; tags: string[] }
@@ -44,13 +49,19 @@ export function packageFingerprint(card: Card): string {
   return createHash('sha256').update(packageRevision(card)).digest('hex');
 }
 
+/** Field values by name for the card's note type. AnkiConnect delivery and the
+ *  .apkg writer both use this, so the two routes send the same note. */
+export function noteFields(card: Card): Record<string, string> {
+  const common = { Extra: renderMarkdown(card.extra), Source: htmlText(`${card.sessionName} / ${card.nodeName}`), LH_ID: card.id, LH_Node: htmlText(card.nodeId) };
+  return card.format === 'cloze'
+    ? { Text: clozeTextField(card.front, card.back), ...common }
+    : { Front: renderMarkdown(card.front), Back: renderMarkdown(card.back), ...common };
+}
+
 /** The same field values AnkiConnect delivery sends with addNote, in note type field order. */
 export function packageFields(card: Card): string[] {
-  const values: Record<(typeof FIELDS)[number], string> = {
-    Front: renderMarkdown(card.front), Back: renderMarkdown(card.back), Extra: renderMarkdown(card.extra),
-    Source: htmlText(`${card.sessionName} / ${card.nodeName}`), LH_ID: card.id, LH_Node: htmlText(card.nodeId),
-  };
-  const fields = FIELDS.map(name => values[name]);
+  const values = noteFields(card);
+  const fields = noteTypeFor(card).fields.map(name => values[name]!);
   // Anki joins fields with U+001F, so one inside a field would shift every later field.
   if (fields.some(field => field.includes('\x1f'))) throw new Error(`Card "${card.front.slice(0, 60)}" contains a control character. Edit it first.`);
   return fields;
@@ -58,7 +69,7 @@ export function packageFields(card: Card): string[] {
 
 /** Tags as delivery adds them: the chosen tags, then the automatic ones unless turned off. */
 export const packageTags = (chosen: string[], card: Card, withSystemTags: boolean): string[] =>
-  [...new Set([...chosen, ...(withSystemTags ? systemTags(card.kind) : [])])];
+  [...new Set([...chosen, ...(withSystemTags ? systemTags(card.kind, card.format) : [])])];
 
 function data(value: unknown): Record<string, unknown> {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new Error('Expected an input object.');
@@ -143,14 +154,15 @@ function deckJson(id: number, name: string, mod: number) {
     extendNew: 0, extendRev: 0, newToday: [0, 0], revToday: [0, 0], lrnToday: [0, 0], timeToday: [0, 0] };
 }
 
-function modelJson(deckId: number, mod: number) {
+function modelJson(spec: NoteTypeSpec, deckId: number, mod: number) {
   return {
-    id: PACKAGE_MODEL_ID, name: MODEL_NAME, type: 0, mod, usn: -1, sortf: 0, did: deckId,
-    tmpls: [{ name: TEMPLATE_NAME, ord: 0, qfmt: FRONT, afmt: BACK, bqfmt: '', bafmt: '', bfont: '', bsize: 0, did: null }],
-    flds: FIELDS.map((name, ord) => ({ name, ord, sticky: false, rtl: false, font: 'Arial', size: 20, media: [] })),
-    css: CSS, latexPre: LATEX_PRE, latexPost: LATEX_POST, latexsvg: false,
-    // {{Front}} renders nothing without Front, so Front is required.
-    req: [[0, 'all', [0]]], tags: [], vers: [],
+    id: modelId(spec), name: spec.name, type: spec.isCloze ? 1 : 0, mod, usn: -1, sortf: 0, did: deckId,
+    tmpls: [{ name: spec.templateName, ord: 0, qfmt: spec.front, afmt: spec.back, bqfmt: '', bafmt: '', bfont: '', bsize: 0, did: null }],
+    flds: spec.fields.map((name, ord) => ({ name, ord, sticky: false, rtl: false, font: 'Arial', size: 20, media: [] })),
+    css: spec.css, latexPre: LATEX_PRE, latexPost: LATEX_POST, latexsvg: false,
+    // {{Front}} renders nothing without Front, so Front is required. Cloze note
+    // types have no req: Anki generates their cards from the cloze numbers.
+    ...(spec.isCloze ? {} : { req: [[0, 'all', [0]]] }), tags: [], vers: [],
   };
 }
 
@@ -184,9 +196,11 @@ export async function buildCollection(deck: string, cards: PackageCard[], now: n
   const { DatabaseSync } = await sqlite();
   const seconds = Math.floor(now / 1000), deckId = packageDeckId(deck);
   const conf = { activeDecks: [DEFAULT_DECK_ID], curDeck: DEFAULT_DECK_ID, newSpread: 0, collapseTime: 1200, timeLim: 0, estTimes: true, dueCounts: true,
-    curModel: String(PACKAGE_MODEL_ID), nextPos: cards.length + 1, sortType: 'noteFld', sortBackwards: false, addToCur: true, newBury: true };
+    curModel: String(modelId(cards.some(c => !c.card.format) || !cards.length ? BASIC_NOTE_TYPE : CLOZE_NOTE_TYPE)), nextPos: cards.length + 1, sortType: 'noteFld', sortBackwards: false, addToCur: true, newBury: true };
   const decks = { [DEFAULT_DECK_ID]: deckJson(DEFAULT_DECK_ID, 'Default', seconds), ...(deckId === DEFAULT_DECK_ID ? {} : { [deckId]: deckJson(deckId, deck, seconds) }) };
-  const models = { [PACKAGE_MODEL_ID]: modelJson(deckId, seconds) };
+  // FI-8: a package carries each note type its cards use, basic first.
+  const specs = [BASIC_NOTE_TYPE, CLOZE_NOTE_TYPE].filter(spec => spec === BASIC_NOTE_TYPE ? cards.some(c => !c.card.format) || !cards.length : cards.some(c => c.card.format === 'cloze'));
+  const models = Object.fromEntries(specs.map(spec => [modelId(spec), modelJson(spec, deckId, seconds)]));
   const directory = await mkdtemp(path.join(os.tmpdir(), 'anki-bridge-apkg-'));
   try {
     const file = path.join(directory, 'collection.anki2');
@@ -201,7 +215,7 @@ export async function buildCollection(deck: string, cards: PackageCard[], now: n
       cards.forEach(({ card, fields, tags }, index) => {
         const id = now + index, sortText = stripHtml(fields[0]);
         // The note GUID is the card's Bridge ID, the same value as its LH_ID field.
-        insertNote.run(id, card.id, PACKAGE_MODEL_ID, seconds, tags.length ? ` ${tags.join(' ')} ` : '', fields.join('\x1f'), sortText, fieldChecksum(sortText));
+        insertNote.run(id, card.id, modelId(noteTypeFor(card)), seconds, tags.length ? ` ${tags.join(' ')} ` : '', fields.join('\x1f'), sortText, fieldChecksum(sortText));
         // A new card; due is its position, so Anki keeps the review order.
         insertCard.run(id, id, deckId, seconds, index + 1);
       });

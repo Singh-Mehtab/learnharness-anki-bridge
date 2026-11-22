@@ -62,4 +62,6 @@ export function validateTags(value: unknown): string[] {
   return tags;
 }
 
-export const systemTags = (kind: string): string[] => ["learnharness", `learnharness::kind::${kind}`];
+/** FI-8: cloze notes also get learnharness::format::cloze. Basic notes keep 0.9.0's tags. */
+export const systemTags = (kind: string, format?: string): string[] =>
+  ["learnharness", `learnharness::kind::${kind}`, ...(format === "cloze" ? ["learnharness::format::cloze"] : [])];

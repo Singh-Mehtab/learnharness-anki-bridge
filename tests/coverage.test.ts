@@ -263,7 +263,7 @@ test('migrations from 1/2/3 retain supported data; corrupt and future dismissals
     const base = initialState(); const { dismissals: _d, ...old } = base;
     const raw = { ...old, schemaVersion: version, generationSettings: { cardsPerNode: 2, enabledKinds: ['recall'], model: null }, cards: [sent()], destination: paired };
     const migrated = migrateState(raw);
-    assert.equal(migrated.schemaVersion, 8); assert.deepEqual(migrated.dismissals, []);
+    assert.equal(migrated.schemaVersion, 9); assert.deepEqual(migrated.dismissals, []);
     assert.deepEqual(migrated.cards, raw.cards); assert.deepEqual(migrated.destination, paired);
     if (version >= 2) assert.deepEqual(migrated.generationSettings, base.generationSettings);
     if (version >= 3) assert.deepEqual(migrated.flags, raw.flags);
@@ -271,7 +271,7 @@ test('migrations from 1/2/3 retain supported data; corrupt and future dismissals
   const directory = await mkdtemp(path.join(os.tmpdir(), 'anki-coverage-state-')), file = path.join(directory, 'state.json');
   try {
     for (const bad of [{ ...initialState(), dismissals: [dismiss(), dismiss()] }, { ...initialState(), dismissals: [dismiss('bad')] },
-      { ...initialState(), dismissals: [{ ...dismiss(), dismissedAt: 'not-a-date' }] }, { ...initialState(), schemaVersion: 9 }]) {
+      { ...initialState(), dismissals: [{ ...dismiss(), dismissedAt: 'not-a-date' }] }, { ...initialState(), schemaVersion: 10 }]) {
       const raw = JSON.stringify(bad); await writeFile(file, raw);
       await assert.rejects(StateStore.open(directory), /Invalid|Unsupported/); assert.equal(await readFile(file, 'utf8'), raw);
     }

@@ -14,11 +14,14 @@ export interface CardInfo { cardId: number; lapses: number; reps: number; queue:
 export interface NoteReading {
   lhId: string; noteId: number; nodeId: string; nodeName: string; sessionId: string; sessionName: string;
   kind: string; front: string; back: string;
+  /** FI-8: 'cloze' for a cloze card; front then holds {{blank}}. */
+  format?: 'cloze';
   tags: string[]; cards: CardInfo[]; reviews: ReviewRow[];
 }
 export type Reason = 'lapses' | 'again' | 'leech';
 export interface CardEvidence {
   lhId: string; noteId: number; kind: string; front: string; back: string;
+  format?: 'cloze';
   sessionId: string; sessionName: string;
   lapses: number; reps: number; recentAgain: number[]; leech: boolean; suspended: boolean; decks: string[];
   reasons: Reason[];
@@ -60,7 +63,7 @@ export function evidence(note: NoteReading, now: number): CardEvidence {
   if (again.length >= REVIEW_RULES.recentAgain) reasons.push('again');
   if (leech) reasons.push('leech');
   return {
-    lhId: note.lhId, noteId: note.noteId, kind: note.kind, front: note.front, back: note.back,
+    lhId: note.lhId, noteId: note.noteId, kind: note.kind, ...(note.format ? { format: note.format } : {}), front: note.front, back: note.back,
     sessionId: note.sessionId, sessionName: note.sessionName,
     lapses, reps, recentAgain: again, leech, suspended: note.cards.length > 0 && note.cards.every(c => c.queue === -1),
     decks: [...new Set(note.cards.map(c => c.deckName))], reasons,

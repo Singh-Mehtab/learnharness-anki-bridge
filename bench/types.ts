@@ -12,6 +12,9 @@ export interface BenchSet {
   targets: string[];
   /** Flagged targets, with the learner's note when there is one. */
   flags?: Record<string, { note?: string }>;
+  /** FI-8: targets where cloze is clearly better than a question. An auto run
+   *  passes only if at least one cloze card is accepted on them. */
+  clozePositive?: string[];
 }
 
 export interface Attempt {
@@ -63,6 +66,10 @@ export interface BenchRun {
   createdAt: string;
   maxCardsPerNode: number;
   enabledKinds: CardKind[];
+  /** FI-8 cloze mode the run used. Absent on older runs (off). */
+  cloze?: "off" | "auto" | "prefer";
+  /** FI-8: "set:nodeId" of positive cloze fixtures in this run. */
+  clozePositive?: string[];
   instructions: string;
   /** Present on 0.1.1+ runs; older runs counted attempts, not CLI launches. */
   modelCalls?: number;
@@ -79,6 +86,8 @@ export interface CardScore {
   leak?: boolean;
   error?: boolean;
   unclear?: boolean;
+  /** FI-8: should have been the other format (cloze vs basic). */
+  otherFormat?: boolean;
   note?: string;
 }
 

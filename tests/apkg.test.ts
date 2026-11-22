@@ -242,3 +242,34 @@ test('deck IDs and file names are stable, and sort text drops markup', () => {
   assert.equal(packageFileName('::'), 'anki-bridge-cards.apkg');
   assert.equal(stripHtml('<p>A &amp; <b>B</b> &#x3b1; &#946;</p><!-- c -->'), 'A & B α β');
 });
+
+test('FI-8: a package with basic and cloze cards carries both note types, each note on its own', async () => {
+  const { PACKAGE_CLOZE_MODEL_ID, packageFields } = await import('../src/anki/apkg.ts');
+  const { CLOZE_CSS, CLOZE_FIELDS, CLOZE_FRONT, CLOZE_MODEL_NAME } = await import('../src/anki/note-type.ts');
+  const { clozeTextField } = await import('../src/writer/cloze.ts');
+  const state = syntheticState();
+  const cloze = card('0b6f7c1e-0000-4000-8000-000000000007', 'approved', { format: 'cloze', front: 'In SI units, \\([\\hbar] = {{blank}}\\)', back: '\\mathrm{J\\,s}' });
+  state.cards.push(cloze);
+  const result = await exportPackage(state, { ids: [ids.fact, cloze.id], deck: 'Synthetic' }, NOW);
+  assert.ok(result.tags.includes('learnharness::format::cloze'));
+  assert.deepEqual(packageFields(cloze), [clozeTextField(cloze.front, cloze.back), '', 'Synthetic session / Synthetic idea', cloze.id, 'node:7']);
+  await withCollection(Buffer.from(result.data, 'base64'), db => {
+    const { notes, cards, col } = contents(db);
+    const models = JSON.parse(col.models);
+    assert.deepEqual(Object.keys(models).sort(), [String(PACKAGE_MODEL_ID), String(PACKAGE_CLOZE_MODEL_ID)].sort());
+    const m = models[PACKAGE_CLOZE_MODEL_ID];
+    assert.equal(m.name, CLOZE_MODEL_NAME); assert.equal(m.type, 1); assert.equal(m.css, CLOZE_CSS);
+    assert.deepEqual(m.flds.map((f: { name: string }) => f.name), [...CLOZE_FIELDS]);
+    assert.equal(m.tmpls.length, 1); assert.equal(m.tmpls[0].qfmt, CLOZE_FRONT); assert.equal('req' in m, false);
+    assert.deepEqual(models[PACKAGE_MODEL_ID].req, [[0, 'all', [0]]]);
+    assert.deepEqual(notes.map(n => n.mid), [PACKAGE_MODEL_ID, PACKAGE_CLOZE_MODEL_ID]);
+    assert.ok(notes[1]!.flds.startsWith(clozeTextField(cloze.front, cloze.back)));
+    assert.deepEqual(cards.map(c => c.ord), [0, 0]);
+  });
+  // A cloze-only package carries only the cloze note type.
+  const only = await exportPackage(state, { ids: [cloze.id], deck: 'Synthetic' }, NOW);
+  await withCollection(Buffer.from(only.data, 'base64'), db => {
+    const { col } = contents(db);
+    assert.deepEqual(Object.keys(JSON.parse(col.models)), [String(PACKAGE_CLOZE_MODEL_ID)]);
+  });
+});
