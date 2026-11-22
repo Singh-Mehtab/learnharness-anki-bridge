@@ -10,8 +10,9 @@ Cloze is a card **format**, separate from the card **kind**. The kind says what 
 
 - Decided by the user on 2026-11-22: the default mode is **Writer chooses** (`auto`).
 - Decided by the user on 2026-11-22: only `fact` and `equation` cards may be cloze. Steps (short ordered lists) is out of scope for the first version.
-- Decided by the user on 2026-11-22, after scoring part of the `auto` bench run: keep the writer's rules general. Don't add rules for narrow cases such as unit-system wording or whether prefix facts are cloze; those are personal taste, and the learner fixes them by editing. This makes switching a card between basic and cloze in the editor a requirement (see Open question below).
-- Open question, raised by the user on 2026-11-22: how easily can a learner switch a card between basic and cloze in the editor? The current spec has no switch (see Modes). To design before implementation.
+- Decided by the user on 2026-11-22, after scoring part of the `auto` bench run: the built-in writer rules cover what holds for everyone, plus style rules that suit most learners. Personal taste (unit-system wording, whether prefix facts are cloze) stays out. The learner fixes those cases by editing, and later through a Writer notes setting (issue #54, separate from FI-8).
+- Decided by the user on 2026-11-22: the editor has a button to switch an unsent draft from basic to cloze and back, with editable fields so the learner can reword it. No model call in the first version (see Switching format).
+- Decided by the user on 2026-11-22: when the blank is inside maths, the plugin lays the card out as a lead-in sentence and a display equation (see Layout of maths blanks).
 - Bench card writer for tuning Part A: Sonnet at high effort (user's choice).
 
 ## Evidence this spec relies on
@@ -36,7 +37,7 @@ The mode is a generation setting with three values.
 | `auto` | The writer uses cloze for a fact or equation card when every eligibility rule holds **and** the cloze reads more clearly than a question: the notation already says what is asked, so the question would only repeat it. When unsure, basic. |
 | `prefer` | The writer uses cloze for a fact or equation card whenever every eligibility rule holds. |
 
-The learner can still edit or reject any draft. An automatic, model-written conversion is out of scope for the first version (it needs another model call). A manual basic/cloze switch in the editor is an open question (see Decisions): one option keeps the text, prefills "Hidden part" from the old back (basic to cloze) or the front from the text with `[...]` (cloze to basic), and leaves the rewording to the learner. A card already in Anki would change note type, which restarts its review history, so the switch may be limited to drafts or need a warning.
+The learner can still edit or reject any draft, and can switch an unsent draft between basic and cloze in the editor (see Switching format).
 
 ## Eligibility rules
 
@@ -116,7 +117,7 @@ LearnHarness registers worker instructions and schema once (`workers.register`).
 - The cloze section states which existing rules it replaces for cloze cards, because several conflict with Part A (`src/writer/prompt.ts`):
   - "Asked as a closed question" and "Ask plainly and briefly" apply to basic cards. A cloze card is a statement with one blank.
   - The equation kind's "ask for it by name or by what it relates" applies to basic equation cards. A cloze equation card hides one side and shows the cue (rule 6).
-  - "Prefer display maths" does not apply to cloze text. The text is one line with inline maths.
+  - "Prefer display maths" does not apply to cloze text. The writer writes one line with inline maths; the plugin turns a maths blank into a display equation when rendering (see Layout of maths blanks).
   - The units format `\([t] = [E]^{-1} = \mathrm{eV^{-1}}\)` is for basic backs. In a cloze, show only the bracket and the blank (example 4), never the intermediate step (rule 5).
   - "Do not define the answer and then ask for its label" still applies, except for the fact kind's term-from-meaning card (example 11), which the fact kind already allows.
   - The fact kind's "one fact asked directly" means one fact per card; a cloze card states it with one blank instead of asking.
@@ -131,7 +132,17 @@ LearnHarness registers worker instructions and schema once (`workers.register`).
 - `Card` gains `format?: "cloze"` (absent means basic). State schema goes from 8 to 9 so an older plugin version refuses the file instead of sending a cloze card through the basic note type. Migration from 8 adds nothing to cards.
 - `generationSettings.cloze` is absent in schema-8 files. In the active settings a missing value resolves to the default, Writer chooses (`auto`), so existing users get cloze cards after upgrading. The release notes must say so and point to the setting. In generation history and saved task inputs, a missing value means Off, because those runs predate cloze. Neither case rewrites stored history.
 - `packageRevision` includes `format`, so a package fingerprint changes if the format changes.
-- Edits keep the format. The manual "Write a card" dialog gets a format choice (basic or cloze). Manual cards and edits use the content checks (C2 to C8) and are not gated by the generation setting (C2a).
+- An edit can change the format of an unsent draft (see Switching format). The manual "Write a card" dialog gets a format choice (basic or cloze). Manual cards and edits use the content checks (C2 to C8) and are not gated by the generation setting (C2a).
+
+## Switching format
+
+The plugin already refuses to edit a card once it is sent or marked imported (`src/anki/delivery.ts`, the `edit` operation), so the switch only ever applies to unsent drafts and never touches Anki review history.
+
+- The editor of an unsent fact or equation draft shows "Switch to cloze" or "Switch to basic". Other kinds don't get the button (C2).
+- Basic to cloze: "Hidden part" is prefilled from the old back. "Text" is prefilled from the old front, and an "Insert blank" button puts `{{blank}}` at the cursor. The learner rewords the text into a statement, for example "What does the prefix femto- (f) denote?" into "The prefix femto- (f) means {{blank}}."
+- Cloze to basic: the front is prefilled with the text, the blank shown as `[...]`, and the back with the hidden part, wrapped in `\(...\)` if the blank was inside maths. The learner can leave it as a fill-in question or reword it.
+- Nothing is saved until Save, which runs the checks for the new format. Cancel, or switching back before saving, restores the original fields exactly.
+- Out of scope for the first version: a "Rewrite as cloze" button that asks the writer to redo the card (one small model call). It is the natural follow-up.
 
 ## Anki note type
 
@@ -142,9 +153,17 @@ LearnHarness registers worker instructions and schema once (`workers.register`).
 - `src/reviews/service.ts` accepts either owned note type when matching a note to a card, and checks the note type matches the card's format.
 - Review evidence carries `format` through to its consumers (`src/reviews/signals.ts`, Topics in `src/topics-ui.ts`). Topics renders cloze cards with the same format-aware preview as the review page, so the user never sees `{{blank}}` or undelimited TeX.
 
+## Layout of maths blanks
+
+When the blank is inside a maths segment, the plugin shows that segment as display maths on its own line. Text before it becomes a lead-in paragraph and text after it a following paragraph, dropped if it is only punctuation. Blanks outside maths stay inline. The writer output and the validator don't change: the layout is applied when rendering (step 0 below), so the Anki Text field, the `.apkg`, the plugin previews and the bench scoring page all show the same thing, and the C6 check renders the laid-out text.
+
+Verified on Anki 25.09.4 on 2026-11-22: `<p>In natural units with energy in eV,</p><p>\[[t] = {{c1::\mathrm{eV^{-1}<!-- -->}<!-- -->}}\]</p>` gives one `c1` blank with the expected question and answer, and so did a fraction answer (`\frac{1}{\alpha}`) and `E_0 = mc^2`. The card CSS is left-aligned, but MathJax centres display maths on its own, as on today's basic backs (checked from the HTML, not on screen).
+
 ## Rendering the Text field
 
 Input: `front` with one `{{blank}}`, and `back`.
+
+0. If the blank is inside a maths segment, apply the layout above: split the front around that segment and turn the segment into display maths.
 
 1. Replace `{{blank}}` with `\u0002` + back + `\u0003` (control characters the writer can't produce; the validator rejects control characters in fields).
 2. Render with `renderMarkdown` as today.
@@ -169,7 +188,7 @@ AnkiConnect delivery and the `.apkg` writer both call one shared function for th
   - Writer chooses: "Cloze where the notation already says what is asked, such as \([\hbar] = [\ldots]\)."
   - Prefer cloze: "Cloze for every fact and equation card that can be one."
   The control is a native range input (`min 0`, `max 2`, `step 1`) or equivalent, keyboard-operable, with the stop name as its accessible value text. Stored in `generationSettings.cloze` (`off`, `auto`, `prefer`). Generation history stores the resolved mode explicitly, never a missing value (today the start path copies the active settings as they are, `src/generation/service.ts`), so a later change to the default cannot change what history says.
-- Review and drafting: a cloze card shows a "Cloze" pill. The preview shows the front with the blank as `[...]` and the back with the full text and the answer emphasised. Editing a cloze card labels the fields "Text" and "Hidden part", and validates with the same checks.
+- Review and drafting: a cloze card shows a "Cloze" pill. The preview shows the front with the blank as `[...]` and the back with the full text and the answer emphasised, using the maths-blank layout. Editing a cloze card labels the fields "Text" and "Hidden part", and validates with the same checks. The editor has the format switch and the "Insert blank" button (see Switching format).
 - System tags add `learnharness::format::cloze` for cloze cards. Basic cards keep today's tags.
 
 ## Bench
@@ -196,6 +215,8 @@ These are the targets for tuning Part A. Human scores and Sol scores stay in sep
 
 - Unit tests for C1 to C8, including the leak cases `\(E_0 = mc^2 = {{blank}}\)` / `mc^2` (leak) and `\(E_0 = {{blank}}\)` / `mc^2` (no leak), a blank inside a link URL (rejected), a TeX back `n![z^n](1-z)^{-1}` (allowed) versus a Markdown image in prose (rejected), a blank crossing a TeX group `\(x = {{blank}}}\)` / `\frac{1}{2` (rejected, including as a manual edit), and manual cloze edits with the setting Off (allowed).
 - Escaping cases: `}}` inside and outside maths, `}}}`, an answer ending in `}` (`\gamma m \vec{v}`, `\mathrm{J\,s}`), an answer starting with `:`, `{{c1` in text, `::` in the answer, a blank inside maths, a blank inside bold (rejected), an inline-code back (allowed).
+- Layout: a maths blank with a lead-in, with no lead-in, with trailing punctuation (dropped) and with trailing words (kept); a prose blank stays inline. The Anki library check covers laid-out fields.
+- Format switch: basic to cloze and back on an unsent draft; switching back before saving restores the original fields; the button is absent for other kinds and for sent or imported cards; saving runs the new format's checks.
 - Settings: a schema-8 file with no `cloze` value reads as `auto` in active settings and as Off in history, without rewriting history. Duplicate keys: a basic and a cloze card with identical fields are both kept.
 - A test that renders generated Text fields with Anki's Python library on a scratch collection and checks one card, one `c1` blank, and the exact expected question and answer HTML, not just the card count (a broken cloze can still make one card). It runs where Anki's library is available and is skipped otherwise.
 - Generation: a successful schema-8 task without `definitionId` recovers and applies after the upgrade; preflight uses the cloze definition's size when the setting is on; a cloze card from the basic worker is rejected.
@@ -207,4 +228,4 @@ These are the targets for tuning Part A. Human scores and Sol scores stay in sep
 
 ## Out of scope for the first version
 
-Multiple blanks per note, hints, cloze for kinds other than fact and equation, converting existing notes, image occlusion.
+Multiple blanks per note, hints, cloze for kinds other than fact and equation, converting notes already in Anki, a model-written "Rewrite as cloze" button, image occlusion.
