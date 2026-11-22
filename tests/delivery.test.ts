@@ -715,7 +715,8 @@ test('delivery receipt separates a matching imported note, a new add and a defin
     const before = f.calls.length;
     const foundOnly = await f.send([imported], 'Not the actual deck', ['not-applied']);
     assert.deepEqual(foundOnly.delivery, { added: [], found: [imported], skipped: [], failed: [], deck: null, tags: [] });
-    assert.ok(f.calls.slice(before).every(c => ['getActiveProfile', 'findNotes'].includes(c.action)));
+    // FI-8: notesInfo is a read, checking the found note's type (S22).
+    assert.ok(f.calls.slice(before).every(c => ['getActiveProfile', 'findNotes', 'notesInfo'].includes(c.action)));
     assert.equal(foundOnly.cards[0].deck, undefined);
     assert.equal(foundOnly.cards[0].existingNote, true);
     assert.equal(foundOnly.settings.lastDeck, '');
