@@ -44,6 +44,8 @@ For development tests, use a throwaway Anki profile and a LearnHarness checkout 
 5. Review each card. The collapsed Source idea shows the statement captured at drafting. Edit and save as needed; editing an approved card returns it to draft. Length warnings are advisory. Drop unwanted cards, then approve cards one at a time or all together. No generated card is approved automatically.
 6. Choose an existing or new deck, check the tags and send approved cards. Check presence or use Show in Anki. URL or profile mismatches block sends and reconciliation; do not switch profiles during a send, since AnkiConnect cannot make a profile check and write atomic.
 
+The writer checks for cards that ask for the same recall task during one Write cards run. It drafts flagged ideas first and gives later requests a bounded list of earlier cards from that run. If overlap leaves an idea with no card, look for the skip reason in the Write cards run summary. This check adds no model calls and does not search Anki or past runs. Check for missed repeats in Review, especially in large runs where the full list may not fit.
+
 Completed worker results are applied at most once. Retry the rest offers a new estimate for unsuccessful batches; it does not regenerate successful ones. Source changes and missing ideas are shown without changing Anki notes. Write a card by hand is in the More menu.
 
 The bridge never updates or deletes existing Anki notes or their review history. Field repair and styling replacement are separate actions; styling replacement can overwrite template edits after confirmation. Close affected Anki editors before either operation.

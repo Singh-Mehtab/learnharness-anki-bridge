@@ -14,21 +14,21 @@ import { capFor } from '../writer/kinds.ts';
 import { CORE_KINDS, isCoreKind, isStoredKind } from '../writer/types.ts';
 import type { Batch } from '../writer/input.ts';
 import type { WriterInput, WriterResult } from '../writer/types.ts';
-import { activeCloze, validGenerationSettings } from './types.ts';
+import { activeCloze, MAX_BATCH_CONTEXT_TOKENS, validGenerationSettings } from './types.ts';
+import { batchContext } from './batch-context.ts';
 import type { Generation, GenerationSettings, GenerationTask, SourceSnapshot } from './types.ts';
 import { graphCoverage, statementHash } from '../coverage/service.ts';
 import { MAX_SELECTED_NODES } from '../coverage/flow.ts';
 
 const WORKER = 'manual-card-writer';
-/** FI-8: the cloze-enabled writer, for auto and prefer. WORKER stays byte-identical
- *  to 0.9.0 and serves Off mode and every task saved before cloze. */
+/** Auto and prefer use the cloze definition. Off and tasks saved before cloze use WORKER. */
 const CLOZE_WORKER = 'manual-card-writer-cloze';
 type Definition = typeof WORKER | typeof CLOZE_WORKER;
 const definitionFor = (input: WriterInput): Definition => input.cloze ? CLOZE_WORKER : WORKER;
 /** Instructions and schema per definition, built once. */
 const definitions = (): Record<Definition, { instructions: string; resultSchema: unknown }> => ({
-  [WORKER]: { instructions: writerInstructions(), resultSchema: resultSchemaFor() },
-  [CLOZE_WORKER]: { instructions: writerInstructions({ cloze: true }), resultSchema: resultSchemaFor(undefined, { cloze: true }) },
+  [WORKER]: { instructions: writerInstructions({ checkBatchDuplicates: true }), resultSchema: resultSchemaFor() },
+  [CLOZE_WORKER]: { instructions: writerInstructions({ cloze: true, checkBatchDuplicates: true }), resultSchema: resultSchemaFor(undefined, { cloze: true }) },
 });
 /** A task saved by 0.9.0 or earlier has no definitionId: it ran on WORKER. */
 const taskDefinition = (t: GenerationTask): string => t.definitionId ?? WORKER;
@@ -57,7 +57,7 @@ interface Prepared {
   model: ModelCatalogEntry;
   /** What is sent: the override, or the host's cheap slot with its thinking level. */
   spec: PluginModelSpec;
-  batches: Batch[];
+  batches: (Batch & { batchContextTokens?: number })[];
   sources: SourceSnapshot[];
   skipped: { nodeId: string; reason: string }[];
 }
@@ -182,8 +182,15 @@ export class GenerationService {
       JSON.stringify([c.kind, c.format ?? 'basic', c.front, c.back, c.extra ?? '']);
     // Cards, omissions and the unfiltered worker result share one commit.
     await this.delivery.save(s => {
-      const stored = s.generations.find(g => g.id === id)!.tasks.find(t => t.requestId === requestId)!;
+      const generation = s.generations.find(g => g.id === id)!;
+      const stored = generation.tasks.find(t => t.requestId === requestId)!;
       if (stored.status === 'applied') return;
+      // A changed draft may have suppressed a card even if the target still got other cards.
+      if (stored.batchContextDigest && stored.batchContextDigest !== digest(batchContext(generation, stored, s.cards))) {
+        stored.taskId = worker.id; stored.status = 'failed'; delete stored.resultPending;
+        stored.error = 'An earlier draft used to check for repeats changed while writing. Retry requires a new estimate.';
+        return;
+      }
       const matching = new Map<string, typeof s.cards>();
       for (const card of s.cards) {
         if (!card.requestId || card.requestId === requestId || currentHashes.get(card.nodeId) !== card.statementHash
@@ -249,12 +256,14 @@ export class GenerationService {
         source: sourcePassage(n, chatId => this.ctx.learning.getSession(chatId)) });
     }
     const notes = this.flagNotes?.();
-    const packed = pack(graph, ids, id => ({ source: sources.find(s => s.nodeId === id)?.source, flagged: notes?.has(id), flagNote: notes?.get(id) || undefined,
+    // An ordinary target should not claim a recall task before a flagged one can cover it.
+    const orderedIds = [...ids.filter(id => notes?.has(id)), ...ids.filter(id => !notes?.has(id))];
+    const packed = pack(graph, orderedIds, id => ({ source: sources.find(s => s.nodeId === id)?.source, flagged: notes?.has(id), flagNote: notes?.get(id) || undefined,
       existingCards: cards.filter(c => c.nodeId === id).reverse().slice(0, 6).map(c => c.format !== 'cloze' ? { kind: c.kind, front: c.front, back: c.back }
         // Off mode's writer doesn't know the placeholder, so it sees the blank as [...].
         : mode === 'off' ? { kind: c.kind, front: c.front.replace('{{blank}}', '[...]'), back: c.back } : { kind: c.kind, front: c.front, back: c.back, format: 'cloze' as const }) }),
     { maxCardsPerNode: settings.cardsPerNode, enabledKinds: settings.enabledKinds, contextWindow: model.contextWindow, maxTokens: model.maxTokens });
-    const batches: Batch[] = [], skipped = [...packed.skipped];
+    const batches: Prepared['batches'] = [], skipped = [...packed.skipped];
     // The pure packer budgets source material. Also account for prompt/schema overhead
     // and the growing output reserve when the selected model has known limits.
     // Preflight sizes the definition the task will start on (FI-8).
@@ -273,7 +282,14 @@ export class GenerationService {
       }
       if (current.targets.length) batches.push(batch(current));
     }
-    // Bind exactly what would be sent and spent: prompts, limits, model entry and skips.
+    // Earlier drafts don't exist at preflight. Reserve space within the model limit
+    // without splitting a batch or skipping a target just to fit this context.
+    for (const b of batches.slice(1)) {
+      const available = model.contextWindow === null ? MAX_BATCH_CONTEXT_TOKENS : model.contextWindow - b.inputTokens - b.outputAllowance;
+      const reserve = Math.min(MAX_BATCH_CONTEXT_TOKENS, Math.floor(available));
+      if (reserve > 0) { b.batchContextTokens = reserve; b.inputTokens += reserve; }
+    }
+    // Bind the initial input, bounded reserve, model entry and skips.
     const coverageBinding = { destination: state.destination, nodes: coverage.nodes.filter(n => ids.includes(n.id)),
       dismissals: state.dismissals.filter(d => ids.includes(d.nodeId)) };
     return { binding: digest({ batches, skipped, settings, model, spec, sources, coverageBinding, backfillNodeIds }), settings, model, spec, batches, skipped, sources };
@@ -365,7 +381,7 @@ export class GenerationService {
         const g: Generation = { id: p.id, createdAt: new Date().toISOString(), status: 'running', nodeIds: p.nodeIds, backfillNodeIds: p.backfillNodeIds,
           settings: fresh.settings, modelSpec: fresh.spec, skipped: fresh.skipped,
           tasks: fresh.batches.map(b => ({ requestId: randomUUID(), definitionId: definitionFor(b.input), status: 'pending', input: b.input, outputAllowance: b.outputAllowance,
-            sources: fresh.sources.filter(s => b.input.targets.some(t => t.nodeId === s.nodeId)) })) };
+            ...(b.batchContextTokens ? { batchContextTokens: b.batchContextTokens } : {}), sources: fresh.sources.filter(s => b.input.targets.some(t => t.nodeId === s.nodeId)) })) };
         try { await this.delivery.save(s => { s.generations.push(g); }); }
         catch (error) {
           // The snapshot can be committed even if a later fsync throws; drive it so it cannot stay stuck.
@@ -421,13 +437,18 @@ export class GenerationService {
     while (!this.closed && !this.lifetime.signal.aborted) {
       const taskId = await this.delivery.exclusive(async () => {
         this.active();
-        if (this.generation(id).status !== 'running') return;
-        const t = this.generation(id).tasks.find(t => t.status === 'pending');
+        const generation = this.generation(id);
+        if (generation.status !== 'running') return;
+        const t = generation.tasks.find(t => t.status === 'pending');
         if (!t) { await this.finish(id); return; }
+        const earlierDrafts = t.batchContextTokens ? batchContext(generation, t, this.store.snapshot().cards) : '';
+        // Record what the model saw before acceptance, so recovery after a crash can check it too.
+        if (earlierDrafts) await this.patch(id, t.requestId, { batchContextDigest: digest(earlierDrafts) });
+        this.active();
         let w: PluginTaskSnapshot;
         try {
-          w = this.ctx.workers.start(taskDefinition(t), { requestId: t.requestId, input: t.input, prompt: writerPrompt(t.input),
-            model: this.generation(id).modelSpec ?? this.generation(id).settings.model!, purpose: 'user', maxTurns: 3, timeoutMs: 180_000,
+          w = this.ctx.workers.start(taskDefinition(t), { requestId: t.requestId, input: t.input, prompt: writerPrompt(t.input) + earlierDrafts,
+            model: generation.modelSpec ?? generation.settings.model!, purpose: 'user', maxTurns: 3, timeoutMs: 180_000,
             options: { maxTokens: t.outputAllowance } as Parameters<PluginBackendContext['workers']['start']>[1]['options'] });
         } catch (error) { await this.patch(id, t.requestId, { status: 'failed', error: errorText(error) }); return null; }
         await this.patch(id, t.requestId, { taskId: w.id, status: 'running' });

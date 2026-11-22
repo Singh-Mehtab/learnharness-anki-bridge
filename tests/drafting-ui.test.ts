@@ -11,7 +11,7 @@ const preflight = { preflightId: "p1", nodeIds: ["n_a"], nodeCount: 1, maximumCa
 const coverage = () => ({ state: "no-cards", base: "no-cards", selectable: true, uncarded: true, canDismiss: true,
   dismissed: false, generating: false, unresolved: 0, olderSourceCards: 0, unknownSourceCards: 0, deletedNotes: 0 });
 
-function setup(options: { catalogUnavailable?: boolean; initialGraphFailure?: boolean; model?: boolean } = {}) {
+function setup(options: { catalogUnavailable?: boolean; initialGraphFailure?: boolean; model?: boolean; estimate?: typeof preflight } = {}) {
   const window = new Window();
   Object.assign(globalThis, { document: window.document });
   const controller = new AbortController();
@@ -51,7 +51,7 @@ function setup(options: { catalogUnavailable?: boolean; initialGraphFailure?: bo
         if (toggleKind) state.generationSettings.enabledKinds = ["fact", "equation", "why", "steps", "apply", "discriminate"].filter(k => k === toggleKind.kind ? toggleKind.enabled : state.generationSettings.enabledKinds.includes(k));
       }
       if (name === "retryGeneration" && recovery) return recovery();
-      if (name === "preflight" || name === "retryGeneration") { await hold; return { ...structuredClone(preflight), followsCheapSlot: !state.generationSettings.model }; }
+      if (name === "preflight" || name === "retryGeneration") { await hold; return { ...structuredClone(options.estimate ?? preflight), followsCheapSlot: !state.generationSettings.model }; }
       if (name === "generate") state.generations.push({ id: "p1", status: "running", nodeIds: ["n_a"], skipped: [], settings: {}, createdAt: "", tasks: [
         { requestId: "r1", status: "running", input: {}, outputAllowance: 1200, sources: [{ nodeId: "n_a", name: "Alpha" }] }] });
       if (name === "cancelGeneration") { state.generations[0].status = "cancelled"; state.generations[0].tasks[0].status = "cancelled"; }
@@ -105,6 +105,23 @@ function setup(options: { catalogUnavailable?: boolean; initialGraphFailure?: bo
     menu: async (label: string) => { (ideas.querySelector("button.ab-icon-button") as unknown as HTMLButtonElement).click(); await chooseMenu(label); },
     close: async () => { panel.dispose(); controller.abort(); await window.happyDOM.close(); } };
 }
+
+test("split runs disclose that earlier drafts and edits can be sent to the model", async () => {
+  const f = setup({ estimate: { ...preflight, nodeIds: ["n_a", "n_b"], nodeCount: 2,
+    batches: [...preflight.batches, { ...preflight.batches[0], nodeIds: ["n_b"] }] } });
+  try {
+    f.graph.nodes.push({ ...structuredClone(f.graph.nodes[0]), id: "n_b", name: "Beta" });
+    await f.panel.setScope(undefined); await tick();
+    for (const element of f.ideas.querySelectorAll("li input[type=checkbox]")) {
+      const box = element as unknown as HTMLInputElement;
+      box.checked = true; box.dispatchEvent(f.event("change"));
+    }
+    await tick(); f.button("Write cards for 2 ideas").click(); await tick();
+    const sent = [...f.dialog()!.querySelectorAll("dt")].find(term => term.textContent === "Sent to the model");
+    assert.match(sent?.nextElementSibling?.textContent ?? "", /Later requests may also get a limited set of earlier drafts from this run, including local edits/);
+    assert.equal(f.calls.some(c => c.name === "generate"), false);
+  } finally { await f.close(); }
+});
 
 test("writing needs a selection, defaults to the cheap model, confirms the estimate in a dialog, then starts once", async () => {
   const f = setup();
