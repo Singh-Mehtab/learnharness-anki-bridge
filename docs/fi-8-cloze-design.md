@@ -1,6 +1,6 @@
-# FI-8: Cloze cards (design spec, draft)
+# FI-8: Cloze cards (design spec)
 
-Status: draft for review. Nothing here is implemented. The rules in Part A are expected to change after bench testing; Part B should not depend on them.
+Status: implemented for 0.9.1 on branch `feat/fi-8-cloze`, unmerged. The spec had five Sol review rounds; the round-5 fixes went straight into the implementation and are reviewed with the code. The rules in Part A may still change after more bench scoring; Part B should not depend on them.
 
 A cloze card shows a statement with one part hidden, `[ħ] = [...]`, and reveals it on the back, `[ħ] = J s`. For short facts written in notation the learner already reads, this is shorter than a question and trains the exact form the learner meets in lectures. It is worse for named equations, for answers that need a question to set the context, and for any statement where the visible text gives the hidden part away.
 
