@@ -58,36 +58,39 @@ A card may be cloze only when all of these hold.
 
 ## Worked examples
 
-Synthetic. Blank shown as `{{blank}}`, the writer's placeholder (Part B).
+Synthetic. The Front and Back columns are the exact `front` and `back` strings the writer returns (after JSON decoding), with `{{blank}}` as the placeholder (Part B). When the blank is inside maths, the back is raw TeX without delimiters (C5). Verdicts hold in both `auto` and `prefer` unless stated.
 
-| # | Kind | Card | Verdict | Why |
-|---|---|---|---|---|
-| 1 | fact | `\([\hbar] = {{blank}}\)` / `\(\mathrm{J\,s}\)` | Cloze | Bracket notation already asks for units. |
-| 2 | fact | `{{blank}} \(= \mathrm{J\,s}\)` / `\([\hbar]\)` | Reject | Rule 4: \(h\) and angular momentum also fit. |
-| 3 | fact | `\([t] = [E]^{-1} = {{blank}}\)` in natural units / `\(\mathrm{eV^{-1}}\)` | Reject | Rule 5: \([E]^{-1}\) gives it away. |
-| 4 | fact | In natural units, `\([t] = {{blank}}\)` / `\(\mathrm{eV^{-1}}\)` | Cloze | Convention named, one answer. |
-| 5 | fact | `The prefix femto- (f) means {{blank}}.` / `\(10^{-15}\)` | Cloze | One answer, short. |
-| 6 | fact | `\(1\ \mathrm{fm} = 10^{{blank}}\ \mathrm{m}\)` / `-15` | Reject | Rule 3: blank is a fragment inside an expression; hide `10^{-15}` instead. |
-| 7 | equation | `\(E_0 = {{blank}}\)` for a particle of mass \(m\) / `\(mc^2\)` | Cloze | \(E_0\) is the natural cue. |
-| 8 | equation | `State the de Broglie relation.` / `\(\lambda = h/p\)` | Basic | Rule 6: the name is the cue; the whole equation is the answer. |
-| 9 | equation | `\(\lambda = {{blank}}\)` / `\(h/p\)` | Reject in `auto` | Rule 6 and context: λ of what? A wavelength could be many things. Acceptable only with context ("de Broglie: ..."). |
-| 10 | equation | `\(F = m{{blank}}\)` / `\(a\)` | Reject | Rule 3: lone symbol; nearly given away. |
-| 11 | fact | `A {{blank}} is a function that calls itself.` / `recursive function` | Cloze | Term from meaning, one answer. |
-| 12 | fact | `\(\hbar c \approx {{blank}}\)` / `\(197\ \mathrm{MeV\,fm}\)` | Basic (open) | Value rule above. |
-| 13 | equation | `When does \(T \approx p^2/2m\) hold?` / non-relativistic, \(pc \ll mc^2\) | Basic | Needs a question; answer is a condition. |
-| 14 | fact | `\(\vec p = \gamma m {{blank}}\)` / `\(\vec v\)` | Reject | Rule 3. Hide `\gamma m \vec v` with context instead. |
+| # | Kind | Front | Back | Verdict | Why |
+|---|---|---|---|---|---|
+| 1 | fact | `\([\hbar] = {{blank}}\)` | `\mathrm{J\,s}` | Cloze | Bracket notation already asks for SI units. |
+| 2 | fact | `{{blank}} \(= \mathrm{J\,s}\)` | `\([\hbar]\)` | Reject | Rule 4: \([h]\) and angular momentum also fit. |
+| 3 | fact | `In natural units with energy in eV, \([t] = [E]^{-1} = {{blank}}\)` | `\mathrm{eV^{-1}}` | Reject | Rule 5: \([E]^{-1}\) with energy in eV gives it away. |
+| 4 | fact | `In natural units with energy in eV, \([t] = {{blank}}\)` | `\mathrm{eV^{-1}}` | Cloze | Convention and base unit named, so one answer. |
+| 5 | fact | `The prefix femto- (f) means {{blank}}.` | `\(10^{-15}\)` | Cloze in `prefer`; `auto` may keep basic | Blank outside maths, so the back carries its own complete maths. One answer. The question form is equally short. |
+| 6 | fact | `\(1\ \mathrm{fm} = 10^{{blank}}\ \mathrm{m}\)` | `-15` | Reject | Rule 3: a fragment of an expression. Hide `10^{-15}` instead. |
+| 7 | equation | `Rest energy of a particle of mass \(m\): \(E_0 = {{blank}}\)` | `mc^2` | Cloze | \(E_0\) and the setting are the natural cue. |
+| 8 | equation | `State the de Broglie relation.` | `\(\lambda = h/p\)` | Basic | Rule 6: the name is the cue and the whole equation is the answer. |
+| 9 | equation | `\(\lambda = {{blank}}\)` | `h/p` | Reject | Rule 4: a wavelength of what? Ambiguous in every mode. |
+| 10 | equation | `\(F = m{{blank}}\)` | `a` | Reject | Rule 3: a lone symbol, nearly given away. |
+| 11 | fact | `A function that calls itself is a {{blank}} function.` | `recursive` | Cloze | A term from its meaning, which the fact kind allows. One answer. |
+| 12 | fact | `\(\hbar c \approx {{blank}}\)` | `197\ \mathrm{MeV\,fm}` | Basic (open) | Value rule above. |
+| 13 | equation | `When does \(T \approx p^2/2m\) hold?` | `When \(pc \ll mc^2\) (non-relativistic).` | Basic | Needs a question; the answer is a condition. |
+| 14 | fact | `\(\vec p = \gamma m {{blank}}\)` | `\vec v` | Reject | Rule 3. Hide `\gamma m \vec v` with context instead. |
 
 ## Deterministic checks (validator)
 
 The validator enforces what can be checked mechanically. Model judgement covers the rest (rules 4 to 6).
 
 - C1. `format` is `basic` or `cloze`. Missing means `basic`.
-- C2. `cloze` only when the input's mode is `auto` or `prefer`, and only for `fact` or `equation`.
-- C3. A cloze front contains the placeholder `{{blank}}` exactly once. No other field, and no field of a basic card, contains `{{blank}}`. Literal Anki cloze syntax in the text is allowed because rendering escapes it.
+- C2. `cloze` only for `fact` or `equation`. This is a content rule and applies everywhere: writer output, manual cards and edits.
+- C2a. Mode gate, writer output only: a `format: "cloze"` card is rejected when the task input has no `cloze` mode. Manual creation and editing are not gated by the current generation setting, so a saved cloze card stays editable after the setting is switched Off.
+- C3. A cloze front contains the placeholder `{{blank}}` exactly once, and the cloze back and extra contain none. Basic cards have no placeholder rule, so a basic card may mention `{{blank}}` literally (a template answer, say). Literal Anki cloze syntax in the text is allowed because rendering escapes it.
 - C4. A cloze back (the hidden part) is one line, non-empty, with no block Markdown (lists, headings, fences, display maths).
 - C5. The blank is either entirely inside one maths segment or entirely outside maths. Inside maths, the back is raw TeX with no delimiters. Outside maths, any maths in the back is complete.
-- C6. The assembled text (placeholder replaced by the back) renders with the existing renderer, and the rendered answer is not split across HTML elements (no partial bold, code or link). A link URL in a cloze card must not contain `}}`, `{{` or `::`.
-- C7. The existing leak check applies: `givesAwayAnswer(front without placeholder, back)` must be false.
+- C6. Render the marked assembly (Part B, step 1). Both markers must appear exactly once in the output, in text content (not in an attribute such as a link URL, and not dropped with Markdown syntax), and the range between them must not be split across HTML elements (no partial bold, code or link). Stripping the markers from that output must give the same HTML as rendering the unmarked assembly; otherwise the markers changed how the text parses and the card is rejected. A link URL in a cloze card must not contain `}}`, `{{` or `::`.
+- C7. Leak check, by blank position:
+  - Blank outside maths: the existing `givesAwayAnswer(front, back)`, with the placeholder replaced by a space.
+  - Blank inside maths: compare the back as one maths segment. It leaks if its normalised TeX (the same normalisation `answerSegments` uses) appears in any visible maths segment, where the blank's own segment is checked with the placeholder replaced by a separator that can't join tokens on either side. Very short backs (under 3 characters) must match a whole visible segment or a whole side of an `=`, as in the existing check.
 - C8. No field contains the control characters U+0002 or U+0003 (used as markers when rendering), for any format.
 
 # Part B: how it is built
@@ -105,23 +108,32 @@ The validator enforces what can be checked mechanically. Model judgement covers 
 LearnHarness registers worker instructions and schema once (`workers.register`). Distinct definition IDs are allowed.
 
 - Keep `manual-card-writer` byte-identical to today (instructions and schema). Off mode uses it.
-- Register `manual-card-writer-cloze` with the same instructions plus a cloze section (Part A, with examples) and a schema whose card items allow `format`. `auto` and `prefer` use it; the mode comes from the task input.
-- Generation records keep the `definitionId` they started with. The identity checks in `src/generation/service.ts` accept either ID, matched to the recorded one.
-- `validateResult` is shared. It rejects any `format: "cloze"` when the input has no `cloze` mode (C2).
+- Register `manual-card-writer-cloze` with a schema whose card items allow `format`, and instructions built from today's sections plus a cloze section (Part A, with the worked examples). `auto` and `prefer` use it; the mode comes from the task input.
+- The cloze section states which existing rules it replaces for cloze cards, because several conflict with Part A (`src/writer/prompt.ts`):
+  - "Asked as a closed question" and "Ask plainly and briefly" apply to basic cards. A cloze card is a statement with one blank.
+  - The equation kind's "ask for it by name or by what it relates" applies to basic equation cards. A cloze equation card hides one side and shows the cue (rule 6).
+  - "Prefer display maths" does not apply to cloze text. The text is one line with inline maths.
+  - The units format `\([t] = [E]^{-1} = \mathrm{eV^{-1}}\)` is for basic backs. In a cloze, show only the bracket and the blank (example 4), never the intermediate step (rule 5).
+  - "Do not define the answer and then ask for its label" still applies, except for the fact kind's term-from-meaning card (example 11), which the fact kind already allows.
+  - "No hints" and the leak rules apply unchanged.
+- `GenerationTask` gains `definitionId`, saved before the worker starts. A task without one (saved by schema 8 or earlier) is treated as `manual-card-writer`. The identity checks in `src/generation/service.ts` (worker lookup, result recovery, start) compare against the task's own ID. A successful schema-8 task that is waiting for recovery must still apply after the upgrade.
+- Validation follows the definition. Results for `manual-card-writer` are validated with today's contract plus the C2a gate (no cloze without a mode). Cloze rules C2 to C7 apply to cloze cards only, so a legacy basic result is never rejected by them.
+- Preflight chooses the definition from the current setting before packing, and estimates tokens from that definition's instructions, schema and task prompt (`src/generation/service.ts`, where the overhead is computed today). The same definition is used to start the task. Changing the setting invalidates saved preflights, as other generation settings do.
 
 ## State
 
 - `Card` gains `format?: "cloze"` (absent means basic). State schema goes from 8 to 9 so an older plugin version refuses the file instead of sending a cloze card through the basic note type. Migration from 8 adds nothing.
 - `packageRevision` includes `format`, so a package fingerprint changes if the format changes.
-- Edits keep the format. The manual "Write a card" dialog gets a format choice (basic or cloze) with the same validator.
+- Edits keep the format. The manual "Write a card" dialog gets a format choice (basic or cloze). Manual cards and edits use the content checks (C2 to C8) and are not gated by the generation setting (C2a).
 
 ## Anki note type
 
-- New owned note type **LearnHarness Cloze**, created with `isCloze: true`. Fields: `Text`, `Extra`, `Source`, `LH_ID`, `LH_Node`. Front template `{{cloze:Text}}`. Back template `{{cloze:Text}}`, then Extra and Source blocks as in LearnHarness Basic. Same CSS marker scheme, its own style revision. Same ownership, field-repair and styling-update rules as the basic type (`note-type.ts`), parameterised by note type.
+- New owned note type **LearnHarness Cloze**, created with `isCloze: true`. Fields: `Text`, `Extra`, `Source`, `LH_ID`, `LH_Node`. Front template `{{cloze:Text}}`. Back template `{{cloze:Text}}`, then Extra and Source blocks as in LearnHarness Basic. Same CSS marker scheme, its own style revision. Same ownership, field-repair and styling-update rules as the basic type (`note-type.ts`), parameterised by note type. The Settings actions "Add missing fields" and "Update styling" (and the delivery operations behind them) take an explicit note type, default LearnHarness Basic for existing callers, and name the chosen note type in their confirmations, so a damaged LearnHarness Cloze can be repaired from Settings.
 - LearnHarness Basic is not changed. Existing notes are not touched.
 - Duplicate check uses the first field (`Text`), scoped to the deck and this note type, as basic does.
 - `findNotes "LH_ID:<id>"` already works across note types.
-- `src/reviews/service.ts` accepts either owned note type when matching a note to a card. It should also check the note type matches the card's format.
+- `src/reviews/service.ts` accepts either owned note type when matching a note to a card, and checks the note type matches the card's format.
+- Review evidence carries `format` through to its consumers (`src/reviews/signals.ts`, Topics in `src/topics-ui.ts`). Topics renders cloze cards with the same format-aware preview as the review page, so the user never sees `{{blank}}` or undelimited TeX.
 
 ## Rendering the Text field
 
@@ -130,7 +142,8 @@ Input: `front` with one `{{blank}}`, and `back`.
 1. Replace `{{blank}}` with `\u0002` + back + `\u0003` (control characters the writer can't produce; the validator rejects control characters in fields).
 2. Render with `renderMarkdown` as today.
 3. Escape every other `}}` as `}<!-- -->}`, every `{{c` followed by a digit as `{<!-- -->{c`, and every `::` between the markers as `:<!-- -->:`. Apply repeatedly so `}}}` becomes `}<!-- -->}<!-- -->}`.
-4. Replace `\u0002` with `{{c1::` and `\u0003` with `}}`.
+4. If the character before `\u0003` is `}`, insert `<!-- -->` before `\u0003`. If the character after `\u0002` is `:`, insert `<!-- -->` after `\u0002` (as a precaution, so the opener's `::` never runs into the answer). Without the first rule, the answer's last `}` and the closing `}}` form `}}}`, and Anki closes the cloze one brace early. Verified on Anki 25.09.4: `\(\vec{p} = {{c1::\gamma m \vec{v}<!-- -->}}\)` shows `\(\vec{p} = [...]\)` and answers `\(\vec{p} = \gamma m \vec{v}\)`; without the comment the question has a stray `}`.
+5. Replace `\u0002` with `{{c1::` and `\u0003` with `}}`.
 
 Escaping applies to text and maths, not inside HTML attributes (a link `href` containing `}}` is rejected by the validator instead). One escape form is used everywhere, inside and outside maths, because Anki strips the comment from maths and the comment is invisible outside it. The result must parse in Anki as exactly one cloze (`c1`) whose content is the rendered answer.
 
@@ -144,14 +157,19 @@ AnkiConnect delivery and the `.apkg` writer both call one shared function for th
 
 ## Settings and UI
 
-- Settings: a "Cloze cards" control with Off, Writer chooses, Prefer cloze. Stored in `generationSettings.cloze`. Generation history keeps the setting it ran with.
+- Settings: a "Cloze cards" slider with three labelled stops, Off, Writer chooses, Prefer cloze, and a one-line description under the selected stop:
+  - Off: "Every card is a question and answer."
+  - Writer chooses: "Cloze where the notation already says what is asked, such as \([\hbar] = [\ldots]\)."
+  - Prefer cloze: "Cloze for every fact and equation card that can be one."
+  The control is a native range input (`min 0`, `max 2`, `step 1`) or equivalent, keyboard-operable, with the stop name as its accessible value text. Stored in `generationSettings.cloze` (`off`, `auto`, `prefer`). Generation history keeps the setting it ran with.
 - Review and drafting: a cloze card shows a "Cloze" pill. The preview shows the front with the blank as `[...]` and the back with the full text and the answer emphasised. Editing a cloze card labels the fields "Text" and "Hidden part", and validates with the same checks.
 - System tags add `learnharness::format::cloze` for cloze cards. Basic cards keep today's tags.
 
 ## Bench
 
 - `bench/run.ts` takes `--cloze off|auto|prefer` (default `off`).
-- The scoring page renders cloze cards as front with `[...]` and back with the full text, and adds a tick for "should have been the other format".
+- The run records the mode, and each card record carries its `format`. `bench/run.ts` builds those records field by field, so this needs explicit changes there, not just in the writer types.
+- The scoring page renders cloze cards as front with `[...]` and back with the full text, and adds a tick for "should have been the other format" on every fact and equation card, cloze or basic.
 - The test set has two parts: real nodes in the ignored `bench/private/` that contain units, constants, named equations and definitions, and synthetic trap targets matching the rejected worked examples.
 
 ## Acceptance for the rules (bench)
@@ -160,14 +178,17 @@ These are the targets for tuning Part A. Human scores and Sol scores stay in sep
 
 - With `--cloze off`, the writer gets today's instructions and schema; the bench's existing pass criteria still hold.
 - No cloze card that the user marks as ambiguous (rule 4) or giving the answer away (rule 5).
-- At most one in five cloze cards marked "should have been basic"; at most one in five eligible basic cards marked "should have been cloze" in `prefer` mode.
+- At most one in five cloze cards marked "should have been basic".
+- At most one in five basic fact and equation cards marked "should have been cloze". The denominator is all basic cards of those kinds, judged by the scorer, not cards the writer considered eligible.
 - Every cloze card renders in Anki as one `c1` blank (checked automatically against Anki's library, below).
 - At most three rounds of rule changes before the user and I review where things stand.
 
 ## Tests
 
-- Unit tests for C1 to C7, the escaping cases above (`}}` inside and outside maths, `}}}`, `{{c1` in text, `::` in the answer, blank inside maths, blank inside bold).
-- A test that renders generated Text fields with Anki's Python library on a scratch collection and checks one card, one `c1` blank, and the expected question and answer. It runs where Anki's library is available and is skipped otherwise.
+- Unit tests for C1 to C8, including the leak cases `\(E_0 = mc^2 = {{blank}}\)` / `mc^2` (leak) and `\(E_0 = {{blank}}\)` / `mc^2` (no leak), a blank inside a link URL (rejected), and manual cloze edits with the setting Off (allowed).
+- Escaping cases: `}}` inside and outside maths, `}}}`, an answer ending in `}` (`\gamma m \vec{v}`, `\mathrm{J\,s}`), an answer starting with `:`, `{{c1` in text, `::` in the answer, a blank inside maths, a blank inside bold.
+- A test that renders generated Text fields with Anki's Python library on a scratch collection and checks one card, one `c1` blank, and the exact expected question and answer HTML, not just the card count (a broken cloze can still make one card). It runs where Anki's library is available and is skipped otherwise.
+- Generation: a successful schema-8 task without `definitionId` recovers and applies after the upgrade; preflight uses the cloze definition's size when the setting is on; a cloze card from the basic worker is rejected.
 - A test that `manual-card-writer` instructions and schema are unchanged.
 - State migration 8 to 9; older-version refusal.
 - Fake AnkiConnect: creating and repairing LearnHarness Cloze; sending a mixed batch; review reading for both note types.
