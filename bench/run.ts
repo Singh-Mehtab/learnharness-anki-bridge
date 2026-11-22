@@ -6,6 +6,7 @@
 //   node bench/run.ts --mode core            # default kinds (fact, equation), all targets
 //   node bench/run.ts --mode core --kinds fact,equation,steps   # choose kinds
 //   node bench/run.ts --mode trial           # mini-problem + spot-the-mistake, first 4 targets per set
+//   node bench/run.ts --cloze auto           # FI-8: cloze writer, mode auto or prefer (default off)
 //   options: --model sonnet --cap 2 --sets qm,humanities,programming --dry-run
 //
 // The CLI runs in an empty temp directory with no tools, no MCP servers and no
@@ -49,6 +50,8 @@ const { values } = parseArgs({
     concurrency: { type: "string", default: "3" },
     "max-calls": { type: "string" },
     "dry-run": { type: "boolean", default: false },
+    cloze: { type: "string", default: "off" },
+    "print-contract": { type: "boolean", default: false },
   },
 });
 
@@ -67,11 +70,14 @@ for (const [name, value, minimum] of [["cap", cap, 1], ["retries", retries, 0], 
 if (values["max-calls"] !== undefined && (!Number.isSafeInteger(maxCalls) || maxCalls < 1)) {
   throw new Error("--max-calls must be a positive integer");
 }
+const cloze = values.cloze as "off" | "auto" | "prefer";
+if (!["off", "auto", "prefer"].includes(cloze)) throw new Error("--cloze must be off, auto or prefer");
 let calls = 0;
 
 const BENCH_COMPLETION = `Return the complete result as structured output matching the schema. If you are told about validation problems, return a corrected complete result.`;
-const instructions = writerInstructions({ kinds, completion: BENCH_COMPLETION });
-const schema = resultSchemaFor(kinds);
+// FI-8: off sends exactly the basic writer's instructions and schema.
+const instructions = writerInstructions({ kinds, completion: BENCH_COMPLETION, ...(cloze !== "off" ? { cloze: true } : {}) });
+const schema = resultSchemaFor(kinds, { cloze: cloze !== "off" });
 
 function loadSets(): BenchSet[] {
   const files = [
@@ -209,19 +215,27 @@ for (const set of sets) {
     const n = byId.get(s.nodeId);
     skips.push({ set: set.name, nodeId: s.nodeId, nodeName: n?.name ?? s.nodeId, statement: n?.statement ?? "", reason: s.reason, by: "packer" });
   }
-  for (const batch of batches) jobs.push({ set, batch });
+  for (const batch of batches) {
+    if (cloze !== "off") batch.input.cloze = cloze;
+    jobs.push({ set, batch });
+  }
 }
 
 console.log(
   `${mode} run, ${values.model}: ${jobs.length} requests for ${jobs.reduce((n, j) => n + j.batch.input.targets.length, 0)} targets across ${sets.map((s) => s.name).join(", ")}` +
     ` (plus up to ${retries} correction calls per request; total call limit ${maxCalls}).`,
 );
+if (values["print-contract"]) {
+  // No-model check of what the bench would send for this mode.
+  console.log(JSON.stringify({ cloze, instructions, schema, firstPrompt: jobs[0] ? writerPrompt(jobs[0].batch.input) : null }, null, 2));
+  process.exit(0);
+}
 if (values["dry-run"]) {
   for (const j of jobs) console.log(`  ${j.set.name}: ${j.batch.input.targets.length} targets, ~${j.batch.inputTokens} input tokens`);
   process.exit(0);
 }
 
-const runId = `${new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19)}-${mode}-${values.model}`;
+const runId = `${new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19)}-${mode}-${values.model}${cloze !== "off" ? `-cloze-${cloze}` : ""}`;
 const results = await pool(jobs, concurrency, async (job) => {
   const r = await runBatch(job.set, job.batch);
   const a = r.record.attempts;
@@ -251,6 +265,7 @@ for (const [request, { set, batch, result, record }] of results.entries()) {
         nodeName: node.name,
         statement: node.statement,
         kind: card.kind,
+        ...(card.format === "cloze" ? { format: "cloze" as const } : {}),
         front: card.front,
         back: card.back,
         ...(card.extra?.trim() ? { extra: card.extra } : {}),
@@ -279,6 +294,8 @@ const run: BenchRun = {
   createdAt: new Date().toISOString(),
   maxCardsPerNode: cap,
   enabledKinds: kinds,
+  cloze,
+  clozePositive: sets.flatMap((s) => (s.clozePositive ?? []).map((id) => `${s.name}:${id}`)),
   instructions,
   modelCalls: calls,
   writerVersion: (JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version: string }).version,

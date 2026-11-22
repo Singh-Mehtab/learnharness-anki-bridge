@@ -232,3 +232,8 @@
 .anki-bridge .ab-topic-card .ab-card-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 14px; border-top: 1px solid var(--ab-border); }
 .anki-bridge .ab-topic-evidence { margin: 0; }
 .anki-bridge .ab-topics-footer { margin: 16px 0 0; padding-left: 18px; }
+
+/* FI-8: the Cloze cards slider, three labelled stops. */
+.anki-bridge .ab-range { width: 100%; max-width: 360px; margin: 4px 0 0; accent-color: var(--primary, currentColor); }
+.anki-bridge .ab-range-stops { display: flex; justify-content: space-between; max-width: 360px; font-size: 12px; opacity: 0.75; }
+.anki-bridge .ab-range-stops span[data-selected="true"] { font-weight: 600; opacity: 1; }

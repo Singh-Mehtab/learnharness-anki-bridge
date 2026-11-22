@@ -5,6 +5,7 @@ import type { PluginFrontendContext } from "../sdk/index.d.ts";
 import type { CardEvidence, ReviewCheck, Topic, TopicSession } from "./reviews/signals.ts";
 import type { Destination } from "./settings-ui.ts";
 import { button, confirmDialog, el, pill, plural, RenderScope, status } from "./ui.ts";
+import { answerPreview, questionPreview } from "./writer/cloze.ts";
 
 type Answer = { check: ReviewCheck | null; running: boolean };
 interface Snapshot { settings: { url: string }; destination: Destination | null }
@@ -139,7 +140,11 @@ export function mountTopics(ctx: PluginFrontendContext, container: HTMLElement, 
     const article = el("article", undefined, "ab-topic-card");
     article.dataset.lhId = card.lhId;
     const grid = el("div", undefined, "ab-card-fields");
-    for (const [name, text] of [["Front", card.front], ["Back", card.back]] as const) {
+    // FI-8: a cloze card shows its question with [...] and its answer filled in, never the raw placeholder.
+    const sides = card.format === "cloze"
+      ? [["Question", questionPreview(card.front)], ["Answer", answerPreview(card.front, card.back)]] as const
+      : [["Front", card.front], ["Back", card.back]] as const;
+    for (const [name, text] of sides) {
       const col = el("section", undefined, "ab-card-field");
       const view = el("div", undefined, "ab-markdown");
       col.append(el("h4", name, "ab-field-name"), view);

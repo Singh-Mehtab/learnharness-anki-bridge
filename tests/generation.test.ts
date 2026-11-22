@@ -158,7 +158,8 @@ test('a blank flag increases the real preflight and worker cap; new kinds are op
     await until(async () => (await c.call('generationStatus')).generations[0].status === 'completed');
     const saved = await c.call('generationStatus');
     assert.deepEqual(saved.generationSettings, { cardsPerNode: 2, enabledKinds: ['fact', 'steps', 'apply'], model: { provider: 'scratch', id: 'writer' } });
-    assert.deepEqual(saved.generations[0].settings, saved.generationSettings);
+    // FI-8: history stores the resolved cloze mode; the active setting stays absent until changed.
+    assert.deepEqual(saved.generations[0].settings, { ...saved.generationSettings, cloze: 'auto' });
     assert.equal(saved.cards.length, 3);
   } finally { await close(); }
 }));
@@ -336,7 +337,7 @@ test('schema 1 state migrates without losing pairing or cards, and malformed gen
     assert.equal(snap.cards.length, 1); assert.equal(snap.destination.profile, 'Throwaway'); assert.deepEqual(snap.generations, []);
   } finally { await close(); }
   const saved = JSON.parse(await readFile(statePath(directory), 'utf8'));
-  assert.equal(saved.schemaVersion, 8);
+  assert.equal(saved.schemaVersion, 9);
   saved.generations = [{ id: 'g', bogus: true }];
   const broken = JSON.stringify(saved);
   await writeFile(statePath(directory), broken);
@@ -346,7 +347,8 @@ test('schema 1 state migrates without losing pairing or cards, and malformed gen
 
 test('disable unregisters the worker definition and operations', () => withHost(async (host, directory) => {
   const c = host.context(directory); const close = await activate(c.ctx);
-  assert.equal(host.workers.registered, 1);
+  // FI-8: the basic writer and the cloze writer.
+  assert.equal(host.workers.registered, 2);
   await close();
   assert.equal(host.workers.registered, 0); assert.equal(c.handlers.size, 0);
 }));
@@ -448,7 +450,7 @@ test('v5 (0.7.2) state drops the constants toggle and compose from settings only
   const c = host.context(directory), close = await activate(c.ctx);
   try {
     const saved = JSON.parse(await readFile(statePath(directory), 'utf8'));
-    assert.equal(saved.schemaVersion, 8);
+    assert.equal(saved.schemaVersion, 9);
     assert.equal(await readFile(path.join(directory, 'state.v5.bak'), 'utf8'), bytes);
     assert.deepEqual(saved.generationSettings, { cardsPerNode: 3, enabledKinds: ['fact', 'why'], model: oldSettings.model });
     assert.deepEqual(saved.generations[0].settings, oldSettings, 'history keeps what the batch was run with');
@@ -514,7 +516,7 @@ test('v4 backup and restart recover a frozen legacy worker without changing its 
     const c = host.context(directory), close = await activate(c.ctx);
     try {
       const saved = JSON.parse(await readFile(statePath(directory), 'utf8'));
-      assert.equal(saved.schemaVersion, 8);
+      assert.equal(saved.schemaVersion, 9);
       assert.equal(await readFile(path.join(directory, 'state.v4.bak'), 'utf8'), bytes);
       assert.deepEqual(saved.generationSettings, { cardsPerNode: 3, enabledKinds: ['fact', 'equation'], model: legacySettings.model });
       assert.deepEqual(saved.generations[0].settings, legacySettings);
@@ -749,3 +751,61 @@ for (const mode of ['retry', 'retry with post-commit warning', 'reactivate', 'po
     } finally { injected.mock.restore(); await close(); }
   }));
 }
+
+test('FI-8: Off uses the unchanged basic writer; auto and prefer use the cloze writer and save cloze cards', () => withHost(async (host, directory) => {
+  const { writerInstructions } = await import('../src/writer/prompt.ts');
+  const { resultSchemaFor } = await import('../src/writer/schema.ts');
+  const c = host.context(directory), close = await activate(c.ctx);
+  try {
+    const basic = host.workers.definitions.get('manual-card-writer')!, cloze = host.workers.definitions.get('manual-card-writer-cloze')!;
+    assert.equal(basic.instructions, writerInstructions());
+    assert.deepEqual(basic.resultSchema, resultSchemaFor());
+    assert.ok(cloze.instructions.includes('{{blank}}') && !basic.instructions.includes('{{blank}}'));
+    await c.call('generationSettings', { model: { provider: 'scratch', id: 'writer' } });
+    await assert.rejects(c.call('generationSettings', { cloze: 'always' }), /cloze setting/);
+    // The default is auto: the cloze writer, sized from its own instructions.
+    const auto = await c.call('preflight', { nodeIds: ['n_a'] });
+    await c.call('generationSettings', { cloze: 'off' });
+    await assert.rejects(c.call('generate', { preflightId: auto.preflightId }), /stale|expired/);
+    // Round 1 S4: switching back doesn't revive the earlier estimate.
+    await c.call('generationSettings', { cloze: 'auto' });
+    await assert.rejects(c.call('generate', { preflightId: auto.preflightId }), /expired/);
+    await c.call('generationSettings', { cloze: 'off' });
+    const off = await c.call('preflight', { nodeIds: ['n_a'] });
+    assert.ok(auto.inputTokens > off.inputTokens, `${auto.inputTokens} > ${off.inputTokens}`);
+    await c.call('generate', { preflightId: off.preflightId });
+    await until(() => host.workers.starts.length === 1);
+    let task = host.workers.list()[0];
+    assert.equal(task.definitionId, 'manual-card-writer');
+    assert.equal('cloze' in (task.input as WriterInput), false);
+    // A cloze card from the basic writer is rejected (C2a).
+    host.workers.succeed(task.id, { targets: [{ nodeId: 'n_a', cards: [{ kind: 'fact', format: 'cloze', front: 'In SI units, \\([\\hbar] = {{blank}}\\)', back: '\\mathrm{J\\,s}' }] }] });
+    await until(async () => (await c.call('generationStatus')).generations[0].status !== 'running');
+    let saved = await c.call('generationStatus');
+    assert.equal(saved.generations[0].tasks[0].status, 'failed');
+    assert.equal(saved.generations[0].tasks[0].definitionId, 'manual-card-writer');
+    assert.equal(saved.generations[0].settings.cloze, 'off');
+    assert.equal(saved.cards.length, 0);
+    await c.call('generationSettings', { cloze: 'prefer' });
+    const prefer = await c.call('preflight', { nodeIds: ['n_a'] });
+    await c.call('generate', { preflightId: prefer.preflightId });
+    await until(() => host.workers.starts.length === 2);
+    task = host.workers.list()[1];
+    assert.equal(task.definitionId, 'manual-card-writer-cloze');
+    assert.equal((task.input as WriterInput).cloze, 'prefer');
+    host.workers.succeed(task.id, { targets: [{ nodeId: 'n_a', cards: [
+      { kind: 'fact', format: 'cloze', front: 'In SI units, \\([\\hbar] = {{blank}}\\)', back: '\\mathrm{J\\,s}' },
+      { kind: 'fact', format: 'cloze', front: 'Generating function: \\(a_n = {{blank}}\\)', back: 'n![z^n](1-z)^{-1}' },
+    ] }] });
+    await until(async () => (await c.call('generationStatus')).generations[1].status === 'completed');
+    saved = await c.call('generationStatus');
+    assert.equal(saved.generations[1].tasks[0].definitionId, 'manual-card-writer-cloze');
+    assert.deepEqual(saved.cards.map((card: { format?: string; back: string }) => [card.format, card.back]), [['cloze', '\\mathrm{J\\,s}'], ['cloze', 'n![z^n](1-z)^{-1}']]);
+    // The next request lists them as existing cards with their format.
+    const again = await c.call('preflight', { nodeIds: ['n_a'] });
+    await c.call('generate', { preflightId: again.preflightId });
+    await until(() => host.workers.starts.length === 3);
+    const existing = (host.workers.list()[2].input as WriterInput).targets[0].existingCards;
+    assert.ok(existing.some(e => e.format === 'cloze' && e.front.includes('{{blank}}')));
+  } finally { await close(); }
+}));

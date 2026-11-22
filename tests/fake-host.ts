@@ -11,7 +11,12 @@ export class FakeWorkers {
   registered = 0;
   private waiters = new Map<string, Array<() => void>>();
   private next = 1;
-  register(): () => void { this.registered++; return () => { this.registered--; }; }
+  readonly definitions = new Map<string, { id: string; instructions: string; resultSchema: unknown; validateResult?: (result: unknown, context: { input: unknown }) => void }>();
+  register(definition?: { id: string; instructions: string; resultSchema: unknown }): () => void {
+    this.registered++;
+    if (definition) this.definitions.set(definition.id, definition);
+    return () => { this.registered--; if (definition) this.definitions.delete(definition.id); };
+  }
   start(definitionId: string, options: PluginWorkerStartOptions): Snapshot {
     const existing = [...this.tasks.values()].find(t => t.requestId === options.requestId);
     if (existing) return structuredClone(existing);

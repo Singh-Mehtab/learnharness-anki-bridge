@@ -70,10 +70,19 @@ export interface FeedingChain {
   withPremises: NodeRef[];
 }
 
+/** How a card is shown (FI-8). Basic is front and back; cloze is a statement
+ *  with one hidden part. Absent means basic. */
+export type CardFormat = "basic" | "cloze";
+/** Cloze mode on a writer input (FI-8). Absent means off. */
+export type ClozeMode = "auto" | "prefer";
+/** Kinds that may be cloze (FI-8). */
+export const CLOZE_KINDS = ["fact", "equation"] as const;
+
 export interface ExistingCard {
   kind: CardKind;
   front: string;
   back: string;
+  format?: CardFormat;
 }
 
 export interface WriterTarget {
@@ -105,11 +114,15 @@ export interface WriterInput {
   /** Only on inputs saved before #37 removed the constant-values toggle. New
    *  inputs omit it: a flag is how a learner asks for a constant's value. */
   constantValues?: boolean;
+  /** FI-8: absent when cloze is off. */
+  cloze?: ClozeMode;
   targets: WriterTarget[];
 }
 
 export interface DraftCard {
   kind: CardKind;
+  /** FI-8: for a cloze card, front has one {{blank}} and back is the hidden part. */
+  format?: CardFormat;
   front: string;
   back: string;
   extra?: string;

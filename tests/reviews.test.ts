@@ -21,7 +21,7 @@ const WRITES = ['addNote', 'addNotes', 'updateNoteFields', 'updateNote', 'update
   'answerCards', 'forgetCards', 'relearnCards', 'setDueDate', 'setEaseFactors', 'setSpecificValueOfCard', 'insertReviews', 'createDeck', 'guiBrowse', 'cardReviews', 'getLatestReviewID', 'findNotes', 'findCards'];
 
 type Answer = { check: ReviewCheck | null; running: boolean };
-interface Local { node: string; name?: string; session?: string; sessionName?: string; noteId?: number; status?: Card['status']; profile?: string; front?: string }
+interface Local { node: string; name?: string; session?: string; sessionName?: string; noteId?: number; status?: Card['status']; profile?: string; front?: string; format?: 'cloze' }
 
 async function setup(locals: Local[], notes: (ids: string[]) => FakeNote[], options: { profile?: string | null; strictReviews?: boolean; graph?: () => any; paired?: boolean } = {}) {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'anki-bridge-reviews-'));
@@ -31,7 +31,7 @@ async function setup(locals: Local[], notes: (ids: string[]) => FakeNote[], opti
   const destination = { url: anki.url, profile: 'Throwaway' };
   const state: State = { ...initialState(), settings: { url: anki.url, apiKey: '', lastDeck: 'Scratch' }, destination: options.paired === false ? null : destination,
     cards: locals.map((l, i) => ({ id: ids[i]!, nodeId: l.node, nodeName: l.name ?? `Idea ${l.node}`, statementHash: 'h', sessionId: l.session ?? 'chat-1', sessionName: l.sessionName ?? 'Lecture one',
-      kind: 'fact', front: l.front ?? `Front ${i}`, back: `Back ${i}`, extra: '', status: l.status ?? 'sent',
+      kind: 'fact', ...(l.format ? { format: l.format } : {}), front: l.front ?? `Front ${i}`, back: `Back ${i}`, extra: '', status: l.status ?? 'sent',
       ...((l.status ?? 'sent') === 'sent' ? { deck: 'Scratch', noteId: l.noteId ?? 1000 + i, destination: { url: anki.url, profile: l.profile ?? 'Throwaway' } } : {}) })) };
   await store.replace(state);
   const graph = options.graph ?? (() => ({ propositions: [{ id: 'node-a' }, { id: 'node-b' }, { id: 'node-c' }, { id: 'node-d' }], nodeSessions: { 'node-a': ['chat-1', 'chat-2'] }, sessions: { 'chat-1': 'Lecture one (graph)', 'chat-2': 'Workshop' } }));
@@ -428,5 +428,24 @@ test('round 2 S2: a retried history read uses the refreshed lapse count', async 
     const { check } = await t.call('checkReviews');
     assert.deepEqual(check!.topics.map(x => x.nodeId), ['node-a']);
     assert.equal(check!.topics[0]!.cards[0]!.lapses, 3);
+  } finally { await t.cleanup(); }
+});
+
+test('FI-8: a cloze card matches only a LearnHarness Cloze note, and its evidence carries the format', async () => {
+  const t = await setup([
+    { node: 'node-a', format: 'cloze', front: 'In SI units, \\([\\hbar] = {{blank}}\\)' },
+    { node: 'node-b', format: 'cloze' },
+    { node: 'node-c' },
+  ], ids => [
+    { noteId: 1000, lhId: ids[0]!, modelName: 'LearnHarness Cloze', cards: [{ cardId: 2000, lapses: 5, reps: 9 }] },
+    { noteId: 1001, lhId: ids[1]!, modelName: 'LearnHarness Basic', cards: [{ cardId: 2001, lapses: 5, reps: 9 }] },
+    { noteId: 1002, lhId: ids[2]!, modelName: 'LearnHarness Cloze', cards: [{ cardId: 2002, lapses: 5, reps: 9 }] },
+  ]);
+  try {
+    const { check } = await t.call('checkReviews', { expectedDestination: t.destination });
+    assert.deepEqual(check!.topics.map(x => x.nodeId), ['node-a']);
+    assert.equal(check!.topics[0]!.cards[0]!.format, 'cloze');
+    assert.equal(check!.counts.changed, 2);
+    allowedOnly(t.anki.actions());
   } finally { await t.cleanup(); }
 });

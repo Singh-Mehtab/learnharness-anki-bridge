@@ -2,7 +2,7 @@
 // Runs only when the user presses the button. The result stays in memory; nothing is
 // written to state.json, Anki, the graph or a model.
 import { AnkiClient, AnkiError, normalizeUrl } from '../anki/client.ts';
-import { MODEL_NAME } from '../anki/note-type.ts';
+import { noteTypeFor } from '../anki/note-type.ts';
 import { ReviewReader } from '../anki/review-reader.ts';
 import { sameDestination } from '../anki/destination.ts';
 import type { Card, Destination, StateStore } from '../anki/state.ts';
@@ -177,8 +177,8 @@ export class ReviewService {
         if (!note) { missing++; continue; }
         const lh = record(note.fields) ? note.fields.LH_ID : undefined;
         const lhValue = record(lh) && typeof lh.value === 'string' ? lh.value : undefined;
-        // The note must still be the bridge's note type and carry this card's delivery ID.
-        if (note.modelName !== MODEL_NAME || lhValue !== card.id) { changed++; continue; }
+        // The note must still be the bridge's note type for this card's format and carry its delivery ID.
+        if (note.modelName !== noteTypeFor(card).name || lhValue !== card.id) { changed++; continue; }
         owned.push({ card, tags: note.tags as string[], cardIds: note.cards as number[] });
       }
     }
@@ -237,7 +237,7 @@ export class ReviewService {
 
     const readings: NoteReading[] = readable.map(({ card, tags, cards }) => ({
       lhId: card.id, noteId: card.noteId, nodeId: card.nodeId, nodeName: card.nodeName, sessionId: card.sessionId, sessionName: card.sessionName,
-      kind: card.kind, front: card.front, back: card.back, tags,
+      kind: card.kind, ...(card.format ? { format: card.format } : {}), front: card.front, back: card.back, tags,
       cards: cards.map(({ note: _note, ...info }) => info), reviews: cards.flatMap(c => reviews.get(c.cardId) ?? []),
     }));
     let graph: GraphInfo | null = null;

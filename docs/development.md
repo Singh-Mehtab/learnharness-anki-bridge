@@ -56,6 +56,15 @@ The opt-in [live integration test](0.2.0-verification.md) requires an isolated p
 
 `src/anki/apkg.ts` writes the package with `node:sqlite` and `node:zlib`, so it needs no npm dependency. Its tests in `tests/apkg.test.ts` read packages back with `node:sqlite`. A real Anki import has not been run; the [.apkg export note](fi-9-apkg-export.md) lists what was tested and a throwaway-profile test to run with approval.
 
+## Cloze cards
+
+The design and its checks are in the [FI-8 spec](fi-8-cloze-design.md). Two scripts check cloze output with Anki's own Python library on a scratch collection, so they never touch a real profile. Run them with the Python that ships with Anki, isolated with `-I`, for example `~/Library/Application Support/AnkiProgramFiles/.venv/bin/python` on macOS:
+
+- `bench/cloze-anki-check.py fields.json` adds each Text field to a scratch collection and checks that it renders as one `c1` blank with the exact expected question and answer HTML. `node bench/cloze-fields.ts --samples` writes the escaping samples; `node bench/cloze-fields.ts bench-output/<run>/run.json` writes the cloze cards of a bench run.
+- `bench/cloze-apkg-check.py file.apkg` imports a package and prints each note's type, card count, question and answer. `node bench/cloze-apkg.ts out.apkg` writes a synthetic package with basic and cloze cards.
+
+`npm test` does not run either script, because it can't assume Anki is installed.
+
 ## Card-quality evidence
 
 The original core bench failed the zero-answer-leak criterion. The 0.1.1 follow-up produced 32 cards from previously unused QM target nodes in the same lecture. Sol provisionally kept 24 of 32 as-is or with small edits, with no flagged leaks or factual errors among the kept cards. Five rejected cards had factual-error flags.

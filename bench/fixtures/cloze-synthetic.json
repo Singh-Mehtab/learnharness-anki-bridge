@@ -1,0 +1,182 @@
+{
+  "name": "cloze-synthetic",
+  "subject": "Physics: units, natural units and standard relations (hand-written fixture for FI-8 cloze tuning)",
+  "origin": "hand-written",
+  "graph": {
+    "propositions": [
+      {
+        "id": "c_hbar_units",
+        "name": "Units of hbar",
+        "statement": "The reduced Planck constant has the units of action: \\([\\hbar] = \\mathrm{J\\,s}\\).",
+        "aliases": [],
+        "provenance": [
+          {
+            "chatId": "chat_units",
+            "messageId": "msg_u1"
+          }
+        ]
+      },
+      {
+        "id": "c_time_dim",
+        "name": "Time in natural units",
+        "statement": "In natural units with energy in eV, time has the dimension of inverse energy, \\([t] = \\mathrm{eV^{-1}}\\).",
+        "aliases": [],
+        "provenance": [
+          {
+            "chatId": "chat_units",
+            "messageId": "msg_u1"
+          }
+        ]
+      },
+      {
+        "id": "c_length_dim",
+        "name": "Length in natural units",
+        "statement": "In natural units with energy in eV, length has the dimension of inverse energy, \\([L] = \\mathrm{eV^{-1}}\\).",
+        "aliases": [],
+        "provenance": [
+          {
+            "chatId": "chat_units",
+            "messageId": "msg_u1"
+          }
+        ]
+      },
+      {
+        "id": "c_rest_energy",
+        "name": "Rest energy",
+        "statement": "A particle of mass \\(m\\) at rest has rest energy \\(E_0 = mc^2\\).",
+        "aliases": [],
+        "provenance": [
+          {
+            "chatId": "chat_units",
+            "messageId": "msg_u1"
+          }
+        ]
+      },
+      {
+        "id": "c_total_energy",
+        "name": "Total energy",
+        "statement": "The total energy of a particle of mass \\(m\\) moving with Lorentz factor \\(\\gamma\\) is \\(E = \\gamma m c^2\\).",
+        "aliases": [],
+        "provenance": [
+          {
+            "chatId": "chat_units",
+            "messageId": "msg_u1"
+          }
+        ]
+      },
+      {
+        "id": "c_de_broglie",
+        "name": "de Broglie relation",
+        "statement": "A particle with momentum \\(p\\) has de Broglie wavelength \\(\\lambda = h/p\\).",
+        "aliases": [],
+        "provenance": [
+          {
+            "chatId": "chat_units",
+            "messageId": "msg_u1"
+          }
+        ]
+      },
+      {
+        "id": "c_hbarc",
+        "name": "hbar c",
+        "statement": "The conversion constant \\(\\hbar c \\approx 197\\ \\mathrm{MeV\\,fm}\\) is used for nuclear-scale calculations.",
+        "aliases": [],
+        "provenance": [
+          {
+            "chatId": "chat_units",
+            "messageId": "msg_u1"
+          }
+        ]
+      },
+      {
+        "id": "c_nonrel_ke",
+        "name": "Non-relativistic kinetic energy",
+        "statement": "The kinetic energy \\(T = E - mc^2\\) reduces to \\(T \\approx p^2/2m\\) only when \\(pc \\ll mc^2\\).",
+        "aliases": [],
+        "provenance": [
+          {
+            "chatId": "chat_units",
+            "messageId": "msg_u1"
+          }
+        ]
+      },
+      {
+        "id": "c_femto",
+        "name": "Femto prefix",
+        "statement": "The prefix femto- (f) means \\(10^{-15}\\).",
+        "aliases": [],
+        "provenance": [
+          {
+            "chatId": "chat_units",
+            "messageId": "msg_u1"
+          }
+        ]
+      },
+      {
+        "id": "c_natural_units",
+        "name": "Natural units",
+        "statement": "In natural units \\(\\hbar = c = 1\\) and every quantity is measured in powers of energy.",
+        "aliases": [],
+        "provenance": [
+          {
+            "chatId": "chat_units",
+            "messageId": "msg_u1"
+          }
+        ]
+      }
+    ],
+    "chains": [
+      {
+        "id": "cc_time",
+        "premises": [
+          "c_natural_units"
+        ],
+        "conclusion": "c_time_dim"
+      },
+      {
+        "id": "cc_length",
+        "premises": [
+          "c_natural_units"
+        ],
+        "conclusion": "c_length_dim"
+      }
+    ]
+  },
+  "chats": {
+    "chat_units": {
+      "id": "chat_units",
+      "messages": [
+        {
+          "id": "msg_u1",
+          "role": "assistant",
+          "content": [
+            {
+              "type": "toolCall",
+              "name": "send_to_user",
+              "arguments": {
+                "message": "## Units of \\(\\hbar\\) and natural units\n\nThe reduced Planck constant \\(\\hbar = h/2\\pi\\) has the units of action: \\([\\hbar] = \\mathrm{J\\,s}\\), the same as angular momentum. In particle physics we usually quote \\(\\hbar\\) in \\(\\mathrm{eV\\,s}\\).\n\nIn **natural units** we set \\(\\hbar = c = 1\\) and measure everything in powers of energy, with energy in eV. Then \\(E = \\hbar\\omega\\) means a frequency has the dimension of energy, and time has the dimension of inverse energy: \\([t] = [E]^{-1} = \\mathrm{eV^{-1}}\\). Length is also an inverse energy, \\([L] = \\mathrm{eV^{-1}}\\).\n\nA particle of mass \\(m\\) at rest has rest energy \\(E_0 = mc^2\\). For the rest of the course we keep \\(E_0\\) for rest energy and \\(E\\) for total energy, \\(E = \\gamma m c^2\\).\n\nThe de Broglie relation \\(\\lambda = h/p\\) gives the wavelength of a particle with momentum \\(p\\). A useful number for nuclear scales is \\(\\hbar c \\approx 197\\ \\mathrm{MeV\\,fm}\\); you will calculate with it all the time.\n\nThe kinetic energy is \\(T = E - mc^2\\). It reduces to \\(T \\approx p^2/2m\\) only when the particle is non-relativistic, \\(pc \\ll mc^2\\).\n\nNuclear sizes are a few femtometres: the prefix femto- (f) means \\(10^{-15}\\)."
+              }
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "targets": [
+    "c_hbar_units",
+    "c_time_dim",
+    "c_length_dim",
+    "c_rest_energy",
+    "c_total_energy",
+    "c_de_broglie",
+    "c_hbarc",
+    "c_nonrel_ke",
+    "c_femto"
+  ],
+  "clozePositive": [
+    "c_hbar_units",
+    "c_time_dim",
+    "c_length_dim",
+    "c_rest_energy"
+  ]
+}

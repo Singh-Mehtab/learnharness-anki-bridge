@@ -60,7 +60,7 @@ async function fixture() {
         finishAdd();
         if (switchAfterAdd) profile = 'Different';
         if (dropAfterAdd) { dropAfterAdd = false; res.destroy(); return; }
-      } else if (action === 'notesInfo') result = notes.filter(n => params.notes.includes(n.noteId)).map(n => ({ noteId: n.noteId, fields: n.fields, tags: n.tags, modelName: n.modelName, cards: [n.noteId + 1000] }));
+      } else if (action === 'notesInfo') result = notes.filter(n => params.notes.includes(n.noteId)).map(n => ({ noteId: n.noteId, fields: Object.fromEntries(Object.entries(n.fields).map(([k, value], order) => [k, { value, order }])), tags: n.tags, modelName: n.modelName, cards: [n.noteId + 1000] }));
       else if (action === 'guiBrowse') result = notes.filter(n => params.query.includes(`"LH_ID:${n.fields.LH_ID}"`)).map(n => n.noteId + 1000);
       else if (['updateModelStyling', 'updateModelTemplates'].includes(action)) result = null;
       else throw new Error('Unexpected API action: ' + action);
@@ -673,14 +673,14 @@ test('schema 7 records an existing note with unknown deck and preserves a 0.8.0 
     await f.service.close();
     await writeFile(stateFile, original);
     await f.reopen();
-    assert.deepEqual(f.store.snapshot(), { ...legacy, schemaVersion: 8 });
+    assert.deepEqual(f.store.snapshot(), { ...legacy, schemaVersion: 9 });
     assert.equal(await readFile(backup, 'utf8'), original);
 
     f.notes.push({ noteId: 500, fields: { LH_ID: imported }, deckName: 'Imported Deck', modelName: 'Imported Type', tags: [] });
     const result = await f.send([imported], 'Requested Deck');
     assert.deepEqual(result.delivery.found, [imported]);
     const persisted = JSON.parse(await readFile(stateFile, 'utf8')) as State;
-    assert.equal(persisted.schemaVersion, 8);
+    assert.equal(persisted.schemaVersion, 9);
     assert.deepEqual(persisted.cards[1], { ...legacy.cards[1], status: 'sent', noteId: 500, existingNote: true, presence: 'present', destination: legacy.destination });
     assert.throws(() => validateV080DeliveryContract(persisted), /Unsupported state format/);
     assert.throws(() => validateV080DeliveryContract({ ...persisted, schemaVersion: 6 }), /Missing delivery destination or deck/);
@@ -715,7 +715,8 @@ test('delivery receipt separates a matching imported note, a new add and a defin
     const before = f.calls.length;
     const foundOnly = await f.send([imported], 'Not the actual deck', ['not-applied']);
     assert.deepEqual(foundOnly.delivery, { added: [], found: [imported], skipped: [], failed: [], deck: null, tags: [] });
-    assert.ok(f.calls.slice(before).every(c => ['getActiveProfile', 'findNotes'].includes(c.action)));
+    // FI-8: notesInfo is a read, checking the found note's type (S22).
+    assert.ok(f.calls.slice(before).every(c => ['getActiveProfile', 'findNotes', 'notesInfo'].includes(c.action)));
     assert.equal(foundOnly.cards[0].deck, undefined);
     assert.equal(foundOnly.cards[0].existingNote, true);
     assert.equal(foundOnly.settings.lastDeck, '');

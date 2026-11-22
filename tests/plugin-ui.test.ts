@@ -306,10 +306,10 @@ test("note type repairs name the shown profile and resetting styling is a confir
     assert.equal(f.calls.some(c => c.name === "updateStyling"), false);
     f.button("Reset styling and templates", s.host).click(); await tick();
     f.button("Reset", f.dialog()!).click(); await tick();
-    assert.deepEqual(f.calls.find(c => c.name === "updateStyling")!.input, { confirmed: true, expectedDestination: paired() });
+    assert.deepEqual(f.calls.find(c => c.name === "updateStyling")!.input, { noteType: "basic", confirmed: true, expectedDestination: paired() });
     f.button("Add missing fields", s.host).click(); await tick();
     f.button("Add fields", f.dialog()!).click(); await tick();
-    assert.deepEqual(f.calls.find(c => c.name === "repairFields")!.input, { expectedDestination: paired() });
+    assert.deepEqual(f.calls.find(c => c.name === "repairFields")!.input, { noteType: "basic", expectedDestination: paired() });
     s.close();
   } finally { await f.dispose(); }
 });
@@ -666,11 +666,11 @@ test("a hand-written card is added through a dialog", async () => {
     await f.more("Write a card by hand"); await tick();
     const dialog = f.dialog()!;
     const [front, back] = Array.from(dialog.querySelectorAll("textarea")) as unknown as HTMLTextAreaElement[];
-    const kinds = Array.from(dialog.querySelectorAll("option") as ArrayLike<HTMLOptionElement>).map(o => o.textContent);
+    const kinds = Array.from(dialog.querySelectorAll("select")[0]!.querySelectorAll("option") as ArrayLike<HTMLOptionElement>).map(o => o.textContent);
     assert.deepEqual(kinds, ["Fact", "Equation", "Why", "Steps", "Apply", "Contrast"], "no Compose for new cards");
     front.value = "Front text"; back.value = "Back text";
     f.button("Add card", dialog).click(); await tick();
-    assert.deepEqual(f.calls.find(c => c.name === "draft")!.input, { front: "Front text", back: "Back text", extra: "", kind: "fact" });
+    assert.deepEqual(f.calls.find(c => c.name === "draft")!.input, { front: "Front text", back: "Back text", extra: "", kind: "fact", format: "basic" });
     assert.equal(f.dialog(), null);
     assert.match(f.review().textContent!, /Front text/);
   } finally { await f.dispose(); }
@@ -1006,8 +1006,9 @@ test("Download .apkg works unpaired, saves the package, keeps cards approved and
   URL.createObjectURL = (blob: Blob) => { const url = `blob:test/${blobs.size}`; blobs.set(url, blob); return url; };
   URL.revokeObjectURL = () => {};
   let failAfterCommit = false, exportCount = 0;
-  let markGate: Promise<void> | undefined;
+  let markGate: Promise<void> | undefined, exportGate: Promise<void> | undefined;
   const f = await setup({ state, handler: async (name, input) => {
+    if (name === "exportPackage" && exportGate) await exportGate;
     if (name === "exportPackage") return exportPackage(backend, input, 1_795_000_000_000 + 60_000 * exportCount++);
     if (name === "markImported" && markGate) await markGate;
     if (failAfterCommit && (name === "markImported" || name === "unmarkImported")) {
@@ -1061,8 +1062,26 @@ test("Download .apkg works unpaired, saves the package, keeps cards approved and
     f.button("Mark as imported", panel).click(); await tick();
     assert.match(f.status()!, /Save or cancel your edits/);
     assert.equal(f.calls.some(c => c.name === "markImported"), false);
+    // FI-8 (S21): Download again is refused too, so it can't save a package that differs from the editor.
+    const exportsBefore = f.calls.filter(c => c.name === "exportPackage").length;
+    f.button("Download again", panel).click(); await tick();
+    assert.match(f.status()!, /Save or cancel your edits before downloading these cards again/);
+    assert.equal(f.calls.filter(c => c.name === "exportPackage").length, exportsBefore);
     assert.equal((f.review().querySelector('textarea[aria-label="Front"]') as unknown as HTMLTextAreaElement).value, "Unsaved change");
     f.button("Cancel", f.review()).click();
+    // Round 1 S3: an edit started while Download again's export runs stops the save.
+    let releaseExport!: () => void;
+    exportGate = new Promise<void>(resolve => { releaseExport = resolve; });
+    const savedBefore = saved.length;
+    f.button("Download again", panel).click(); await tick();
+    f.button("Edit", f.review().querySelector('.ab-card[data-card-id="0b6f7c1e-0000-4000-8000-00000000000a"]')!).click(); await tick();
+    releaseExport(); exportGate = undefined;
+    // Nothing is saved here, so wait for the message rather than for a file.
+    for (let i = 0; i < 400 && !/Save or cancel/.test(f.status() ?? ""); i++) await new Promise(resolve => setTimeout(resolve, 5));
+    await settle();
+    assert.equal(saved.length, savedBefore, "no file is saved while the card is being edited");
+    assert.match(f.status()!, /Save or cancel your edits before downloading these cards again/);
+    f.button("Cancel", f.review()).click(); await tick();
     failAfterCommit = true;
     let release!: () => void; markGate = new Promise(resolve => { release = resolve; });
     f.button("Mark as imported", panel).click();
@@ -1095,9 +1114,10 @@ test("Download .apkg works unpaired, saves the package, keeps cards approved and
     assert.equal(f.find("Undo", importedPanel), undefined);
     f.button("Download again", panel).click(); await settle(2);
     assert.equal(saved.length, 2);
-    assert.equal(f.calls.filter(c => c.name === "exportPackage").length, 2, "download again re-checks the cards through the backend");
+    // The third export is the successful re-check; the second was stopped by the edit above.
+    assert.equal(f.calls.filter(c => c.name === "exportPackage").length, 3, "download again re-checks the cards through the backend");
     const exports = f.calls.filter(c => c.name === "exportPackage");
-    assert.deepEqual(exports[1].input, exports[0].input, "the re-check repeats the original request, including the user's tags");
+    assert.deepEqual(exports[2].input, exports[0].input, "the re-check repeats the original request, including the user's tags");
     assert.deepEqual(saved[1], saved[0], "the original bytes are saved again");
     f.button("Download .apkg").click(); await settle();
     assert.equal(saved.length, 2, "a new export cannot replace the outstanding receipt");
@@ -1269,5 +1289,83 @@ test("a found note is not called newly sent or assigned the requested deck and t
     f.button("Show in Anki", sent).click(); await tick();
     assert.match(f.status()!, /No matching cards found/);
     assert.equal(sent.hidden, false);
+  } finally { await f.dispose(); }
+});
+
+test("FI-8: a cloze card previews as a question with [...], and the editor switches format and inserts a blank", async () => {
+  const state = fixture();
+  state.cards = [
+    card("c", { kind: "fact", format: "cloze", front: "In SI units, \\([\\hbar] = {{blank}}\\)", back: "\\mathrm{J\\,s}" }),
+    card("f", { kind: "fact", front: "The prefix femto- means {{blank}}.", back: "\\(10^{-15}\\)" }),
+    card("w", { kind: "why", front: "Why?", back: "Because." }),
+  ];
+  const f = await setup({ state, handler: (name, input) => {
+    if (name !== "edit") return undefined;
+    const target = state.cards.find(c => c.id === input.id)!;
+    Object.assign(target, { front: input.front, back: input.back, extra: input.extra, status: "draft" });
+    if (input.format === "cloze") target.format = "cloze"; else delete target.format;
+    return structuredClone(state);
+  } });
+  try {
+    const rows = () => Array.from(f.review().querySelectorAll(".ab-card")) as any[];
+    const [clozeRow, basicRow, whyRow] = rows();
+    assert.match(clozeRow.textContent, /Cloze/);
+    assert.match(clozeRow.textContent, /Text/); assert.match(clozeRow.textContent, /Hidden part/);
+    assert.match(clozeRow.textContent, /\[\.\.\.\]/);
+    assert.doesNotMatch(clozeRow.querySelector(".ab-card-field").textContent, /\{\{blank\}\}/, "the question never shows the placeholder");
+    assert.doesNotMatch(basicRow.querySelector(".ab-card-title").textContent, /Cloze/);
+    // Only fact and equation drafts get the switch.
+    f.button("Edit", whyRow).click(); await tick();
+    assert.equal(f.find("Switch to cloze", rows()[2]), undefined);
+    f.button("Cancel", rows()[2]).click(); await tick();
+    // A format-only switch, with no text change, is still saved (S20).
+    f.button("Edit", rows()[1]).click(); await tick();
+    f.button("Switch to cloze", rows()[1]).click(); await tick();
+    assert.ok(rows()[1].querySelector('textarea[aria-label="Text"]'));
+    assert.ok(f.find("Insert blank", rows()[1]));
+    f.button("Save", rows()[1]).click(); await tick();
+    assert.deepEqual(f.calls.find(c => c.name === "edit")!.input, { id: "f", front: "The prefix femto- means {{blank}}.", back: "\\(10^{-15}\\)", extra: "", format: "cloze" });
+    assert.equal(state.cards[1]!.format, "cloze");
+    // Cloze to basic prefills a question; switching back before saving restores the fields exactly.
+    f.button("Edit", rows()[0]).click(); await tick();
+    f.button("Switch to basic", rows()[0]).click(); await tick();
+    const front = () => rows()[0].querySelector("textarea") as HTMLTextAreaElement;
+    assert.equal(front().getAttribute("aria-label"), "Front");
+    assert.equal(front().value, "In SI units, \\([\\hbar] = [...]\\)");
+    assert.equal((rows()[0].querySelectorAll("textarea")[1] as HTMLTextAreaElement).value, "\\(\\mathrm{J\\,s}\\)");
+    f.button("Switch to cloze", rows()[0]).click(); await tick();
+    assert.equal(front().value, "In SI units, \\([\\hbar] = {{blank}}\\)");
+    assert.equal((rows()[0].querySelectorAll("textarea")[1] as HTMLTextAreaElement).value, "\\mathrm{J\\,s}");
+    // Insert blank puts the placeholder at the cursor.
+    f.type(front(), "In SI units, [ħ] = ");
+    front().setSelectionRange(front().value.length, front().value.length);
+    f.button("Insert blank", rows()[0]).click(); await tick();
+    assert.equal(front().value, "In SI units, [ħ] = {{blank}}");
+    f.button("Cancel", rows()[0]).click(); await tick();
+    assert.equal(state.cards[0]!.front, "In SI units, \\([\\hbar] = {{blank}}\\)", "cancel saves nothing");
+  } finally { await f.dispose(); }
+});
+
+test("FI-8: Settings shows the cloze slider at Writer chooses by default and saves a new stop", async () => {
+  const f = await setup();
+  try {
+    const s = await f.mountSettings();
+    const range = s.host.querySelector('input[type="range"]') as HTMLInputElement;
+    assert.equal(range.getAttribute("aria-label"), "Cloze cards");
+    assert.equal(range.value, "1");
+    assert.equal(range.getAttribute("aria-valuetext"), "Writer chooses");
+    assert.match(s.host.textContent!, /Cloze where the notation already says what is asked/);
+    f.type(range, "2", "input");
+    assert.equal(range.getAttribute("aria-valuetext"), "Prefer cloze");
+    range.dispatchEvent(f.event("change")); await tick();
+    assert.deepEqual(f.calls.find(c => c.name === "generationSettings")!.input, { cloze: "prefer" });
+    // The note type actions can target LearnHarness Cloze and say so.
+    const select = s.host.querySelector('select[aria-label="Note type to repair"]') as HTMLSelectElement;
+    select.value = "cloze";
+    f.button("Add missing fields", s.host).click(); await tick();
+    assert.match(f.dialog()!.textContent!, /LearnHarness Cloze/);
+    f.button("Add fields", f.dialog()!).click(); await tick();
+    assert.deepEqual(f.calls.find(c => c.name === "repairFields")!.input, { noteType: "cloze", expectedDestination: paired() });
+    s.close();
   } finally { await f.dispose(); }
 });
