@@ -44,7 +44,7 @@ export const isCloze = (card: Pick<DraftCard, "format">): boolean => card.format
 
 /** Front with the hidden part put back. */
 export const assemble = (front: string, back: string, marked = false): string =>
-  front.replace(BLANK, marked ? `${OPEN}${back}${CLOSE}` : back);
+  front.replace(BLANK, () => marked ? `${OPEN}${back}${CLOSE}` : back);
 
 /** Layout of maths blanks (spec: "Layout of maths blanks"). When the blank is
  *  inside maths, that segment becomes display maths on its own line, the text
@@ -85,6 +85,23 @@ function topLevel(front: string, start: number, end: number): boolean {
 
 /** Front as shown on the question side, for previews. */
 export const questionPreview = (front: string): string => laidOutFront(front).replace(BLANK, "[...]");
+
+/** The answer side, for previews: the full text with the hidden part put back,
+ *  bold when it sits in prose. Inside maths the raw TeX goes back in place. */
+export function answerPreview(front: string, back: string): string {
+  const prose = blankPlace(front)?.where === "prose";
+  return laidOutFront(front).replace(BLANK, () => prose ? `**${back}**` : back);
+}
+
+/** Basic to cloze (spec: Switching format): the old front becomes the text, to be
+ *  reworded with a blank, and the old back the hidden part. */
+export const toCloze = (fields: { front: string; back: string }) => ({ front: fields.front, back: fields.back });
+/** Cloze to basic: the text with the blank shown as [...], and the hidden part,
+ *  wrapped in \(...\) when the blank was inside maths. */
+export function toBasic(fields: { front: string; back: string }): { front: string; back: string } {
+  const inMath = blankPlace(fields.front)?.where === "math";
+  return { front: fields.front.split(BLANK).join("[...]"), back: inMath ? `\\(${fields.back}\\)` : fields.back };
+}
 
 function balancedBraces(tex: string): boolean {
   let depth = 0;

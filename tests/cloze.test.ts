@@ -5,6 +5,8 @@ import {
   clozeLeaks,
   clozeProblems,
   clozeCardProblems,
+  answerPreview,
+  toBasic,
   clozeTextField,
   laidOutFront,
   questionPreview,
@@ -134,4 +136,12 @@ test("assembled forbidden-content check skips maths (C6)", () => {
   assert.deepEqual(clozeCardProblems(cloze("\\(a_n = {{blank}}\\)", "n![z^n](1-z)^{-1}")), []);
   assert.ok(clozeCardProblems(cloze("See ![x](y.png) for {{blank}}.", "this")).some((p) => /images/.test(p)));
   assert.ok(clozeCardProblems({ ...cloze("\\(E_0 = {{blank}}\\)", "mc^2"), extra: "```mermaid\ngraph\n```" }).some((p) => /Mermaid/i.test(p)));
+});
+
+test("previews and the basic conversion used by the editor, Review and Topics", () => {
+  assert.equal(answerPreview("In SI units, \\([\\hbar] = {{blank}}\\)", "\\mathrm{J\\,s}"), "In SI units,\n\n$$[\\hbar] = \\mathrm{J\\,s}$$");
+  assert.equal(answerPreview("The prefix femto- means {{blank}}.", "\\(10^{-15}\\)"), "The prefix femto- means **\\(10^{-15}\\)**.");
+  assert.equal(answerPreview("Costs {{blank}}.", "$$5"), "Costs **$$5**.", "a replacement string is inserted literally");
+  assert.deepEqual(toBasic({ front: "In SI units, \\([\\hbar] = {{blank}}\\)", back: "\\mathrm{J\\,s}" }), { front: "In SI units, \\([\\hbar] = [...]\\)", back: "\\(\\mathrm{J\\,s}\\)" });
+  assert.deepEqual(toBasic({ front: "femto- means {{blank}}.", back: "\\(10^{-15}\\)" }), { front: "femto- means [...].", back: "\\(10^{-15}\\)" });
 });

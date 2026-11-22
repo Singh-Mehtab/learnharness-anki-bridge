@@ -8,7 +8,8 @@ import { packageRevision } from "./anki/package-revision.ts";
 import { expandTagTemplate, matchTagCase, tagSuggestions, validateTags } from "./anki/tags.ts";
 import { isWaitingCard } from "./coverage/flow.ts";
 import { KIND_NAMES } from "./kinds-ui.ts";
-import { CORE_KINDS, isStoredKind } from "./writer/types.ts";
+import { CLOZE_KINDS, CORE_KINDS, isStoredKind } from "./writer/types.ts";
+import { answerPreview, BLANK, questionPreview, toBasic, toCloze } from "./writer/cloze.ts";
 import type { Connection, Destination, Peers, Settings } from "./settings-ui.ts";
 import { base64Bytes, button, confirmDialog, el, field, input, moreMenu, pill, plural, RenderScope, saveFile, status, textarea } from "./ui.ts";
 import type { ButtonHandle } from "./ui.ts";
@@ -16,13 +17,23 @@ import type { ButtonHandle } from "./ui.ts";
 interface Card {
   id: string; nodeId: string; statementHash: string; sessionId: string; nodeName: string; sessionName: string;
   kind: string; front: string; back: string; extra: string;
+  /** FI-8: absent means basic. */
+  format?: "cloze";
   status: "draft" | "approved" | "sending" | "sent" | "imported" | "failed" | "dropped";
   deck?: string; noteId?: number; existingNote?: true; destination?: Destination; lastError?: string;
   presence?: "present" | "deleted" | "unknown";
   sourceStatement?: string; sourceChanged?: boolean; sourceMissing?: boolean; sourceUnavailable?: boolean;
 }
 export interface Snapshot { settings: Settings; destination: Destination | null; cards: Card[]; recoveryError?: string; generationRecoveryError?: string; durabilityWarning?: string; importMarkId?: string }
-type Fields = { front: string; back: string; extra: string };
+/** Editor values. format is part of an edit (FI-8), so a switch with no text change still saves. */
+type Fields = { front: string; back: string; extra: string; format?: "cloze" };
+const isClozeKind = (kind: string) => (CLOZE_KINDS as readonly string[]).includes(kind);
+/** Preview text for a field: a cloze card shows the question with [...] and the answer filled in. */
+function previewText(key: "front" | "back" | "extra", fields: Fields): string {
+  if (fields.format !== "cloze" || key === "extra") return fields[key];
+  if (!fields.front.includes(BLANK)) return key === "front" ? fields.front : fields.back;
+  return key === "front" ? questionPreview(fields.front) : answerPreview(fields.front, fields.back);
+}
 const message = (error: unknown) => error instanceof Error ? error.message : String(error);
 const words = (text: string) => text.trim().split(/\s+/u).filter(Boolean).length;
 
@@ -73,6 +84,10 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
   let disposed = false, busy = false, refreshPending = false, actions = 0;
   let deckTouched = false, tagsTouched = false;
   const edits = new Map<string, Fields>();
+  /** Fields as they were before a pending format switch; switching back restores them exactly. */
+  const beforeSwitch = new Map<string, Fields>();
+  /** Counts format switches per card, so a switch redraws its row. */
+  const switches = new Map<string, number>();
   const editing = new Set<string>();
   /** Cards whose save is in flight. Their editors stay read-only across re-renders. */
   const saving = new Set<string>();
@@ -132,9 +147,15 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
     const actionsBox = el("div", undefined, "ab-actions");
     // Download again re-exports through the backend, which rejects imported or
     // sent cards even when this view's snapshot is stale.
+    // A pending edit, including an unsaved format switch, blocks both actions, as
+    // Mark as imported already did: the package must match what the editor shows (S21).
+    const pendingEdit = () => result.ids.some(id => editing.has(id));
     const eligible = () => !packageMarkInFlight && result.ids.every((id, i) => { const card = state?.cards.find(c => c.id === id); return card && result.revisions[i] === packageRevision(card) && (card.status === "approved" || card.status === "failed") && card.noteId === undefined; });
     const warning = el("p", "", "ab-sent-detail ab-warning"); text.append(warning);
-    const again = button(ctx, actionsBox, s, { label: "Download again", onClick: () => { if (eligible()) void downloadAgain(result, bytes); } });
+    const again = button(ctx, actionsBox, s, { label: "Download again", onClick: () => {
+      if (pendingEdit()) { feedback.show("Save or cancel your edits before downloading these cards again.", "error"); return; }
+      if (eligible()) void downloadAgain(result, bytes);
+    } });
     const mark = button(ctx, actionsBox, s, { label: "Mark as imported", onClick: () => { if (eligible()) void packageAction("markImported", result, bytes, s); } });
     syncReceipt = () => { const blocked = !eligible(); again.update({ disabled: blocked }); mark.update({ disabled: blocked }); warning.textContent = packageMarkInFlight ? "Marking cards as imported…" : blocked ? "Some cards are no longer eligible. Dismiss this receipt and review the cards." : ""; };
     button(ctx, actionsBox, s, { label: "Dismiss", variant: "ghost", onClick: hideDownload });
@@ -451,9 +472,27 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
     const front = textarea("", 3), back = textarea("", 3), extra = textarea("", 2);
     const kind = el("select", undefined, "ab-input ab-select");
     for (const k of CORE_KINDS) { const o = el("option", KIND_NAMES[k]); o.value = k; kind.append(o); }
+    // FI-8: a fact or equation card can be written as a cloze card.
+    const format = el("select", undefined, "ab-input ab-select");
+    for (const [value, label] of [["basic", "Question and answer"], ["cloze", "Cloze"]]) { const o = el("option", label); o.value = value!; format.append(o); }
+    const frontField = field("Front", front), backField = field("Back", back), formatField = field("Format", format);
+    const blankRow = el("div", undefined, "ab-actions");
+    button(ctx, blankRow, dialogScope.signal, { label: "Insert blank", size: "xs", onClick: () => {
+      front.setRangeText(BLANK, front.selectionStart ?? front.value.length, front.selectionEnd ?? front.value.length, "end"); front.focus();
+    } });
+    const syncFormat = () => {
+      if (!isClozeKind(kind.value)) format.value = "basic";
+      formatField.hidden = !isClozeKind(kind.value);
+      const cloze = format.value === "cloze";
+      frontField.querySelector(".ab-label")!.textContent = cloze ? "Text" : "Front";
+      backField.querySelector(".ab-label")!.textContent = cloze ? "Hidden part" : "Back";
+      blankRow.hidden = !cloze;
+    };
+    kind.onchange = syncFormat; format.onchange = syncFormat;
     const err = status();
     const actionsRow = el("div", undefined, "ab-actions ab-dialog-actions");
-    content.append(el("h3", "Write a card", "ab-dialog-heading"), field("Front", front), field("Back", back), field("Extra, optional", extra, "Reason or hint."), field("Card type", kind), err, actionsRow);
+    content.append(el("h3", "Write a card", "ab-dialog-heading"), field("Card type", kind), formatField, frontField, blankRow, backField, field("Extra, optional", extra, "Reason or hint."), err, actionsRow);
+    syncFormat();
     let handle: ReturnType<PluginFrontendContext["ui"]["openDialog"]> | undefined;
     const close = () => { dialogScope.abort(); handle?.dispose(); };
     button(ctx, actionsRow, dialogScope.signal, { label: "Cancel", variant: "ghost", onClick: close });
@@ -463,7 +502,7 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
       busy = true; actions++; syncBar();
       hideSent();
       try {
-        await call("draft", { front: front.value, back: back.value, extra: extra.value, kind: kind.value });
+        await call("draft", { front: front.value, back: back.value, extra: extra.value, kind: kind.value, format: format.value });
         close(); render(); feedback.show("Card added.", "success");
       } catch (error) { err.show(message(error), "error"); }
       finally { busy = false; if (alive()) syncBar(); if (refreshPending && alive()) void backgroundRefresh(); }
@@ -505,13 +544,15 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
     }
     const importedConflict = card.status === "imported" && editing.has(card.id);
     const editable = importedConflict || (["draft", "approved", "failed"].includes(card.status) && card.noteId === undefined);
-    if (!editable) { edits.delete(card.id); editing.delete(card.id); }
+    if (!editable) { edits.delete(card.id); beforeSwitch.delete(card.id); editing.delete(card.id); }
     const isEditing = editable && editing.has(card.id);
     const values: Fields = (isEditing && edits.get(card.id)) || card;
 
     const head = el("header", undefined, "ab-card-head");
     const title = el("div", undefined, "ab-card-title");
-    title.append(pill(isStoredKind(card.kind) ? KIND_NAMES[card.kind] : card.kind, "info"), el("span", card.nodeName || "Card", "ab-card-idea"));
+    title.append(pill(isStoredKind(card.kind) ? KIND_NAMES[card.kind] : card.kind, "info"));
+    if (values.format === "cloze") title.append(pill("Cloze", "neutral"));
+    title.append(el("span", card.nodeName || "Card", "ab-card-idea"));
     if (card.sessionName && card.sessionName !== "Manual") title.append(el("span", card.sessionName, "ab-muted ab-card-session"));
     const badge = pill(STATUS[card.status].text, STATUS[card.status].tone);
     head.append(title, badge);
@@ -530,6 +571,8 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
     const inputs: Partial<Record<keyof Fields, HTMLTextAreaElement>> = {};
     const length = el("p", undefined, "ab-muted ab-card-length");
     const handles: Array<ReturnType<PluginFrontendContext["ui"]["mountMarkdown"]>> = [];
+    const cloze = values.format === "cloze";
+    const current = (): Fields => inputs.front ? { front: inputs.front.value, back: inputs.back!.value, extra: inputs.extra!.value, ...(cloze ? { format: "cloze" as const } : {}) } : values;
     const showLength = () => {
       const f = words(inputs.front?.value ?? values.front), b = words(inputs.back?.value ?? values.back);
       length.textContent = [f > 30 ? `Long front: ${f} words. Aim for about 30.` : "", b > 15 ? `Long back: ${b} words. Aim for about 15.` : ""].filter(Boolean).join(" ");
@@ -537,25 +580,28 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
     for (const key of ["front", "back", "extra"] as const) {
       if (key === "extra" && !isEditing && !values.extra.trim()) continue;
       const col = el("section", undefined, "ab-card-field");
-      col.append(el("h4", key === "front" ? "Front" : key === "back" ? "Back" : "Extra", "ab-field-name"));
+      const label = key === "extra" ? "Extra" : cloze ? (key === "front" ? "Text" : "Hidden part") : key === "front" ? "Front" : "Back";
+      col.append(el("h4", label, "ab-field-name"));
       const preview = el("div", undefined, "ab-markdown");
       if (isEditing) {
         const lines = values[key].split("\n").length + Math.ceil(values[key].length / 60);
         const area = textarea(values[key], Math.min(12, Math.max(key === "extra" ? 2 : 3, lines)));
-        area.setAttribute("aria-label", `${key[0].toUpperCase()}${key.slice(1)}`);
+        area.setAttribute("aria-label", label);
         area.dataset.keep = `card-${card.id}-${key}`;
         area.readOnly = saving.has(card.id);
         inputs[key] = area;
         area.oninput = () => {
-          edits.set(card.id, { front: inputs.front!.value, back: inputs.back!.value, extra: inputs.extra!.value });
-          handles[["front", "back", "extra"].indexOf(key)]?.update({ text: area.value });
+          const now = current();
+          edits.set(card.id, now);
+          // A cloze preview of either side depends on both the text and the hidden part.
+          (["front", "back", "extra"] as const).forEach((k, i) => { if (k === key || (cloze && k !== "extra")) handles[i]?.update({ text: previewText(k, now) || " " }); });
           showLength();
         };
         col.append(area);
         preview.classList.add("ab-markdown-preview");
       }
       col.append(preview);
-      handles[["front", "back", "extra"].indexOf(key)] = ctx.ui.mountMarkdown(preview, { text: values[key] || " " }, { signal: s });
+      handles[["front", "back", "extra"].indexOf(key)] = ctx.ui.mountMarkdown(preview, { text: previewText(key, values) || " " }, { signal: s });
       grid.append(col);
     }
     article.append(grid);
@@ -573,7 +619,7 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
     foot.append(left, right);
     const saved = () => {
       const now = edits.get(card.id);
-      return !now || (now.front === card.front && now.back === card.back && now.extra === card.extra);
+      return !now || (now.front === card.front && now.back === card.back && now.extra === card.extra && now.format === card.format);
     };
     let primary: ButtonHandle | undefined;
     const primaryProps = (status: Card["status"]) => status === "draft"
@@ -581,19 +627,46 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
       : { label: status === "failed" ? "Retry send" : "Send this card", onClick: () => run(() => send([card.id])) };
     if (editable) {
       if (isEditing) {
-        button(ctx, left, s, { label: "Cancel", disabled: saving.has(card.id), onClick: () => { edits.delete(card.id); editing.delete(card.id); feedback.show(""); render(); } });
+        button(ctx, left, s, { label: "Cancel", disabled: saving.has(card.id), onClick: () => { edits.delete(card.id); beforeSwitch.delete(card.id); editing.delete(card.id); feedback.show(""); render(); } });
+        // FI-8: switch an unsent fact or equation draft between basic and cloze. Nothing is saved until Save.
+        const formatControls: ButtonHandle[] = [];
+        if (!importedConflict && isClozeKind(card.kind)) {
+          formatControls.push(button(ctx, left, s, { label: cloze ? "Switch to basic" : "Switch to cloze", disabled: saving.has(card.id), onClick: () => {
+            if (saving.has(card.id)) return;
+            const now = current(), target: Fields["format"] = cloze ? undefined : "cloze";
+            const stashed = beforeSwitch.get(card.id);
+            let next: Fields;
+            if (stashed && stashed.format === target) { next = stashed; beforeSwitch.delete(card.id); }
+            else {
+              if (!stashed) beforeSwitch.set(card.id, now);
+              next = { ...(target === "cloze" ? toCloze(now) : toBasic(now)), extra: now.extra, ...(target ? { format: target } : {}) };
+            }
+            edits.set(card.id, next); switches.set(card.id, (switches.get(card.id) ?? 0) + 1); feedback.show(""); render();
+            article.ownerDocument.querySelector<HTMLTextAreaElement>(`[data-keep="card-${card.id}-front"]`)?.focus();
+          } }));
+          if (cloze) formatControls.push(button(ctx, left, s, { label: "Insert blank", disabled: saving.has(card.id), onClick: () => {
+            const area = inputs.front;
+            if (!area || saving.has(card.id)) return;
+            area.setRangeText(BLANK, area.selectionStart ?? area.value.length, area.selectionEnd ?? area.value.length, "end");
+            area.oninput?.(new Event("input"));
+            area.focus();
+          } }));
+        }
         if (!importedConflict) button(ctx, right, s, { label: "Save", variant: "default", onClick: () => run(async () => {
           // Typing during the save would be lost when the editor closes.
           saving.add(card.id);
           for (const area of Object.values(inputs)) if (area) area.readOnly = true;
+          for (const control of formatControls) control.update({ disabled: true });
           try {
             const now = edits.get(card.id) ?? card, changed = !saved();
-            if (changed) await call("edit", { id: card.id, front: now.front, back: now.back, extra: now.extra });
-            edits.delete(card.id); editing.delete(card.id);
+            // Basic edits send what 0.9.0 sent; a cloze card or a switch names its format.
+            if (changed) await call("edit", { id: card.id, front: now.front, back: now.back, extra: now.extra, ...(now.format || card.format ? { format: now.format ?? "basic" } : {}) });
+            edits.delete(card.id); beforeSwitch.delete(card.id); editing.delete(card.id);
             return card.status === "draft" || !changed ? "" : "Saved as draft. Approve again.";
           } finally {
             saving.delete(card.id);
             for (const area of Object.values(inputs)) if (area) area.readOnly = false;
+            for (const control of formatControls) control.update({ disabled: false });
           }
         }) });
       } else {
@@ -676,7 +749,7 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
     const next = cards.map(card => {
       const { status, ...rest } = card;
       const key = JSON.stringify([rest, ["draft", "approved", "failed"].includes(status) && card.noteId === undefined ? "editable" : status,
-        editing.has(card.id), saving.has(card.id)]);
+        editing.has(card.id), saving.has(card.id), switches.get(card.id) ?? 0]);
       return { card, key };
     });
     const keys = new Map(next.map(({ card, key }) => [card.id, key]));
