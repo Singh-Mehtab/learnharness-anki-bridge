@@ -14,7 +14,7 @@ import { capFor } from '../writer/kinds.ts';
 import { CORE_KINDS, isCoreKind, isStoredKind } from '../writer/types.ts';
 import type { Batch } from '../writer/input.ts';
 import type { WriterInput, WriterResult } from '../writer/types.ts';
-import { activeCloze, MAX_BATCH_CONTEXT_TOKENS, validGenerationSettings } from './types.ts';
+import { activeCloze, MAX_BATCH_CONTEXT_TOKENS, normaliseWriterNotes, validGenerationSettings, WRITER_NOTES_LIMIT } from './types.ts';
 import { batchContext } from './batch-context.ts';
 import type { Generation, GenerationSettings, GenerationTask, SourceSnapshot } from './types.ts';
 import { graphCoverage, statementHash } from '../coverage/service.ts';
@@ -318,9 +318,16 @@ export class GenerationService {
         return { ...graphCoverage(this.ctx.learning.graph(), this.store.snapshot()), catalog };
       }
       if (name === 'generationSettings') {
-        keys(value, ['cardsPerNode', 'enabledKinds', 'model', 'toggleKind', 'cloze']);
-        const { toggleKind, ...patch } = value;
-        const settings = { ...this.store.snapshot().generationSettings, ...patch };
+        keys(value, ['cardsPerNode', 'enabledKinds', 'model', 'toggleKind', 'cloze', 'writerNotes']);
+        const { toggleKind, writerNotes, ...patch } = value;
+        const settings: Record<string, unknown> & GenerationSettings = { ...this.store.snapshot().generationSettings, ...patch };
+        if (writerNotes !== undefined) {
+          // #54: blank clears the notes. The limit applies to the saved, trimmed text.
+          if (typeof writerNotes !== 'string') throw new Error('Writer notes must be text.');
+          const notes = normaliseWriterNotes(writerNotes);
+          if ((notes?.length ?? 0) > WRITER_NOTES_LIMIT) throw new Error(`Writer notes can be at most ${WRITER_NOTES_LIMIT.toLocaleString('en-GB')} characters.`);
+          if (notes === undefined) delete settings.writerNotes; else settings.writerNotes = notes;
+        }
         if (toggleKind !== undefined) {
           // One checkbox change, applied to the saved set inside the fence, so Write and Settings can't undo each other.
           const t = object(toggleKind); keys(t, ['kind', 'enabled']);

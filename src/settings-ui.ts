@@ -1,8 +1,8 @@
-// Settings page: connection, destination profile, tags, extra card types, cloze cards and note type upkeep.
+// Settings page: connection, destination profile, tags, extra card types, cloze cards, writer notes and note type upkeep.
 // Card review lives on the main page; nothing here sends cards.
 import type { PluginFrontendContext } from "../sdk/index.d.ts";
 import { exampleCard, KIND_HELP, KIND_NAMES } from "./kinds-ui.ts";
-import { button, confirmDialog, el, field, input, plural, RenderScope, status } from "./ui.ts";
+import { button, confirmDialog, el, field, input, plural, RenderScope, status, textarea } from "./ui.ts";
 import { SETTINGS_KINDS } from "./writer/types.ts";
 import type { CoreCardKind } from "./writer/types.ts";
 import type { ButtonHandle } from "./ui.ts";
@@ -32,7 +32,10 @@ export function connectionText(url: string, result: Connection | Error): { text:
   return { tone: "success", text: `Connected. Profile ${result.profile}, ${plural(result.decks.length, "deck")}.` };
 }
 
-interface SettingsSnapshot { settings: Settings; destination: Destination | null; generationSettings?: { enabledKinds: CoreCardKind[]; cloze?: ClozeSetting } }
+interface SettingsSnapshot { settings: Settings; destination: Destination | null; generationSettings?: { enabledKinds: CoreCardKind[]; cloze?: ClozeSetting; writerNotes?: string } }
+/** #54: matches WRITER_NOTES_LIMIT in the backend. */
+export const WRITER_NOTES_LIMIT = 2000;
+export const WRITER_NOTES_EXAMPLE = "Make prefix facts such as femto- = 10^-15 cloze cards.\nOn units cards, name the unit system, e.g. \"In natural units with energy in eV\".";
 type ClozeSetting = "off" | "auto" | "prefer";
 /** FI-8: the three stops of the Cloze cards slider. A missing setting means auto. */
 export const CLOZE_STOPS: { value: ClozeSetting; label: string; help: string }[] = [
@@ -145,6 +148,29 @@ export function mountSettings(ctx: PluginFrontendContext, container: HTMLElement
     }, "Saving…").then(() => { if (alive()) syncCloze(); });
   };
 
+  // Writer notes (#54)
+  const notesPanel = el("section", undefined, "ab-panel");
+  const notes = textarea("", 5);
+  notes.maxLength = WRITER_NOTES_LIMIT;
+  notes.placeholder = WRITER_NOTES_EXAMPLE;
+  notes.setAttribute("aria-label", "Writer notes");
+  const notesCount = el("p", undefined, "ab-muted");
+  const notesActions = el("div", undefined, "ab-actions");
+  const notesStatus = status();
+  notesPanel.append(el("h3", "Writer notes", "ab-panel-title"),
+    el("p", "Your own preferences for how cards are written. The writer reads them with every request, after its built-in rules. They can't change the card format or turn off the card checks.", "ab-muted ab-panel-intro"),
+    notes, notesCount, notesActions, notesStatus);
+  const savedNotes = () => state?.generationSettings?.writerNotes ?? "";
+  const notesDirty = () => notes.value.trim() !== savedNotes();
+  let notesSave: ButtonHandle | undefined, notesClear: ButtonHandle | undefined;
+  function syncNotes(): void {
+    notesPanel.hidden = !state?.generationSettings;
+    notesCount.textContent = `${notes.value.length.toLocaleString("en-GB")} / ${WRITER_NOTES_LIMIT.toLocaleString("en-GB")} characters`;
+    notesSave?.update({ disabled: busy || !notesDirty() });
+    notesClear?.update({ disabled: busy || (!savedNotes() && !notes.value) });
+  }
+  notes.oninput = () => syncNotes();
+
   // Note type upkeep
   const noteType = el("section", undefined, "ab-panel ab-panel-quiet");
   const noteActions = el("div", undefined, "ab-actions");
@@ -157,7 +183,7 @@ export function mountSettings(ctx: PluginFrontendContext, container: HTMLElement
     el("p", "Use only if Anki Bridge reports a problem with the LearnHarness Basic or LearnHarness Cloze note type.", "ab-muted ab-panel-intro"),
     field("Note type", noteChoice), noteActions, noteStatus);
 
-  root.append(connection, destination, tags, kinds, cloze, noteType);
+  root.append(connection, destination, tags, kinds, cloze, notesPanel, noteType);
 
   let saveButton: ButtonHandle, testButton: ButtonHandle, pairButton: ButtonHandle, removeKey: ButtonHandle | undefined;
   let savedUrl = "";
@@ -167,6 +193,7 @@ export function mountSettings(ctx: PluginFrontendContext, container: HTMLElement
     testButton?.update({ disabled: busy });
     pairButton?.update({ disabled: busy });
     removeKey?.update({ disabled: busy });
+    syncNotes();
   }
   let keyCleared = false;
   function urlAdvice(): void {
@@ -251,6 +278,24 @@ export function mountSettings(ctx: PluginFrontendContext, container: HTMLElement
     return `Sending to profile ${profile}.`;
   }, "Checking Anki…") });
 
+  notesSave = button(ctx, notesActions, signal, { label: "Save notes", variant: "default", disabled: true, onClick: () => act(notesStatus, async () => {
+    // The save sends this text, so it can't change underneath it.
+    notes.readOnly = true;
+    try { await apply("generationSettings", { writerNotes: notes.value }); }
+    finally { notes.readOnly = false; }
+    notes.value = savedNotes();
+    return savedNotes() ? "Writer notes saved." : "Writer notes cleared.";
+  }, "Saving…") });
+  notesClear = button(ctx, notesActions, signal, { label: "Clear", disabled: true, onClick: () => act(notesStatus, async () => {
+    if (!savedNotes()) { notes.value = ""; return ""; }
+    const ok = await confirmDialog(ctx, signal, { title: "Clear writer notes?", confirm: "Clear notes", destructive: true,
+      body: "The writer goes back to its built-in rules only. Cards you already have don't change." });
+    if (!ok || !alive()) return "";
+    await apply("generationSettings", { writerNotes: "" });
+    notes.value = "";
+    return "Writer notes cleared.";
+  }) });
+
   const shown = () => state?.destination ?? undefined;
   button(ctx, noteActions, signal, { label: "Add missing fields", onClick: () => act(noteStatus, async () => {
     const target = shown(), noteType = noteChoice.value, name = chosenNoteType();
@@ -283,6 +328,8 @@ export function mountSettings(ctx: PluginFrontendContext, container: HTMLElement
 
   function render(next: SettingsSnapshot): void {
     const urlTouched = state !== undefined && endpoint(url.value) !== endpoint(state.settings.url);
+    // Leave unsaved note edits alone; a refresh only replaces text that matched the saved notes.
+    const notesTouched = state !== undefined && notesDirty();
     state = next;
     savedUrl = next.settings.url;
     if (!urlTouched) {
@@ -317,6 +364,7 @@ export function mountSettings(ctx: PluginFrontendContext, container: HTMLElement
       destinationText.append("No profile chosen. Open one in Anki, then choose it here.");
     }
     pairButton.update({ label: d ? "Switch to the open profile" : "Use the open profile" });
+    if (!notesTouched) notes.value = next.generationSettings?.writerNotes ?? "";
     syncKinds(); syncCloze(); urlAdvice(); syncButtons();
   }
   async function load(): Promise<void> {

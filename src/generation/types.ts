@@ -16,7 +16,14 @@ export interface GenerationSettings extends SettingsBase {
    *  missing value means the default, auto; in generation history it means off,
    *  because those runs predate cloze. New history entries store it explicitly. */
   cloze?: ClozeSetting;
+  /** #54: the learner's own card-style preferences, sent with every writer request
+   *  below the built-in rules. Absent or blank means none; stored trimmed. */
+  writerNotes?: string;
 }
+/** #54: Writer notes length limit, in UTF-16 code units like a textarea's maxlength. */
+export const WRITER_NOTES_LIMIT = 2000;
+/** Saved form of Writer notes: trimmed, with blank meaning none. */
+export const normaliseWriterNotes = (value: string): string | undefined => value.trim() || undefined;
 /** The active setting, with a missing value resolved to the default. */
 export const activeCloze = (settings: GenerationSettings): ClozeSetting => settings.cloze ?? 'auto';
 /** The setting a past generation ran with. Missing means off. */
@@ -97,7 +104,8 @@ function validBaseSettings(v: unknown): v is SettingsBase & Record<string, unkno
 }
 export function validGenerationSettings(v: unknown): v is GenerationSettings {
   return validBaseSettings(v) && distinctKinds(v.enabledKinds) && v.enabledKinds.every(isCoreKind) && !('constantValues' in v)
-    && (v.cloze === undefined || CLOZE_SETTINGS.includes(v.cloze as ClozeSetting));
+    && (v.cloze === undefined || CLOZE_SETTINGS.includes(v.cloze as ClozeSetting))
+    && (v.writerNotes === undefined || typeof v.writerNotes === 'string' && !!v.writerNotes && v.writerNotes === v.writerNotes.trim() && v.writerNotes.length <= WRITER_NOTES_LIMIT);
 }
 export function validV072GenerationSettings(v: unknown): v is V072GenerationSettings {
   return validBaseSettings(v) && distinctKinds(v.enabledKinds) && v.enabledKinds.every(k => isCoreKind(k) || k === 'compose') && typeof v.constantValues === 'boolean';

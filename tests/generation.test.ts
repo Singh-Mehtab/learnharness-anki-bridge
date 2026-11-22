@@ -932,3 +932,29 @@ test('Off uses the basic writer; auto and prefer use the cloze writer and save c
     assert.ok(existing.some(e => e.format === 'cloze' && e.front.includes('{{blank}}')));
   } finally { await close(); }
 }));
+
+test('#54: Writer notes save trimmed, clear when blank, stay within 2,000 characters and survive a restart', () => withHost(async (host, directory) => {
+  let c = host.context(directory), close = await activate(c.ctx);
+  try {
+    assert.equal((await c.call('generationStatus')).generationSettings.writerNotes, undefined);
+    let saved = await c.call('generationSettings', { writerNotes: '  Make prefix facts cloze cards.\n' });
+    assert.equal(saved.generationSettings.writerNotes, 'Make prefix facts cloze cards.');
+    assert.equal(JSON.parse(await readFile(statePath(directory), 'utf8')).generationSettings.writerNotes, 'Make prefix facts cloze cards.');
+    // Other settings changes keep the notes.
+    saved = await c.call('generationSettings', { cardsPerNode: 3 });
+    assert.equal(saved.generationSettings.writerNotes, 'Make prefix facts cloze cards.');
+    await assert.rejects(c.call('generationSettings', { writerNotes: 'x'.repeat(2001) }), /at most 2,000 characters/);
+    await assert.rejects(c.call('generationSettings', { writerNotes: 42 }), /must be text/);
+    // Surrounding space doesn't count against the limit.
+    saved = await c.call('generationSettings', { writerNotes: ` ${'x'.repeat(2000)} ` });
+    assert.equal(saved.generationSettings.writerNotes.length, 2000);
+    saved = await c.call('generationSettings', { writerNotes: 'Name the unit system on units cards.' });
+    await close();
+    c = host.context(directory); close = await activate(c.ctx);
+    assert.equal((await c.call('generationStatus')).generationSettings.writerNotes, 'Name the unit system on units cards.');
+    // Blank clears: the field is removed, so settings match a learner who never set notes.
+    saved = await c.call('generationSettings', { writerNotes: ' \n ' });
+    assert.equal('writerNotes' in saved.generationSettings, false);
+    assert.equal('writerNotes' in JSON.parse(await readFile(statePath(directory), 'utf8')).generationSettings, false);
+  } finally { await close(); }
+}));
