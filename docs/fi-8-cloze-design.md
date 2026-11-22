@@ -6,10 +6,11 @@ A cloze card shows a statement with one part hidden, `[ħ] = [...]`, and reveals
 
 Cloze is a card **format**, separate from the card **kind**. The kind says what a card tests (fact, equation, why, ...). The format says how it is shown: `basic` (front and back, as today) or `cloze`.
 
-## Assumptions awaiting the user's decision
+## Decisions and assumptions
 
-- Default mode is **Writer chooses** (`auto`). The alternative is Off.
-- Only `fact` and `equation` cards may be cloze. Steps (short ordered lists) is out of scope for the first version.
+- Decided by the user on 2026-11-22: the default mode is **Writer chooses** (`auto`).
+- Assumption, not yet confirmed: only `fact` and `equation` cards may be cloze. Steps (short ordered lists) is out of scope for the first version.
+- Bench card writer for tuning Part A: Sonnet at high effort (user's choice).
 
 ## Evidence this spec relies on
 
@@ -126,7 +127,7 @@ LearnHarness registers worker instructions and schema once (`workers.register`).
 ## State
 
 - `Card` gains `format?: "cloze"` (absent means basic). State schema goes from 8 to 9 so an older plugin version refuses the file instead of sending a cloze card through the basic note type. Migration from 8 adds nothing to cards.
-- `generationSettings.cloze` is absent in schema-8 files. In the active settings a missing value resolves to the default chosen by the user (pending; see the top of this spec). In generation history and saved task inputs, a missing value means Off, because those runs predate cloze. Neither case rewrites stored history.
+- `generationSettings.cloze` is absent in schema-8 files. In the active settings a missing value resolves to the default, Writer chooses (`auto`), so existing users get cloze cards after upgrading. The release notes must say so and point to the setting. In generation history and saved task inputs, a missing value means Off, because those runs predate cloze. Neither case rewrites stored history.
 - `packageRevision` includes `format`, so a package fingerprint changes if the format changes.
 - Edits keep the format. The manual "Write a card" dialog gets a format choice (basic or cloze). Manual cards and edits use the content checks (C2 to C8) and are not gated by the generation setting (C2a).
 
@@ -193,7 +194,7 @@ These are the targets for tuning Part A. Human scores and Sol scores stay in sep
 
 - Unit tests for C1 to C8, including the leak cases `\(E_0 = mc^2 = {{blank}}\)` / `mc^2` (leak) and `\(E_0 = {{blank}}\)` / `mc^2` (no leak), a blank inside a link URL (rejected), and manual cloze edits with the setting Off (allowed).
 - Escaping cases: `}}` inside and outside maths, `}}}`, an answer ending in `}` (`\gamma m \vec{v}`, `\mathrm{J\,s}`), an answer starting with `:`, `{{c1` in text, `::` in the answer, a blank inside maths, a blank inside bold (rejected), an inline-code back (allowed).
-- Settings: a schema-8 file with no `cloze` value reads as the chosen default in active settings and as Off in history, without rewriting history. Duplicate keys: a basic and a cloze card with identical fields are both kept.
+- Settings: a schema-8 file with no `cloze` value reads as `auto` in active settings and as Off in history, without rewriting history. Duplicate keys: a basic and a cloze card with identical fields are both kept.
 - A test that renders generated Text fields with Anki's Python library on a scratch collection and checks one card, one `c1` blank, and the exact expected question and answer HTML, not just the card count (a broken cloze can still make one card). It runs where Anki's library is available and is skipped otherwise.
 - Generation: a successful schema-8 task without `definitionId` recovers and applies after the upgrade; preflight uses the cloze definition's size when the setting is on; a cloze card from the basic worker is rejected.
 - A test that `manual-card-writer` instructions and schema are unchanged.
