@@ -3,7 +3,7 @@
 // Usage: node bench/cloze-fields.ts <run.json | --samples> > fields.json
 
 import { readFileSync } from "node:fs";
-import { clozeProblems, clozeTextField, questionPreview, assemble, type DraftCard } from "../src/writer/index.ts";
+import { clozeProblems, clozeTextField, questionPreview, assemble, laidOutFront, type DraftCard } from "../src/writer/index.ts";
 import { renderMarkdown as render } from "../src/anki/render.ts";
 
 const SAMPLES: Array<[string, string]> = [
@@ -33,7 +33,7 @@ const out = cards.map((c) => {
     problems,
     text: problems.length ? null : clozeTextField(c.front, c.back),
     expectQ: render(questionPreview(c.front)),
-    expectA: render(assemble(c.front, c.back)),
+    expectA: render(assemble(laidOutFront(c.front), c.back)),
   };
 });
 console.log(JSON.stringify(out, null, 2));

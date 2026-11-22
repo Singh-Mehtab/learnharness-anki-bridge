@@ -5,6 +5,8 @@ import {
   clozeLeaks,
   clozeProblems,
   clozeTextField,
+  laidOutFront,
+  questionPreview,
   duplicateIndexes,
   findProblems,
   resultSchemaFor,
@@ -61,9 +63,9 @@ test("leak checks by blank position", () => {
 
 test("Anki text field escaping", () => {
   const field = (front: string, back: string) => clozeTextField(front, back);
-  assert.equal(field("\\(\\vec{p} = {{blank}}\\)", "\\gamma m \\vec{v}"), "<p>\\(\\vec{p} = {{c1::\\gamma m \\vec{v}<!-- -->}}\\)</p>");
-  assert.equal(field("\\(\\frac{1}{\\sqrt{2}} = {{blank}}\\)", "x"), "<p>\\(\\frac{1}{\\sqrt{2}<!-- -->} = {{c1::x}}\\)</p>");
-  assert.equal(field("\\(x^{{{blank}}}\\)", "2"), "<p>\\(x^{<!-- -->{{c1::2}}<!-- -->}\\)</p>");
+  assert.equal(field("\\(\\vec{p} = {{blank}}\\)", "\\gamma m \\vec{v}"), "<p>\\[\\vec{p} = {{c1::\\gamma m \\vec{v}<!-- -->}}\\]</p>");
+  assert.equal(field("\\(\\frac{1}{\\sqrt{2}} = {{blank}}\\)", "x"), "<p>\\[\\frac{1}{\\sqrt{2}<!-- -->} = {{c1::x}}\\]</p>");
+  assert.equal(field("\\(x^{{{blank}}}\\)", "2"), "<p>\\[x^{<!-- -->{{c1::2}}<!-- -->}\\]</p>");
   assert.equal(field("a::b {{blank}}", "c::d"), "<p>a::b {{c1::c:<!-- -->:d}}</p>");
   assert.equal(field("say {{c1::x}} then {{blank}}", "y"), "<p>say {<!-- -->{c1::x}<!-- -->} then {{c1::y}}</p>");
   assert.equal(field("triple }}} {{blank}}", "y"), "<p>triple }<!-- -->}<!-- -->} {{c1::y}}</p>");
@@ -98,4 +100,16 @@ test("Off instructions and schema are unchanged by the cloze option", () => {
   assert.ok(!writerInstructions({ kinds: ["fact", "equation"] }).includes("{{blank}}"));
   assert.ok(writerInstructions({ kinds: ["fact", "equation"], cloze: true }).includes("{{blank}}"));
   assert.ok(JSON.stringify(resultSchemaFor(["fact"], { cloze: true })).includes('"format"'));
+});
+
+test("maths blanks are laid out as a lead-in and a display equation", () => {
+  assert.equal(laidOutFront("In natural units with energy in eV, \\([t] = {{blank}}\\)"), "In natural units with energy in eV,\n\n$$[t] = {{blank}}$$");
+  assert.equal(laidOutFront("\\([c] = {{blank}}\\)"), "$$[c] = {{blank}}$$");
+  assert.equal(laidOutFront("Two states are orthogonal when \\(\\langle b|a\\rangle = {{blank}}\\)."), "Two states are orthogonal when\n\n$$\\langle b|a\\rangle = {{blank}}$$");
+  assert.equal(laidOutFront("For \\(\\alpha>0\\), \\(\\int_0^\\infty e^{-\\alpha x}\\,dx = {{blank}}\\) always."), "For \\(\\alpha>0\\),\n\n$$\\int_0^\\infty e^{-\\alpha x}\\,dx = {{blank}}$$\n\nalways.");
+  const prose = "The prefix femto- (f) means {{blank}}.";
+  assert.equal(laidOutFront(prose), prose);
+  assert.equal(clozeTextField("In natural units with energy in eV, \\([t] = {{blank}}\\)", "\\mathrm{eV^{-1}}"),
+    "<p>In natural units with energy in eV,</p>\n<p>\\[[t] = {{c1::\\mathrm{eV^{-1}<!-- -->}<!-- -->}}\\]</p>");
+  assert.equal(questionPreview("Rest energy: \\(E_0 = {{blank}}\\)"), "Rest energy:\n\n$$E_0 = [...]$$");
 });

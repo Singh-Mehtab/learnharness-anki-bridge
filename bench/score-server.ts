@@ -9,6 +9,13 @@ import { existsSync, readFileSync, readdirSync, writeFileSync, renameSync } from
 import { join, resolve } from "node:path";
 import { execFile } from "node:child_process";
 import type { BenchRun, Scores } from "./types.ts";
+import { laidOutFront } from "../src/writer/index.ts";
+
+/** FI-8: give cloze cards the same maths-blank layout the Anki field uses. */
+const withLayout = (run: BenchRun): BenchRun => ({
+  ...run,
+  cards: run.cards.map((c) => (c.format === "cloze" ? { ...c, laidOut: laidOutFront(c.front) } : c)),
+});
 
 const PORT = Number(process.env.PORT ?? 8790);
 const root = resolve("bench-output");
@@ -50,7 +57,7 @@ const server = createServer((req, res) => {
     res.writeHead(200, { "content-type": "text/javascript" }).end(mathjax);
   } else if (req.method === "GET" && url.pathname === "/data") {
     const data = [...runs.entries()].map(([id, dir]) => ({
-      run: JSON.parse(readFileSync(join(dir, "run.json"), "utf8")) as BenchRun,
+      run: withLayout(JSON.parse(readFileSync(join(dir, "run.json"), "utf8")) as BenchRun),
       scores: loadScores(dir),
       id,
     }));

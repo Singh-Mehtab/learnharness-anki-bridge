@@ -126,7 +126,7 @@ function blankInMath(front) {
 }
 function clozeBack(card) {
   const hidden = blankInMath(card.front) ? `\\(${card.back}\\)` : card.back;
-  return `${md(card.front.replace(BLANK, card.back))}<div class="label">Hidden part</div>${md(hidden)}`;
+  return `${md((card.laidOut ?? card.front).replace(BLANK, card.back))}<div class="label">Hidden part</div>${md(hidden)}`;
 }
 function words(n, target) { return n > target ? `<span class="long">${n}</span>` : `${n}`; }
 
@@ -171,7 +171,7 @@ function cardEl(entry, card, sourceText) {
       ${card.format === "cloze" ? '<span class="kind cloze">cloze</span>' : ""}
       ${card.unvalidated ? '<span class="warn">failed validation after retries</span>' : ""}
       <span class="words">front ${words(card.frontWords, 30)} · back ${words(card.backWords, 15)} words</span>
-      <div class="front">${md(card.format === "cloze" ? card.front.replace(BLANK, "[...]") : card.front)}</div>
+      <div class="front">${md(card.format === "cloze" ? (card.laidOut ?? card.front).replace(BLANK, "[...]") : card.front)}</div>
       <div class="label">${card.format === "cloze" ? "Revealed (hidden part below)" : "Back"}</div>
       <div class="back ${document.getElementById("hide").checked ? "hidden" : ""}">${card.format === "cloze" ? clozeBack(card) : md(card.back)}</div>
       ${card.extra ? `<div class="label">Extra</div><div class="extra">${md(card.extra)}</div>` : ""}

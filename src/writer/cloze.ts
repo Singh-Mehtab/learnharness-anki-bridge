@@ -46,8 +46,23 @@ export const isCloze = (card: Pick<DraftCard, "format">): boolean => card.format
 export const assemble = (front: string, back: string, marked = false): string =>
   front.replace(BLANK, marked ? `${OPEN}${back}${CLOSE}` : back);
 
+/** Layout of maths blanks (spec: "Layout of maths blanks"). When the blank is
+ *  inside maths, that segment becomes display maths on its own line, the text
+ *  before it a lead-in paragraph and the text after it a following paragraph,
+ *  dropped if it is only punctuation. Other fronts are returned unchanged. The
+ *  writer and the validator see the one-line front; rendering uses this. */
+export function laidOutFront(front: string): string {
+  const place = blankPlace(front);
+  if (place?.where !== "math") return front;
+  const { start, end, open, close } = place.segment;
+  const tex = front.slice(start + open.length, end - close.length).trim();
+  const before = front.slice(0, start).trim();
+  const after = front.slice(end).trim();
+  return [before, `$$${tex}$$`, /^[\s.,;:!?]*$/.test(after) ? "" : after].filter(Boolean).join("\n\n");
+}
+
 /** Front as shown on the question side, for previews. */
-export const questionPreview = (front: string): string => front.replace(BLANK, "[...]");
+export const questionPreview = (front: string): string => laidOutFront(front).replace(BLANK, "[...]");
 
 function balancedBraces(tex: string): boolean {
   let depth = 0;
@@ -139,8 +154,8 @@ export function clozeProblems(card: DraftCard): string[] {
   let marked: string;
   let plain: string;
   try {
-    marked = renderMarkdown(assemble(front, back, true), { checkMath: true });
-    plain = renderMarkdown(assemble(front, back), { checkMath: true });
+    marked = renderMarkdown(assemble(laidOutFront(front), back, true), { checkMath: true });
+    plain = renderMarkdown(assemble(laidOutFront(front), back), { checkMath: true });
   } catch (error) {
     problems.push(error instanceof Error ? error.message : String(error));
     return problems;
@@ -160,7 +175,7 @@ const COMMENT = "<!-- -->";
 /** The Anki Text field: rendered HTML with exactly one {{c1::...}}. Assumes
  *  clozeProblems(card) is empty. */
 export function clozeTextField(front: string, back: string): string {
-  let html = renderMarkdown(assemble(front, back, true));
+  let html = renderMarkdown(assemble(laidOutFront(front), back, true));
   const escapeAll = (pattern: RegExp, fix: (s: string) => string, text: string) => {
     let prev: string;
     do { prev = text; text = text.replace(pattern, fix); } while (text !== prev);

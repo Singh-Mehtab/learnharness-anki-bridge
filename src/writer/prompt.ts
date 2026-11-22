@@ -92,7 +92,6 @@ Examples:
 - Cloze: "In SI units, \\([\\hbar] = {{blank}}\\)" / "\\mathrm{J\\,s}". The brackets already ask for units.
 - Cloze: "In natural units with energy in eV, \\([t] = {{blank}}\\)" / "\\mathrm{eV^{-1}}".
 - Cloze: "Rest energy of a particle of mass \\(m\\): \\(E_0 = {{blank}}\\)" / "mc^2".
-- Cloze in prefer, basic in auto: "The prefix femto- (f) means {{blank}}." / "\\(10^{-15}\\)". The question is just as clear.
 - Never: "{{blank}} \\(= \\mathrm{J\\,s}\\)" (other answers fit); "In natural units with energy in eV, \\([t] = [E]^{-1} = {{blank}}\\)" (\\([E]^{-1}\\) gives it away); "\\(1\\ \\mathrm{fm} = 10^{{blank}}\\ \\mathrm{m}\\)" (an exponent fragment: hide \\(10^{-15}\\)); "\\(F = m{{blank}}\\)" (a lone symbol); "\\(\\lambda = {{blank}}\\)" (a wavelength of what?).
 - Basic: "State the de Broglie relation." / "\\(\\lambda = h/p\\)" (the name is the cue); "What is \\(\\hbar c\\) in MeV fm?" (a constant's value); "When does \\(T \\approx p^2/2m\\) hold?" (a condition).
 
