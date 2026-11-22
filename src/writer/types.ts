@@ -107,6 +107,9 @@ export interface WriterTarget {
   allowedKinds?: CardKind[];
 }
 
+/** #54: Writer notes length limit, in UTF-16 code units like a textarea's maxlength. */
+export const WRITER_NOTES_LIMIT = 2000;
+
 export interface WriterInput {
   version: 1;
   maxCardsPerNode: number;
@@ -116,6 +119,10 @@ export interface WriterInput {
   constantValues?: boolean;
   /** FI-8: absent when cloze is off. */
   cloze?: ClozeMode;
+  /** #54: the learner's Writer notes, frozen at preflight so split requests
+   *  share them and history keeps the exact text. Absent when there are none.
+   *  The prompt sends them apart from the quoted input. */
+  writerNotes?: string;
   targets: WriterTarget[];
 }
 

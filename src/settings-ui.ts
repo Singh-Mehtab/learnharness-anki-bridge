@@ -3,7 +3,7 @@
 import type { PluginFrontendContext } from "../sdk/index.d.ts";
 import { exampleCard, KIND_HELP, KIND_NAMES } from "./kinds-ui.ts";
 import { button, confirmDialog, el, field, input, plural, RenderScope, status, textarea } from "./ui.ts";
-import { SETTINGS_KINDS } from "./writer/types.ts";
+import { SETTINGS_KINDS, WRITER_NOTES_LIMIT } from "./writer/types.ts";
 import type { CoreCardKind } from "./writer/types.ts";
 import type { ButtonHandle } from "./ui.ts";
 
@@ -33,8 +33,6 @@ export function connectionText(url: string, result: Connection | Error): { text:
 }
 
 interface SettingsSnapshot { settings: Settings; destination: Destination | null; generationSettings?: { enabledKinds: CoreCardKind[]; cloze?: ClozeSetting; writerNotes?: string } }
-/** #54: matches WRITER_NOTES_LIMIT in the backend. */
-export const WRITER_NOTES_LIMIT = 2000;
 export const WRITER_NOTES_EXAMPLE = "Make prefix facts such as femto- = 10^-15 cloze cards.\nOn units cards, name the unit system, e.g. \"In natural units with energy in eV\".";
 type ClozeSetting = "off" | "auto" | "prefer";
 /** FI-8: the three stops of the Cloze cards slider. A missing setting means auto. */

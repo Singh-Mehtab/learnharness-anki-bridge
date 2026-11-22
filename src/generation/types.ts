@@ -1,4 +1,4 @@
-import { CORE_KINDS, DEFAULT_KINDS, FLAGGED_CARD_CAP, isCoreKind, isStoredKind } from '../writer/types.ts';
+import { CORE_KINDS, DEFAULT_KINDS, FLAGGED_CARD_CAP, isCoreKind, isStoredKind, WRITER_NOTES_LIMIT } from '../writer/types.ts';
 import type { CoreCardKind, StoredCardKind } from '../writer/types.ts';
 import type { WriterInput, WriterResult } from '../writer/types.ts';
 
@@ -20,8 +20,7 @@ export interface GenerationSettings extends SettingsBase {
    *  below the built-in rules. Absent or blank means none; stored trimmed. */
   writerNotes?: string;
 }
-/** #54: Writer notes length limit, in UTF-16 code units like a textarea's maxlength. */
-export const WRITER_NOTES_LIMIT = 2000;
+export { WRITER_NOTES_LIMIT };
 /** Saved form of Writer notes: trimmed, with blank meaning none. */
 export const normaliseWriterNotes = (value: string): string | undefined => value.trim() || undefined;
 /** The active setting, with a missing value resolved to the default. */
@@ -105,8 +104,11 @@ function validBaseSettings(v: unknown): v is SettingsBase & Record<string, unkno
 export function validGenerationSettings(v: unknown): v is GenerationSettings {
   return validBaseSettings(v) && distinctKinds(v.enabledKinds) && v.enabledKinds.every(isCoreKind) && !('constantValues' in v)
     && (v.cloze === undefined || CLOZE_SETTINGS.includes(v.cloze as ClozeSetting))
-    && (v.writerNotes === undefined || typeof v.writerNotes === 'string' && !!v.writerNotes && v.writerNotes === v.writerNotes.trim() && v.writerNotes.length <= WRITER_NOTES_LIMIT);
+    && validWriterNotes(v.writerNotes);
 }
+/** Absent, or trimmed non-blank text within the limit. */
+const validWriterNotes = (v: unknown): boolean =>
+  v === undefined || typeof v === 'string' && !!v && v === v.trim() && v.length <= WRITER_NOTES_LIMIT;
 export function validV072GenerationSettings(v: unknown): v is V072GenerationSettings {
   return validBaseSettings(v) && distinctKinds(v.enabledKinds) && v.enabledKinds.every(k => isCoreKind(k) || k === 'compose') && typeof v.constantValues === 'boolean';
 }
@@ -119,7 +121,7 @@ export function validSource(v: unknown): v is SourceSnapshot {
 const storedKinds = (v: unknown): v is StoredCardKind[] => distinctKinds(v) && v.every(isStoredKind);
 const nodeRef = (v: unknown): boolean => object(v) && ['id', 'name', 'statement'].every(k => typeof v[k] === 'string');
 function validWriterInput(v: unknown): v is WriterInput {
-  if (!object(v) || v.version !== 1 || !Number.isInteger(v.maxCardsPerNode) || Number(v.maxCardsPerNode) < 1 || Number(v.maxCardsPerNode) > 4 || !storedKinds(v.enabledKinds) || (v.constantValues !== undefined && typeof v.constantValues !== 'boolean') || (v.cloze !== undefined && v.cloze !== 'auto' && v.cloze !== 'prefer') || !Array.isArray(v.targets) || !v.targets.length) return false;
+  if (!object(v) || v.version !== 1 || !Number.isInteger(v.maxCardsPerNode) || Number(v.maxCardsPerNode) < 1 || Number(v.maxCardsPerNode) > 4 || !storedKinds(v.enabledKinds) || (v.constantValues !== undefined && typeof v.constantValues !== 'boolean') || (v.cloze !== undefined && v.cloze !== 'auto' && v.cloze !== 'prefer') || !validWriterNotes(v.writerNotes) || !Array.isArray(v.targets) || !v.targets.length) return false;
   const ids = new Set<string>();
   return v.targets.every(t => {
     if (!object(t) || typeof t.nodeId !== 'string' || !t.nodeId || ids.has(t.nodeId) || !['name', 'statement'].every(k => typeof t[k] === 'string') || !strings(t.aliases) || !Array.isArray(t.existingCards) || t.existingCards.some(c => !object(c) || !isStoredKind(c.kind) || typeof c.front !== 'string' || typeof c.back !== 'string' || (c.format !== undefined && c.format !== 'basic' && c.format !== 'cloze')) || !Array.isArray(t.neighbours) || !t.neighbours.every(nodeRef) || !Array.isArray(t.concludedBy) || t.concludedBy.some(c => !object(c) || typeof c.chainId !== 'string' || !Array.isArray(c.premises) || !c.premises.every(nodeRef)) || !Array.isArray(t.feeds) || t.feeds.some(c => !object(c) || typeof c.chainId !== 'string' || !nodeRef(c.conclusion) || !Array.isArray(c.withPremises) || !c.withPremises.every(nodeRef)) || !storedKinds(t.allowedKinds) || t.allowedKinds.some(k => !(v.enabledKinds as string[]).includes(k)) || (t.source !== undefined && typeof t.source !== 'string')) return false;

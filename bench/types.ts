@@ -15,6 +15,8 @@ export interface BenchSet {
   /** FI-8: targets where cloze is clearly better than a question. An auto run
    *  passes only if at least one cloze card is accepted on them. */
   clozePositive?: string[];
+  /** #54: Writer notes sent with every request (--writer-notes). Absent when none. */
+  writerNotes?: string;
 }
 
 export interface Attempt {

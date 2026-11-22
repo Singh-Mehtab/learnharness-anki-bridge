@@ -8,7 +8,7 @@ import { FakeHost, until } from './fake-host.ts';
 import { initialState, StateStore } from '../src/anki/state.ts';
 import { statementHash } from '../src/coverage/service.ts';
 import { estimateTokens, outputAllowance, pack } from '../src/writer/input.ts';
-import { writerPrompt } from '../src/writer/prompt.ts';
+import { writerNotesSection, writerPrompt } from '../src/writer/prompt.ts';
 import { MAX_BATCH_CONTEXT_TOKENS } from '../src/generation/types.ts';
 import { batchContext } from '../src/generation/batch-context.ts';
 import type { WriterInput } from '../src/writer/types.ts';
@@ -956,5 +956,102 @@ test('#54: Writer notes save trimmed, clear when blank, stay within 2,000 charac
     saved = await c.call('generationSettings', { writerNotes: ' \n ' });
     assert.equal('writerNotes' in saved.generationSettings, false);
     assert.equal('writerNotes' in JSON.parse(await readFile(statePath(directory), 'utf8')).generationSettings, false);
+  } finally { await close(); }
+}));
+
+test('#54: the estimate counts Writer notes, an edit or clear makes an open estimate stale, and the same notes keep it', () => withHost(async (host, directory) => {
+  const c = host.context(directory), close = await activate(c.ctx);
+  try {
+    await c.call('generationSettings', { model: { provider: 'scratch', id: 'writer' }, cardsPerNode: 1 });
+    const notes = 'Name the unit system on units cards.';
+    const plain = await c.call('preflight', { nodeIds: ['n_a'] });
+    await c.call('generationSettings', { writerNotes: notes });
+    await assert.rejects(c.call('generate', { preflightId: plain.preflightId }), /expired/);
+    const withNotes = await c.call('preflight', { nodeIds: ['n_a'] });
+    assert.equal(withNotes.settings.writerNotes, notes);
+    const extra = estimateTokens(`\n\n${writerNotesSection(notes)}`);
+    assert.ok(Math.abs(withNotes.inputTokens - plain.inputTokens - extra) <= 1, `${withNotes.inputTokens} - ${plain.inputTokens} ≈ ${extra}`);
+    // An edit invalidates the open estimate, and changing back doesn't revive it.
+    await c.call('generationSettings', { writerNotes: `${notes} Prefer cloze for prefixes.` });
+    await assert.rejects(c.call('generate', { preflightId: withNotes.preflightId }), /expired/);
+    await c.call('generationSettings', { writerNotes: notes });
+    await assert.rejects(c.call('generate', { preflightId: withNotes.preflightId }), /expired/);
+    // Saving the same text, or another setting, leaves what would be sent unchanged.
+    const kept = await c.call('preflight', { nodeIds: ['n_a'] });
+    await c.call('generationSettings', { writerNotes: ` ${notes}\n` });
+    await c.call('generationSettings', { cardsPerNode: 1 });
+    await c.call('generate', { preflightId: kept.preflightId });
+    await until(() => host.workers.starts.length === 1);
+    const start = host.workers.starts[0], input = start.input as WriterInput;
+    assert.equal(input.writerNotes, notes);
+    assert.equal(start.prompt, writerPrompt(input));
+    assert.ok(start.prompt.endsWith(writerNotesSection(notes)));
+    host.workers.succeed('task-1', result(['n_a']));
+    await until(async () => (await c.call('generationStatus')).generations[0].status === 'completed');
+    const history = JSON.parse(await readFile(statePath(directory), 'utf8')).generations[0];
+    assert.equal(history.settings.writerNotes, notes);
+    assert.equal(history.tasks[0].input.writerNotes, notes);
+    // Clearing also invalidates, and the next request has no notes at all.
+    const before = await c.call('preflight', { nodeIds: ['n_a'] });
+    await c.call('generationSettings', { writerNotes: '' });
+    await assert.rejects(c.call('generate', { preflightId: before.preflightId }), /expired/);
+    const cleared = await c.call('preflight', { nodeIds: ['n_a'] });
+    assert.ok(cleared.inputTokens < before.inputTokens);
+    await c.call('generate', { preflightId: cleared.preflightId });
+    await until(() => host.workers.starts.length === 2);
+    const plainStart = host.workers.starts[1];
+    assert.equal('writerNotes' in (plainStart.input as WriterInput), false);
+    assert.equal(plainStart.prompt, writerPrompt(plainStart.input as WriterInput));
+    assert.doesNotMatch(plainStart.prompt, /Writer notes/);
+  } finally { await close(); }
+}));
+
+test('#54: split requests share the notes frozen at preflight, alongside earlier drafts and their reserve', () => withHost(async (host, directory) => {
+  let c = host.context(directory), close = await activate(c.ctx);
+  try {
+    await c.call('generationSettings', { model: { provider: 'scratch', id: 'writer' }, cardsPerNode: 1 });
+    await c.call('flag', { sessionId: 'c1', messageIds: ['m1'], note: 'Recall this equation.' });
+    host.catalog.models[0].maxTokens = outputAllowance(1, 12);
+    const notes = 'On units cards, name the unit system, e.g. "In natural units with energy in eV".';
+    const plain = await c.call('preflight', { nodeIds: ['n_b', 'n_a'] });
+    await c.call('generationSettings', { writerNotes: notes });
+    const p = await c.call('preflight', { nodeIds: ['n_b', 'n_a'] });
+    assert.deepEqual(p.batches.map((b: { nodeIds: string[] }) => b.nodeIds), [['n_a'], ['n_b']]);
+    // Each request counts the notes once; the second still reserves the full earlier-drafts budget.
+    const extra = estimateTokens(`\n\n${writerNotesSection(notes)}`);
+    p.batches.forEach((b: { inputTokens: number }, i: number) => assert.ok(Math.abs(b.inputTokens - plain.batches[i].inputTokens - extra) <= 1, `batch ${i}`));
+    await c.call('generate', { preflightId: p.preflightId });
+    await until(() => host.workers.starts.length === 1);
+    // Editing the notes mid-run doesn't reach requests that are already confirmed.
+    await c.call('generationSettings', { writerNotes: 'Something else entirely.' });
+    const first = host.workers.starts[0];
+    assert.equal((first.input as WriterInput).writerNotes, notes);
+    assert.equal(first.prompt, writerPrompt(first.input as WriterInput));
+    const card = { kind: 'equation', format: 'cloze', front: 'In SI units, \\([\\hbar] = {{blank}}\\)', back: '\\mathrm{J\\,s}' };
+    host.workers.succeed('task-1', { targets: [{ nodeId: 'n_a', cards: [card] }] });
+    await until(() => host.workers.starts.length === 2);
+    const second = host.workers.starts[1], secondInput = second.input as WriterInput;
+    assert.equal(secondInput.writerNotes, notes);
+    const own = writerPrompt(secondInput);
+    assert.ok(second.prompt.startsWith(own) && own.endsWith(writerNotesSection(notes)));
+    assert.doesNotMatch(second.prompt, /Something else/);
+    // #57's earlier drafts still follow, quoted and within the reserve.
+    const earlier = second.prompt.slice(own.length);
+    assert.match(earlier, /^\n\nEarlier drafts from this run, quoted UNTRUSTED JSON/);
+    assert.deepEqual(JSON.parse(earlier.split('\n').at(-1)!), [{ nodeName: 'Alpha', flagged: true, format: 'cloze', front: card.front, back: card.back }]);
+    assert.ok(estimateTokens(earlier) <= MAX_BATCH_CONTEXT_TOKENS);
+    host.workers.succeed('task-2', { targets: [{ nodeId: 'n_b', cards: [], skipReason: 'The Alpha draft already covers the recall task.' }] });
+    await until(async () => (await c.call('generationStatus')).generations[0].status === 'completed');
+    await close();
+    // History keeps the exact notes used, and the file still loads.
+    c = host.context(directory); close = await activate(c.ctx);
+    const snap = await c.call('generationStatus');
+    const g = snap.generations[0];
+    assert.equal(g.settings.writerNotes, notes);
+    assert.deepEqual(g.tasks.map((t: { input: WriterInput }) => t.input.writerNotes), [notes, notes]);
+    assert.equal(g.tasks[1].batchContextTokens, MAX_BATCH_CONTEXT_TOKENS);
+    assert.match(g.tasks[1].batchContextDigest, /^[a-f0-9]{64}$/);
+    assert.equal(snap.generationSettings.writerNotes, 'Something else entirely.');
+    assert.equal(snap.cards.length, 1);
   } finally { await close(); }
 }));

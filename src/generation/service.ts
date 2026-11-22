@@ -270,7 +270,9 @@ export class GenerationService {
     const definition = definitions()[mode === 'off' ? WORKER : CLOZE_WORKER];
     const overhead = estimateTokens(definition.instructions + JSON.stringify(definition.resultSchema));
     for (const original of packed.batches) {
-      let current: WriterInput = { ...original.input, ...(mode === 'off' ? {} : { cloze: mode }), targets: [] };
+      // #54: every request in the run carries the same notes, frozen here, so the
+      // estimate, the binding and each split request all count the same text.
+      let current: WriterInput = { ...original.input, ...(mode === 'off' ? {} : { cloze: mode }), ...(settings.writerNotes ? { writerNotes: settings.writerNotes } : {}), targets: [] };
       const batch = (input: WriterInput): Batch => ({ input, inputTokens: estimateTokens(writerPrompt(input)) + overhead, outputAllowance: targetsAllowance(input.targets, settings.cardsPerNode) });
       const fits = (b: Batch) => (model.contextWindow === null || b.inputTokens + b.outputAllowance <= model.contextWindow) && (model.maxTokens === null || b.outputAllowance <= model.maxTokens);
       for (const target of original.input.targets) {
@@ -336,9 +338,11 @@ export class GenerationService {
           if (!settings.enabledKinds.length) throw new Error('Keep at least one card type on.');
         }
         if (!validGenerationSettings(settings)) throw new Error('Choose 1–4 cards per node, one or more available card types, a cloze setting, and a model, or null for the cheap model.');
-        const before = activeCloze(this.store.snapshot().generationSettings);
+        // A changed cloze mode or Writer notes (#54) changes what would be sent, so an open estimate can't be used.
+        const sent = (s: GenerationSettings) => JSON.stringify([activeCloze(s), s.writerNotes ?? '']);
+        const before = sent(this.store.snapshot().generationSettings);
         try { await this.delivery.save(s => { s.generationSettings = settings; }); }
-        finally { if (activeCloze(this.store.snapshot().generationSettings) !== before) this.preflights.clear(); }
+        finally { if (sent(this.store.snapshot().generationSettings) !== before) this.preflights.clear(); }
       } else if (name === 'preflight') {
         keys(value, ['nodeIds', 'backfillNodeIds']);
         const ids = nodeIds(value.nodeIds); return this.preflight(ids, backfillIds(value.backfillNodeIds, ids));
