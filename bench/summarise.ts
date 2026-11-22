@@ -11,10 +11,10 @@ import { LENGTH_TARGETS } from "../src/writer/index.ts";
 import type { BenchCard, BenchRun, CardScore, Scores } from "./types.ts";
 
 const { values, positionals } = parseArgs({ options: { scores: { type: "string", default: "human" } }, allowPositionals: true });
-if (values.scores !== "human" && values.scores !== "sol") throw new Error("--scores must be human or sol");
-const automated = values.scores === "sol";
-const scoreFile = automated ? "scores.sol.json" : "scores.json";
-const summaryFile = automated ? "summary.sol.md" : "summary.md";
+if (!["human", "sol", "claude"].includes(values.scores!)) throw new Error("--scores must be human, sol or claude");
+const automated = values.scores !== "human";
+const scoreFile = automated ? `scores.${values.scores}.json` : "scores.json";
+const summaryFile = automated ? `summary.${values.scores}.md` : "summary.md";
 const root = resolve("bench-output");
 const dirs = positionals.length
   ? positionals.map((d) => resolve(d))
@@ -81,7 +81,7 @@ for (const dir of dirs) {
     `# Bench summary: ${run.runId}`,
     "",
     `Mode ${run.mode}, model ${run.model}, writer ${run.writerVersion ?? "0.1.0"}, cap ${run.maxCardsPerNode} per node, kinds ${run.enabledKinds.join(", ")}.`,
-    automated ? "Evaluation: automated Sol scores, not human acceptance. Human scores are separate and unchanged." : "Evaluation: human scores only. Automated scores are not substituted for unassessed cards.",
+    automated ? `Evaluation: automated ${values.scores === "sol" ? "Sol" : "Claude"} scores, not human acceptance. Human scores are separate and unchanged.` : "Evaluation: human scores only. Automated scores are not substituted for unassessed cards.",
     `${cards.length} cards for ${new Set(cards.map((c) => `${c.set}:${c.nodeId}`)).size} nodes; ${run.skips.length} skipped (${modelSkips.length} by the model${modelSkips.length ? `, evaluator agreed with ${skipAgree}` : ""}).`,
     `${run.batches.length} requests, ${calls} calls, ${firstTry} passed validation first time; ${cards.filter((c) => c.unvalidated).length} cards never passed.`,
     "",
