@@ -9,7 +9,9 @@ Cloze is a card **format**, separate from the card **kind**. The kind says what 
 ## Decisions and assumptions
 
 - Decided by the user on 2026-11-22: the default mode is **Writer chooses** (`auto`).
-- Assumption, not yet confirmed: only `fact` and `equation` cards may be cloze. Steps (short ordered lists) is out of scope for the first version.
+- Decided by the user on 2026-11-22: only `fact` and `equation` cards may be cloze. Steps (short ordered lists) is out of scope for the first version.
+- Decided by the user on 2026-11-22, after scoring part of the `auto` bench run: keep the writer's rules general. Don't add rules for narrow cases such as unit-system wording or whether prefix facts are cloze; those are personal taste, and the learner fixes them by editing. This makes switching a card between basic and cloze in the editor a requirement (see Open question below).
+- Open question, raised by the user on 2026-11-22: how easily can a learner switch a card between basic and cloze in the editor? The current spec has no switch (see Modes). To design before implementation.
 - Bench card writer for tuning Part A: Sonnet at high effort (user's choice).
 
 ## Evidence this spec relies on
@@ -34,7 +36,7 @@ The mode is a generation setting with three values.
 | `auto` | The writer uses cloze for a fact or equation card when every eligibility rule holds **and** the cloze reads more clearly than a question: the notation already says what is asked, so the question would only repeat it. When unsure, basic. |
 | `prefer` | The writer uses cloze for a fact or equation card whenever every eligibility rule holds. |
 
-The learner can still edit or reject any draft. There is no automatic convert button in the first version (a good conversion needs a rewrite, which means another model call).
+The learner can still edit or reject any draft. An automatic, model-written conversion is out of scope for the first version (it needs another model call). A manual basic/cloze switch in the editor is an open question (see Decisions): one option keeps the text, prefills "Hidden part" from the old back (basic to cloze) or the front from the text with `[...]` (cloze to basic), and leaves the rewording to the learner. A card already in Anki would change note type, which restarts its review history, so the switch may be limited to drafts or need a warning.
 
 ## Eligibility rules
 
@@ -67,7 +69,7 @@ Synthetic. The Front and Back columns are the exact `front` and `back` strings t
 | 2 | fact | `{{blank}} \(= \mathrm{J\,s}\)` | `\([\hbar]\)` | Reject | Rule 4: \([h]\) and angular momentum also fit. |
 | 3 | fact | `In natural units with energy in eV, \([t] = [E]^{-1} = {{blank}}\)` | `\mathrm{eV^{-1}}` | Reject | Rule 5: \([E]^{-1}\) with energy in eV gives it away. |
 | 4 | fact | `In natural units with energy in eV, \([t] = {{blank}}\)` | `\mathrm{eV^{-1}}` | Cloze | Convention and base unit named, so one answer. |
-| 5 | fact | `The prefix femto- (f) means {{blank}}.` | `\(10^{-15}\)` | Cloze in `prefer`; basic in `auto` | Blank outside maths, so the back carries its own complete maths. One answer. The question form is equally short. |
+| 5 | fact | `The prefix femto- (f) means {{blank}}.` | `\(10^{-15}\)` | Cloze in `prefer`; writer's judgement in `auto` | Blank outside maths, so the back carries its own complete maths. One answer. The user marked the basic version "should be cloze" on 2026-11-22 but asked for no special rule (see Decisions). |
 | 6 | fact | `\(1\ \mathrm{fm} = 10^{{blank}}\ \mathrm{m}\)` | `-15` | Reject | Rule 3: a fragment of an expression. Hide `10^{-15}` instead. |
 | 7 | equation | `Rest energy of a particle of mass \(m\): \(E_0 = {{blank}}\)` | `mc^2` | Cloze | \(E_0\) and the setting are the natural cue. |
 | 8 | equation | `State the de Broglie relation.` | `\(\lambda = h/p\)` | Basic | Rule 6: the name is the cue and the whole equation is the answer. |
