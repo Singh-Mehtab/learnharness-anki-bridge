@@ -876,8 +876,11 @@ test('Off uses the basic writer; auto and prefer use the cloze writer and save c
     assert.equal(basic.instructions, writerInstructions({ checkBatchDuplicates: true }));
     assert.equal(cloze.instructions, writerInstructions({ cloze: true, checkBatchDuplicates: true }));
     assert.match(basic.instructions, /across targets/);
-    assert.match(basic.instructions, /interchangeable cue and recall direction/);
-    assert.doesNotMatch(basic.instructions, /One card per fact|one card for each fact/);
+    for (const { instructions } of [basic, cloze]) {
+      assert.match(instructions, /interchangeable cue and recall direction/);
+      assert.doesNotMatch(instructions, /One card per fact|one card for each fact|repeat a fact in the other format/);
+    }
+    assert.match(cloze.instructions, /repeat the same recall task in the other format/);
     assert.match(cloze.instructions, /prefer the clearer card that directly satisfies the flag/);
     assert.deepEqual(basic.resultSchema, resultSchemaFor());
     assert.ok(cloze.instructions.includes('{{blank}}') && !basic.instructions.includes('{{blank}}'));

@@ -167,7 +167,10 @@ export function mountDrafting(ctx: PluginFrontendContext, ideasHost: HTMLElement
     fact("Model", `${p.modelName ?? p.model.id}${p.model.thinkingLevel ? `, ${p.model.thinkingLevel} thinking` : ""}${p.followsCheapSlot ? " (cheap model)" : ""}`);
     fact("Model calls", `${p.batches.length}, up to ${p.batches.length * 3} with fixes`);
     fact("Cost", p.estimatedCost === null ? "No estimate" : `About $${p.estimatedCost.toFixed(4)}, first attempt`);
-    fact("Sent to the model", "Ideas, linked ideas, excerpts from source session messages, flag notes, and existing cards for these ideas");
+    const modelInput = "Ideas, linked ideas, excerpts from source session messages, flag notes, and existing cards for these ideas";
+    fact("Sent to the model", p.batches.length > 1
+      ? `${modelInput}. Later requests may also get a limited set of earlier drafts from this run, including local edits.`
+      : modelInput);
     body.append(facts);
     if (p.skipped.length) {
       const skipped = el("ul", undefined, "ab-skipped");

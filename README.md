@@ -139,7 +139,7 @@ From then on, the plugin checks the profile before every send and review check, 
 
 | | What | When |
 | --- | --- | --- |
-| To your model | The chosen ideas, nearby linked ideas, an excerpt of the reply each idea came from when there is one, your flag notes, and up to six recent cards Anki Bridge made for each idea | When you press **Start writing** |
+| To your model | The chosen ideas, nearby linked ideas, an excerpt of the reply each idea came from when there is one, your flag notes, and up to six recent cards Anki Bridge made for each idea. Later requests may also get a limited set of earlier drafts from the same run, including edits made in Anki Bridge. | When you press **Start writing** and while the run is in progress |
 | Written to Anki | Approved cards as new notes in the note type `LearnHarness Basic`, with the fields Front, Back, Extra, Source, LH_ID and LH_Node. A send also creates the deck and the note type if they are missing. | When you press **Send to Anki** |
 | Changed in Anki on request | The `LearnHarness Basic` note type's missing fields, styling and templates | Only when you confirm a repair or reset in settings |
 | Read from Anki | The open profile, deck names and tags, the note type, and the notes Anki Bridge sent, to check they still exist | Profile, decks and tags when **Make cards** is first shown. The rest when you send, when you run a check from the **More** menu, and when LearnHarness starts with an unconfirmed send. |

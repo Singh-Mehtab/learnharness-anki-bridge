@@ -57,7 +57,7 @@ const kindText: Record<CardKind, string> = {
   "spot-the-mistake": `- spot-the-mistake: a plausible wrong claim or step that a learner might make about this idea. The front says plainly that it contains a mistake and asks what is wrong. The back states the correction.`,
 };
 
-const clozeRules = `## Cloze cards
+const clozeRules = (checkBatchDuplicates: boolean) => `## Cloze cards
 
 The request's cloze mode is auto or prefer. A fact or equation card may then be a cloze card instead of a question: a one-line statement with one part hidden. Set "format": "cloze", put {{blank}} in the front where the hidden part goes, and put the hidden part, and nothing else, in the back. Every other card is a basic question card; leave format out for those.
 
@@ -95,7 +95,7 @@ Examples:
 - Never: "{{blank}} \\(= \\mathrm{J\\,s}\\)" (other answers fit); "In natural units with energy in eV, \\([t] = [E]^{-1} = {{blank}}\\)" (\\([E]^{-1}\\) gives it away); "\\(1\\ \\mathrm{fm} = 10^{{blank}}\\ \\mathrm{m}\\)" (an exponent fragment: hide \\(10^{-15}\\)); "\\(F = m{{blank}}\\)" (a lone symbol); "\\(\\lambda = {{blank}}\\)" (a wavelength of what?).
 - Basic: "State the de Broglie relation." / "\\(\\lambda = h/p\\)" (the name is the cue); "What is \\(\\hbar c\\) in MeV fm?" (a constant's value); "When does \\(T \\approx p^2/2m\\) hold?" (a condition).
 
-Existing cards list their format. Don't repeat a fact in the other format.`;
+Existing cards list their format. Don't repeat ${checkBatchDuplicates ? 'the same recall task' : 'a fact'} in the other format.`;
 
 
 export const LENGTH_TARGETS = { front: 30, back: 15 } as const;
@@ -165,7 +165,7 @@ export function writerInstructions(options: InstructionOptions = {}): string {
     selectionRules,
     cardRules(!!options.checkBatchDuplicates),
     `## Kinds\n\nEach target lists its allowedKinds: the enabled kinds its chains and neighbours support. Write only those kinds for it, and only where they make a good card. Tag each card with its kind. When fact or equation is allowed, cover the facts worth memorising with those first; use the other kinds only for what facts cannot cover, with room left under the cap.\n\n${kinds.map((k) => kindText[k]).join("\n")}`,
-    ...(options.cloze ? [clozeRules] : []),
+    ...(options.cloze ? [clozeRules(!!options.checkBatchDuplicates)] : []),
     lengthRules,
     countRules(!!options.checkBatchDuplicates),
     flagRules(!!options.checkBatchDuplicates),
