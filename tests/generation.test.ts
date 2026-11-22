@@ -10,6 +10,7 @@ import { statementHash } from '../src/coverage/service.ts';
 import { estimateTokens, outputAllowance, pack } from '../src/writer/input.ts';
 import { writerPrompt } from '../src/writer/prompt.ts';
 import { MAX_BATCH_CONTEXT_TOKENS } from '../src/generation/types.ts';
+import { batchContext } from '../src/generation/batch-context.ts';
 import type { WriterInput } from '../src/writer/types.ts';
 import { DeliveryService } from '../src/anki/delivery.ts';
 import { GenerationService } from '../src/generation/service.ts';
@@ -200,10 +201,53 @@ test('split runs prioritise flagged targets and pass only this run’s earlier d
     await until(async () => (await c.call('generationStatus')).generations[1].status === 'completed');
     const disk = JSON.parse(await readFile(statePath(directory), 'utf8'));
     assert.equal(disk.cards.filter((c: { generationId: string }) => c.generationId === spacious.preflightId).length, 1);
-    assert.equal(disk.generations[1].tasks[1].batchContextTokens, MAX_BATCH_CONTEXT_TOKENS);
-    assert.match(disk.generations[1].tasks[1].result.targets[0].skipReason, /Alpha draft/);
+    const generation = disk.generations[1], task = generation.tasks[1];
+    assert.equal(task.batchContextTokens, MAX_BATCH_CONTEXT_TOKENS);
+    assert.match(task.result.targets[0].skipReason, /Alpha draft/);
+    const draft = disk.cards.find((c: { generationId: string }) => c.generationId === generation.id);
+    assert.match(batchContext(generation, task, [{ ...draft, status: 'approved' }]), /Alpha/);
+    assert.equal(batchContext(generation, task, [{ ...draft, status: 'sent', presence: 'deleted' }]), '');
   } finally { await close(); }
 }));
+
+for (const mode of ['edit during writing', 'drop before restart'] as const) {
+  test(`changed earlier draft makes the dependent request retryable: ${mode}`, () => withHost(async (host, directory) => {
+    let c = host.context(directory), close = await activate(c.ctx);
+    try {
+      await c.call('generationSettings', { model: { provider: 'scratch', id: 'writer' }, cardsPerNode: 1 });
+      host.catalog.models[0].maxTokens = outputAllowance(1, 1);
+      const p = await c.call('preflight', { nodeIds: ['n_a', 'n_b'] });
+      await c.call('generate', { preflightId: p.preflightId });
+      await until(() => host.workers.starts.length === 1);
+      host.workers.succeed('task-1', result(['n_a']));
+      await until(() => host.workers.starts.length === 2);
+      assert.match(host.workers.starts[1].prompt, /Earlier drafts from this run/);
+      const draft = (await c.call('generationStatus')).cards[0];
+      if (mode === 'edit during writing') {
+        await c.call('edit', { id: draft.id, front: 'What was measured during the second experiment?', back: 'Temperature.' });
+      } else {
+        await c.call('drop', { ids: [draft.id] });
+        await close();
+        // Recreate a crash after acceptance but before the task ID save.
+        const saved = JSON.parse(await readFile(statePath(directory), 'utf8'));
+        const task = saved.generations[0].tasks[1];
+        delete task.taskId; task.status = 'pending';
+        await writeFile(statePath(directory), JSON.stringify(saved));
+      }
+      host.workers.succeed('task-2', { targets: [{ nodeId: 'n_b', cards: [], skipReason: 'The Alpha draft already covers this.' }] });
+      if (mode === 'drop before restart') { c = host.context(directory); close = await activate(c.ctx); }
+      await until(async () => (await c.call('generationStatus')).generations[0].status !== 'running');
+      const snap = await c.call('generationStatus');
+      const [first, second] = snap.generations[0].tasks;
+      assert.equal(first.status, 'applied');
+      assert.equal(second.status, 'failed');
+      assert.match(second.error, /earlier draft .*changed/i);
+      assert.equal(snap.cards.length, 1);
+      assert.deepEqual((await c.call('retryGeneration', { id: p.preflightId })).nodeIds, ['n_b']);
+      assert.equal(host.workers.starts.length, 2, 'retry needs a newly confirmed estimate');
+    } finally { await close(); }
+  }));
+}
 
 test('preflight reserves only the context that fits and does not add requests for duplicate checking', () => withHost(async (host, directory) => {
   const c = host.context(directory), close = await activate(c.ctx);
@@ -832,6 +876,8 @@ test('Off uses the basic writer; auto and prefer use the cloze writer and save c
     assert.equal(basic.instructions, writerInstructions({ checkBatchDuplicates: true }));
     assert.equal(cloze.instructions, writerInstructions({ cloze: true, checkBatchDuplicates: true }));
     assert.match(basic.instructions, /across targets/);
+    assert.match(basic.instructions, /interchangeable cue and recall direction/);
+    assert.doesNotMatch(basic.instructions, /One card per fact|one card for each fact/);
     assert.match(cloze.instructions, /prefer the clearer card that directly satisfies the flag/);
     assert.deepEqual(basic.resultSchema, resultSchemaFor());
     assert.ok(cloze.instructions.includes('{{blank}}') && !basic.instructions.includes('{{blank}}'));

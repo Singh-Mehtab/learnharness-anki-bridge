@@ -19,7 +19,7 @@ export function batchContext(generation: Generation, task: GenerationTask, cards
   for (const flagged of [true, false]) {
     for (let i = cards.length - 1; i >= 0; i--) {
       const c = cards[i];
-      if (c.generationId !== generation.id || !c.requestId || c.status === 'dropped') continue;
+      if (c.generationId !== generation.id || !c.requestId || !(c.status === 'draft' || c.status === 'approved')) continue;
       const flagIds = prior.get(c.requestId);
       if (!flagIds || flagIds.has(c.nodeId) !== flagged) continue;
       const row = JSON.stringify({ nodeName: c.nodeName, flagged, format: c.format ?? 'basic', front: c.front, back: c.back });

@@ -54,6 +54,8 @@ export interface GenerationTask {
   outputAllowance: number;
   /** Preflight's input reserve for earlier drafts from this run. */
   batchContextTokens?: number;
+  /** Digest of the earlier drafts actually included in the prompt. */
+  batchContextDigest?: string;
   result?: WriterResult;
   /** The host finished this request; retry must apply its saved result, not start another worker. */
   resultPending?: true;
@@ -139,6 +141,7 @@ export function validateGenerations(settings: unknown, generations: unknown): vo
     for (const t of g.tasks) {
       if (!object(t) || typeof t.requestId !== 'string' || !t.requestId || requests.has(t.requestId) || (t.taskId !== undefined && typeof t.taskId !== 'string') || (t.definitionId !== undefined && typeof t.definitionId !== 'string') || !['pending', 'running', 'applied', 'failed', 'cancelled', 'interrupted'].includes(String(t.status)) || !validWriterInput(t.input) || !Array.isArray(t.sources) || !t.sources.every(validSource) || !Number.isSafeInteger(t.outputAllowance) || Number(t.outputAllowance) <= 0 || (t.error !== undefined && typeof t.error !== 'string') || (t.status === 'applied' && !object(t.result))) throw new Error('Invalid generation task.');
       if (t.batchContextTokens !== undefined && (!Number.isSafeInteger(t.batchContextTokens) || Number(t.batchContextTokens) < 1 || Number(t.batchContextTokens) > MAX_BATCH_CONTEXT_TOKENS)) throw new Error('Invalid batch context budget.');
+      if (t.batchContextDigest !== undefined && (t.batchContextTokens === undefined || typeof t.batchContextDigest !== 'string' || !/^[a-f0-9]{64}$/.test(t.batchContextDigest))) throw new Error('Invalid batch context digest.');
       if (t.resultPending !== undefined && (t.resultPending !== true || t.status !== 'interrupted')) throw new Error('Invalid pending generation result.');
       if (t.duplicatesOmitted !== undefined && (t.status !== 'applied' || !Number.isSafeInteger(t.duplicatesOmitted) || Number(t.duplicatesOmitted) < 1)) throw new Error('Invalid duplicate omission count.');
       requests.add(t.requestId);

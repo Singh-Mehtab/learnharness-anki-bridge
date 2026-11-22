@@ -182,8 +182,15 @@ export class GenerationService {
       JSON.stringify([c.kind, c.format ?? 'basic', c.front, c.back, c.extra ?? '']);
     // Cards, omissions and the unfiltered worker result share one commit.
     await this.delivery.save(s => {
-      const stored = s.generations.find(g => g.id === id)!.tasks.find(t => t.requestId === requestId)!;
+      const generation = s.generations.find(g => g.id === id)!;
+      const stored = generation.tasks.find(t => t.requestId === requestId)!;
       if (stored.status === 'applied') return;
+      // A changed draft may have suppressed a card even if the target still got other cards.
+      if (stored.batchContextDigest && stored.batchContextDigest !== digest(batchContext(generation, stored, s.cards))) {
+        stored.taskId = worker.id; stored.status = 'failed'; delete stored.resultPending;
+        stored.error = 'An earlier draft used to check for repeats changed while writing. Retry requires a new estimate.';
+        return;
+      }
       const matching = new Map<string, typeof s.cards>();
       for (const card of s.cards) {
         if (!card.requestId || card.requestId === requestId || currentHashes.get(card.nodeId) !== card.statementHash
@@ -434,10 +441,13 @@ export class GenerationService {
         if (generation.status !== 'running') return;
         const t = generation.tasks.find(t => t.status === 'pending');
         if (!t) { await this.finish(id); return; }
+        const earlierDrafts = t.batchContextTokens ? batchContext(generation, t, this.store.snapshot().cards) : '';
+        // Record what the model saw before acceptance, so recovery after a crash can check it too.
+        if (earlierDrafts) await this.patch(id, t.requestId, { batchContextDigest: digest(earlierDrafts) });
+        this.active();
         let w: PluginTaskSnapshot;
         try {
-          const prompt = writerPrompt(t.input) + batchContext(generation, t, t.batchContextTokens ? this.store.snapshot().cards : []);
-          w = this.ctx.workers.start(taskDefinition(t), { requestId: t.requestId, input: t.input, prompt,
+          w = this.ctx.workers.start(taskDefinition(t), { requestId: t.requestId, input: t.input, prompt: writerPrompt(t.input) + earlierDrafts,
             model: generation.modelSpec ?? generation.settings.model!, purpose: 'user', maxTurns: 3, timeoutMs: 180_000,
             options: { maxTokens: t.outputAllowance } as Parameters<PluginBackendContext['workers']['start']>[1]['options'] });
         } catch (error) { await this.patch(id, t.requestId, { status: 'failed', error: errorText(error) }); return null; }
