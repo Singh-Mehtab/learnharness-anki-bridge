@@ -98,7 +98,7 @@ test('FI-8: a cloze card whose LH_ID finds a basic note reports a conflict and s
     const card = await f.draft(HBAR);
     await f.service.command('approve', { ids: [card] });
     // A basic package was imported in Anki without Mark as imported, then the card was switched.
-    const existing = { noteId: 9, fields: { Front: '<p>old</p>', Back: 'x', LH_ID: card }, deckName: 'Scratch', modelName: 'LearnHarness Basic', tags: [] };
+    const existing: Note = { noteId: 9, fields: { Front: '<p>old</p>', Back: 'x', LH_ID: card }, deckName: 'Scratch', modelName: 'LearnHarness Basic', tags: [] };
     f.notes.push(structuredClone(existing));
     const result = await f.send([card]);
     assert.deepEqual(result.delivery.failed, [card]);
