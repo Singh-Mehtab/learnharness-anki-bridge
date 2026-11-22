@@ -68,6 +68,7 @@ async function setup(options: { paired?: boolean; deferSessionButtons?: boolean;
     ui.mountButton = ((container, props, options) => (props.label === "Open session" ? buttons.mountButton : mountButton)(container, props, options)) satisfies typeof mountButton;
   }
   const ctx = {
+    manifest: { apiVersion: 1, id: "anki-bridge", name: "Anki Bridge", version: "9.8.7", minAppVersion: "0.6.1" },
     signal: new AbortController().signal,
     cleanup: () => {},
     registerView: (v: PluginView) => { views.set(v.id, v); return () => {}; },
