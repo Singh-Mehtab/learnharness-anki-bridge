@@ -35,6 +35,7 @@ async function setup(options: { handler?: (name: string, input: any) => unknown;
   const resyncs = new Set<() => void>();
   let coverageReads = 0;
   const ctx = {
+    manifest: { apiVersion: 1, id: "anki-bridge", name: "Anki Bridge", version: "9.8.7", minAppVersion: "0.6.1" },
     signal: activation.signal,
     cleanup: (fn: () => void) => cleanups.push(fn),
     registerView: (value: PluginView) => { if (value.id === "bridge") view = value; return () => {}; },
@@ -122,6 +123,7 @@ test("the plugin registers a sidebar action, the view and a settings page", asyn
     for (const step of ["Choose ideas", "Write cards", "Review and send"]) assert.match(f.container.textContent!, new RegExp(step));
     assert.equal(f.container.querySelector("fieldset"), null, "no raw fieldset forms");
     const s = await f.mountSettings();
+    assert.equal(s.host.querySelector(".ab-settings").firstElementChild.textContent, `Version ${f.ctx.manifest.version}`);
     for (const panel of ["Connect to Anki", "Anki profile", "Tags", "More card types", "Note type"]) assert.match(s.host.textContent!, new RegExp(panel));
     assert.doesNotMatch(f.container.textContent!, /Add missing fields|AnkiConnect address/, "upkeep lives only in settings");
     s.close();
