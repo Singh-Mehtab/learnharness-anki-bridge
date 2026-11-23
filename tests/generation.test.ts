@@ -1064,5 +1064,9 @@ test('#54: split requests share the notes frozen at preflight, alongside earlier
     assert.throws(() => validateState(tampered(h => { delete h.settings.writerNotes; })), /generation task/);
     // A run from before #54 has notes in neither place and still loads.
     validateState(tampered(h => { delete h.settings.writerNotes; for (const t of h.tasks) delete t.input.writerNotes; }));
+    // A build without #54 copies saved notes into the run settings but not into its requests; that run still loads.
+    validateState(tampered(h => { for (const t of h.tasks) delete t.input.writerNotes; }));
+    // Once any request carried notes, every request must carry the run's notes.
+    assert.throws(() => validateState(tampered(h => { delete h.tasks[1].input.writerNotes; })), /generation task/);
   } finally { await close(); }
 }));

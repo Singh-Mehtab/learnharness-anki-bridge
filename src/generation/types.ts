@@ -148,6 +148,11 @@ export function validateGenerations(settings: unknown, generations: unknown): vo
     if (g.modelSpec !== undefined && !(object(g.modelSpec) && typeof g.modelSpec.provider === 'string' && !!g.modelSpec.provider && typeof g.modelSpec.id === 'string' && !!g.modelSpec.id && (g.modelSpec.thinkingLevel === undefined || typeof g.modelSpec.thinkingLevel === 'string'))) throw new Error('Invalid generation model.');
     if (g.modelSpec === undefined && g.status === 'running' && !g.settings.model) throw new Error('Invalid generation model.');
     ids.add(g.id);
+    // #54: a build without Writer notes copies saved notes into the run settings but
+    // sends none, so its requests carry none. Once any request carries notes, all must
+    // carry the run's notes.
+    const runNotes = (g.settings as { writerNotes?: unknown }).writerNotes;
+    const carriedNotes = g.tasks.some(t => object(t) && object(t.input) && t.input.writerNotes !== undefined);
     for (const t of g.tasks) {
       if (!object(t) || typeof t.requestId !== 'string' || !t.requestId || requests.has(t.requestId) || (t.taskId !== undefined && typeof t.taskId !== 'string') || (t.definitionId !== undefined && typeof t.definitionId !== 'string') || !['pending', 'running', 'applied', 'failed', 'cancelled', 'interrupted'].includes(String(t.status)) || !validWriterInput(t.input) || !Array.isArray(t.sources) || !t.sources.every(validSource) || !Number.isSafeInteger(t.outputAllowance) || Number(t.outputAllowance) <= 0 || (t.error !== undefined && typeof t.error !== 'string') || (t.status === 'applied' && !object(t.result))) throw new Error('Invalid generation task.');
       if (t.batchContextTokens !== undefined && (!Number.isSafeInteger(t.batchContextTokens) || Number(t.batchContextTokens) < 1 || Number(t.batchContextTokens) > MAX_BATCH_CONTEXT_TOKENS)) throw new Error('Invalid batch context budget.');
@@ -156,8 +161,7 @@ export function validateGenerations(settings: unknown, generations: unknown): vo
       if (t.duplicatesOmitted !== undefined && (t.status !== 'applied' || !Number.isSafeInteger(t.duplicatesOmitted) || Number(t.duplicatesOmitted) < 1)) throw new Error('Invalid duplicate omission count.');
       requests.add(t.requestId);
       const input = t.input as WriterInput, sources = t.sources as SourceSnapshot[];
-      // #54: every request in a run carries the run's notes, or none on runs from before #54.
-      if (input.writerNotes !== (g.settings as { writerNotes?: unknown }).writerNotes) throw new Error('Invalid generation task.');
+      if (carriedNotes && input.writerNotes !== runNotes) throw new Error('Invalid generation task.');
       if (sources.length !== input.targets.length || new Set(sources.map(s => s.nodeId)).size !== sources.length || input.targets.some(n => !sources.some(s => s.nodeId === n.nodeId && s.statement === n.statement))) throw new Error('Generation sources do not match accepted input.');
       // Content rules are enforced once, at apply time. Persisted results get a shape check only,
       // so a later, stricter writer check never makes an old state file unreadable.
