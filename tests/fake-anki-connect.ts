@@ -13,7 +13,7 @@ export async function fakeAnkiConnect(options: { profile?: string | null; notes?
   const state = {
     profile: (options.profile === undefined ? 'Throwaway' : options.profile) as string | null,
     notes: options.notes ?? [],
-    models: new Map<string, { type: 0 | 1; css?: string }>([['LearnHarness Basic', { type: 0 }], ['LearnHarness Cloze', { type: 1 }]]),
+    models: new Map<string, { type: 0 | 1; css: string }>([['LearnHarness Basic', { type: 0, css: '' }], ['LearnHarness Cloze', { type: 1, css: '' }], ['Basic', { type: 0, css: '' }]]),
     /** Errors to return once per action, then cleared. */
     errorsOnce: new Map<string, string>(),
     /** Errors to return for every call to an action. */
@@ -46,10 +46,10 @@ export async function fakeAnkiConnect(options: { profile?: string | null; notes?
           fields: { Front: { value: 'front', order: 0 }, LH_ID: { value: n.lhId, order: 4 } }, cards: n.cards.map(c => c.cardId), mod: 1 };
       });
     } else if (action === 'findModelsByName') {
-      result = (params.modelNames as string[]).flatMap(name => {
-        const model = state.models.get(name);
-        return model ? [{ name, ...model }] : [];
-      });
+      const names = params.modelNames as string[];
+      const missing = names.find(name => !state.models.has(name));
+      if (missing !== undefined) error = `model was not found: ${missing}`;
+      else result = names.map(name => ({ name, ...state.models.get(name)! }));
     } else if (action === 'cardsInfo') {
       result = (params.cards as number[]).map(id => {
         const found = cardById(id);

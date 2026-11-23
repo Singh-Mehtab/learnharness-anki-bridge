@@ -38,8 +38,8 @@ async function fixture() {
         models.set(params.modelName, { fields: [...params.inOrderFields], css: params.css, isCloze: params.isCloze, templates: { [t.Name]: { Front: t.Front, Back: t.Back } } });
         result = { id: models.size, name: params.modelName };
       } else if (action === 'modelFieldNames') result = model(params.modelName).fields;
-      else if (action === 'findModelsByName') result = (params.modelNames as string[]).flatMap(name => {
-        const m = models.get(name); return m ? [{ name, type: m.isCloze ? 1 : 0 }] : [];
+      else if (action === 'findModelsByName') result = (params.modelNames as string[]).map(name => {
+        const m = model(name); return { name, type: m.isCloze ? 1 : 0, css: m.css };
       });
       else if (action === 'modelStyling') result = { css: model(params.modelName).css };
       else if (action === 'modelTemplates') result = model(params.modelName).templates;
@@ -239,7 +239,7 @@ test('round 3 S9 and S10: ambiguous renamed cloze is not adopted as basic; incon
     const card = await f.draft({ kind: 'fact', front: 'Question?', back: 'Answer' });
     await f.service.command('approve', { ids: [card] });
     f.notes.push({ noteId: 9, fields: { Front: 'x', Text: '{{c1::x}}', LH_ID: card }, deckName: 'Scratch', modelName: 'Renamed Cloze', tags: [] });
-    await assert.rejects(f.send([card]), /Cannot verify the existing Anki note type/);
+    await assert.rejects(f.send([card]), /model was not found/);
     f.models.set('Renamed Cloze', { isCloze: true, fields: ['Front', 'Text', 'LH_ID'], css: '', templates: {} });
     assert.deepEqual((await f.send([card])).delivery.failed, [card]);
     assert.match(f.store.snapshot().cards[0]!.lastError!, /already in Anki as a cloze note/);

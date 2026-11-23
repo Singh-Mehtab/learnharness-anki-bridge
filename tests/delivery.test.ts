@@ -41,7 +41,7 @@ async function fixture() {
       else if (action === 'deckNames') { if (deckGate) await deckGate; result = ['Default']; }
       else if (action === 'modelNames') result = fields.length ? ['LearnHarness Basic'] : [];
       else if (action === 'modelFieldNames') result = fields;
-      else if (action === 'findModelsByName') result = params.modelNames.map((name: string) => ({ name, type: 0 }));
+      else if (action === 'findModelsByName') result = params.modelNames.map((name: string) => ({ name, type: 0, css }));
       else if (action === 'modelStyling') result = { css };
       else if (action === 'modelTemplates') result = { 'Card 1': { Front: '{{Front}}', Back: '{{Back}}' } };
       else if (action === 'createModel') { fields = [...params.inOrderFields]; css = params.css; result = { id: 1, name: 'LearnHarness Basic' }; }

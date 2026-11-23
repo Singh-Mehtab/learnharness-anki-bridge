@@ -193,7 +193,6 @@ export class DeliveryService {
     const names = [...new Set(notes.map(n => model(n) as string))];
     const types = await readNativeModels(client, names);
     await this.destination(client);
-    if (names.some(name => !types.has(name))) throw new Error('Cannot verify the existing Anki note type. Check its note type in Anki and try again.');
     if (names.every(name => nativeTypeMatches(types.get(name), noteTypeFor(card)))) return false;
     const other = card.format === 'cloze' ? 'basic' : 'cloze';
     const message = `This card is already in Anki as a ${other} note. Delete that note in Anki or switch the card back to ${other}.`;

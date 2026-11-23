@@ -144,6 +144,21 @@ test('review checks accept a renamed owned Cloze model of the right native type'
   } finally { await t.cleanup(); }
 });
 
+test('malformed native model metadata fails a review instead of counting changed notes', async () => {
+  const t = await setup([{ node: 'node-a' }], ids => [
+    { noteId: 1000, lhId: ids[0]!, cards: [{ cardId: 2000, lapses: 4, reps: 8 }] },
+  ]);
+  try {
+    for (const malformed of [{}, [], [{ name: 'LearnHarness Basic', type: 'basic', css: '' }]]) {
+      t.anki.state.raw.set('findModelsByName', malformed);
+      await assert.rejects(t.call('checkReviews', { expectedDestination: t.destination }), /AnkiConnect returned unexpected note type metadata/);
+      assert.equal((await t.call('lastReviewCheck')).check, null);
+    }
+    assert.ok(!t.anki.actions().includes('cardsInfo'));
+    allowedOnly(t.anki.actions());
+  } finally { await t.cleanup(); }
+});
+
 test('deleted notes and missing cards are skipped, and review history is asked only for confirmed cards', async () => {
   const t = await setup([{ node: 'node-a' }, { node: 'node-b' }, { node: 'node-c' }, { node: 'node-d' }], ids => [
     { noteId: 1000, lhId: ids[0]!, cards: [{ cardId: 2000, lapses: 3, reps: 5 }] },

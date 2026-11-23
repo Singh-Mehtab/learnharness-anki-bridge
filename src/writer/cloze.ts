@@ -104,6 +104,8 @@ export function toBasic(fields: { front: string; back: string }): { front: strin
   return { front: (inMath ? groupBlank(fields.front) : fields.front).split(BLANK).join("[...]"), back: inMath ? `\\(${fields.back}\\)` : fields.back };
 }
 
+const endsInUnmatchedBackslash = (tex: string): boolean => ((tex.match(/\\+$/)?.[0].length ?? 0) % 2) === 1;
+
 function balancedBraces(tex: string): boolean {
   let depth = 0;
   for (let i = 0; i < tex.length; i++) {
@@ -221,7 +223,8 @@ export function clozeProblems(card: DraftCard): string[] {
   }
   if (place.where === "math") {
     const before = front.slice(place.segment.start + place.segment.open.length, front.indexOf(BLANK));
-    if ((before.match(/\\+$/)?.[0].length ?? 0) % 2) problems.push("a maths blank cannot start inside a TeX command; hide the whole command instead");
+    if (endsInUnmatchedBackslash(before)) problems.push("a maths blank cannot start inside a TeX command; hide the whole command instead");
+    if (endsInUnmatchedBackslash(back.trimEnd())) problems.push("the hidden TeX cannot end with an unmatched backslash");
     if (/\\(?:left|right|middle|[bB]igg?[lmr]?)\s*$/.test(before)) {
       problems.push("a maths blank cannot replace a TeX sizing delimiter; move the delimiter outside the blank");
     }

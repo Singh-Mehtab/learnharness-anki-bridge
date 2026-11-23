@@ -66,17 +66,20 @@ export function noteTypeInput(value: unknown): NoteTypeSpec {
   throw new Error("Unknown note type.");
 }
 
-interface NativeModel { type: 0 | 1; css?: string }
+interface NativeModel { type: 0 | 1; css: string }
 
 /** Anki's model names are editable. Only the native `type` distinguishes Cloze. */
 export async function readNativeModels(client: Pick<AnkiClient, 'call'>, names: string[]): Promise<Map<string, NativeModel>> {
   const types = new Map<string, NativeModel>();
   if (!names.length) return types;
   const models = await client.call<unknown>('findModelsByName', { modelNames: names });
-  if (!Array.isArray(models)) return types;
+  const malformed = 'AnkiConnect returned unexpected note type metadata.';
+  // AnkiConnect returns every requested model, or an API error if one is missing.
+  if (!Array.isArray(models) || models.length !== names.length) fail(malformed);
   for (const entry of models) {
-    if (!entry || !names.includes(entry.name) || (entry.type !== 0 && entry.type !== 1) || types.has(entry.name)) return new Map();
-    types.set(entry.name, { type: entry.type, ...(typeof entry.css === 'string' ? { css: entry.css } : {}) });
+    if (!entry || !names.includes(entry.name) || (entry.type !== 0 && entry.type !== 1) ||
+        typeof entry.css !== 'string' || types.has(entry.name)) fail(malformed);
+    types.set(entry.name, { type: entry.type, css: entry.css });
   }
   return types;
 }
