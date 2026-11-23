@@ -310,9 +310,13 @@ export function mountDrafting(ctx: PluginFrontendContext, ideasHost: HTMLElement
     modelField.append(el("span", "Model to write cards", "ab-label"), modelRow);
     try {
       widgets.push(ctx.ui.mountModelPicker(modelBox, { value: pin ? { provider: pin.provider, id: pin.id } : undefined, onChange: value => {
-        if (value.provider === pin?.provider && value.id === pin.id) return;
-        invalidate();
-        return run(async () => { await snapshot("generationSettings", { model: { provider: value.provider, id: value.id } }); });
+        if (value.provider !== pin?.provider || value.id !== pin.id) invalidate();
+        return run(async () => {
+          // Compare with the saved model when this runs: a Clear queued first must not swallow the pick.
+          const now = state?.generationSettings?.model;
+          if (value.provider === now?.provider && value.id === now.id) return;
+          await snapshot("generationSettings", { model: { provider: value.provider, id: value.id } });
+        });
       } }, { signal }));
     } catch {
       modelBox.textContent = settings.model ? "Model picker unavailable. Saved choice still applies." : "Model picker unavailable. Using the cheap model.";
@@ -400,9 +404,13 @@ export function mountDrafting(ctx: PluginFrontendContext, ideasHost: HTMLElement
     };
     const savedStop = () => CLOZE_STOPS.findIndex(stop => stop.value === activeCloze(state?.generationSettings ?? settings));
     showStop(savedStop());
-    syncCloze = () => showStop(savedStop());
-    range.oninput = () => showStop(Number(range.value));
+    // A drag in progress is newer than any saved value; don't move the thumb under it.
+    let dragging = false;
+    syncCloze = () => { if (!dragging) showStop(savedStop()); };
+    range.oninput = () => { dragging = true; showStop(Number(range.value)); };
+    range.onblur = () => { dragging = false; };
     range.onchange = () => {
+      dragging = false;
       const { value } = CLOZE_STOPS[Number(range.value)]!;
       invalidate();
       void run(async () => {

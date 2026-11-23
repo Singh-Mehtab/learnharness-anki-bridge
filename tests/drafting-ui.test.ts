@@ -159,6 +159,35 @@ test("the Cloze slider shows the saved stop after an earlier queued save redraws
   } finally { await f.close(); }
 });
 
+test("picking a model while Clear is still saving keeps the pick", async () => {
+  const f = setup({ model: true });
+  try {
+    await f.panel.setScope(undefined); await tick();
+    const release = f.holdSettings();
+    [...f.write.querySelectorAll("button")].find(button => button.textContent === "Clear")!.click();
+    void f.pickModel({ provider: "scratch", id: "writer" });
+    release(); await tick(); await tick();
+    assert.deepEqual(f.state.generationSettings.model, { provider: "scratch", id: "writer" });
+  } finally { await f.close(); }
+});
+
+test("a finished Cloze save does not move the slider during the next drag", async () => {
+  const f = setup();
+  try {
+    await f.panel.setScope(undefined); await tick();
+    const slider = () => f.write.querySelector(".ab-write-cloze input[type=range]") as unknown as HTMLInputElement;
+    const release = f.holdSettings();
+    slider().value = "2"; slider().dispatchEvent(f.event("change") as never);
+    slider().value = "0"; slider().dispatchEvent(f.event("input") as never);
+    release(); await tick(); await tick();
+    assert.equal(f.state.generationSettings.cloze, "prefer");
+    assert.equal(slider().value, "0", "the drag in progress keeps its stop");
+    slider().dispatchEvent(f.event("change") as never); await tick(); await tick();
+    assert.equal(f.state.generationSettings.cloze, "off");
+    assert.equal(slider().value, "0");
+  } finally { await f.close(); }
+});
+
 test("split runs disclose that earlier drafts and edits can be sent to the model", async () => {
   const f = setup({ estimate: { ...preflight, nodeIds: ["n_a", "n_b"], nodeCount: 2,
     batches: [...preflight.batches, { ...preflight.batches[0], nodeIds: ["n_b"] }] } });
