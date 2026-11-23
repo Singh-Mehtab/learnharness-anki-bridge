@@ -69,14 +69,31 @@ export function mountTopics(ctx: PluginFrontendContext, container: HTMLElement, 
   root.append(intro, feedback, summary, practiseHint, list, footer);
   container.append(root);
 
-  let disposed = false, busy = false, stale = false, refreshPending = false, loads = 0, starting = false;
-  // Ideas ticked for Practice. Kept in this view only and pruned to the result on screen.
-  const chosen = new Set<string>();
-  const selectable = (t: Topic) => t.inGraph !== false;
+  let disposed = false, busy = false, stale = false, refreshPending = false, loads = 0, starting = false, clearing = false;
+  // Keep picks and graph deletions local to this view.
+  const chosen = new Set<string>(), missing = new Set<string>();
+  const selectable = (t: Topic) => t.inGraph !== false && !missing.has(t.nodeId);
+  const locked = () => busy || starting || clearing;
   let snapshot: Snapshot | undefined, check: ReviewCheck | null = null;
   const alive = () => !disposed && !signal.aborted && !ctx.signal.aborted;
   const scope = new RenderScope(signal), barScope = new RenderScope(signal);
   const paired = () => snapshot?.destination && snapshot.destination.url === snapshot.settings.url ? snapshot.destination : null;
+
+  function setCheck(next: ReviewCheck | null): void {
+    if (next?.destination.url !== check?.destination.url || next?.destination.profile !== check?.destination.profile) {
+      chosen.clear();
+      missing.clear();
+    }
+    if (next?.checkedAt !== check?.checkedAt) missing.clear();
+    check = next;
+  }
+
+  function renderAll(): void {
+    const available = new Set(check?.topics.filter(selectable).map(t => t.nodeId));
+    for (const id of chosen) if (!available.has(id)) chosen.delete(id);
+    renderBar();
+    render();
+  }
 
   function renderBar(): void {
     const s = barScope.reset();
@@ -85,22 +102,20 @@ export function mountTopics(ctx: PluginFrontendContext, container: HTMLElement, 
     const criteria = "Checks only cards sent by Bridge. Lists cards with 3+ lapses, 2+ Again presses in 30 days, or a leech tag. Again counts in review and relearning, not initial learning. Results are kept in memory only.";
     const profile = destination ? (check ? "" : ` Paired profile: "${destination.profile}".`) : " Pair an Anki profile in Settings first.";
     intro.textContent = criteria + profile;
-    if (check) button(ctx, actions, s, { label: "Clear", variant: "ghost", disabled: busy, onClick: () => void clear() });
+    if (check) button(ctx, actions, s, { label: "Clear", variant: "ghost", disabled: locked(), onClick: () => void clear() });
     if (!destination) button(ctx, actions, s, { label: "Open settings", onClick: () => ctx.app.openSettings() });
     if (check?.topics.some(selectable)) {
       button(ctx, actions, s, { label: starting ? "Starting…" : chosen.size ? `Practise selected (${chosen.size})` : "Practise selected",
-        disabled: busy || starting || !chosen.size, onClick: () => void practise() });
+        disabled: locked() || !chosen.size, onClick: () => void practise() });
     }
-    button(ctx, actions, s, { label: busy ? "Checking…" : "Check Anki reviews", variant: "default", disabled: busy || !destination, onClick: () => void runCheck() });
+    button(ctx, actions, s, { label: busy ? "Checking…" : "Check Anki reviews", variant: "default", disabled: locked() || !destination, onClick: () => void runCheck() });
   }
 
   function render(): void {
     const s = scope.reset();
     list.replaceChildren(); footer.textContent = ""; summary.textContent = ""; practiseHint.textContent = "";
-    const available = new Set(check?.topics.filter(selectable).map(t => t.nodeId));
-    for (const id of chosen) if (!available.has(id)) chosen.delete(id);
     if (!check) { summary.textContent = "Not checked yet."; return; }
-    if (available.size) practiseHint.textContent = "Tick ideas, then press Practise selected to start a Practice session with them attached. Practice gets the ideas, not their review counts.";
+    if (check.topics.some(selectable)) practiseHint.textContent = "Tick ideas, then press Practise selected to start a Practice session with them attached. Practice gets the ideas, not their review counts.";
     const c = check.counts;
     summary.textContent = `${stale ? "Last checked" : "Checked"} at ${time(check.checkedAt)} in "${check.destination.profile}". ${plural(c.checked, "card")} read.${stale ? " May be out of date." : ""}`;
     if (!c.sent) list.append(el("p", "No cards sent to this profile yet.", "ab-empty"));
@@ -138,7 +153,7 @@ export function mountTopics(ctx: PluginFrontendContext, container: HTMLElement, 
     if (topic.totals.lapses) title.append(pill(plural(topic.totals.lapses, "lapse"), "warn"));
     if (topic.totals.recentAgain) title.append(pill(`${topic.totals.recentAgain} Again in 30 days`, "warn"));
     if (topic.totals.leech) title.append(pill("Leech", "bad"));
-    if (topic.inGraph === false) title.append(pill("Missing from this graph read", "neutral"));
+    if (!selectable(topic)) title.append(pill("Missing from this graph read", "neutral"));
     headRow.append(title);
     section.append(headRow);
     const body = el("div", undefined, "ab-topic-body");
@@ -191,12 +206,12 @@ export function mountTopics(ctx: PluginFrontendContext, container: HTMLElement, 
 
   async function runCheck(): Promise<void> {
     const destination = paired();
-    if (!alive() || busy || !destination) return;
+    if (!alive() || locked() || !destination) return;
     busy = true; loads++; renderBar(); feedback.show("Reading review results from Anki…");
     try {
       const answer = await ctx.call<Answer>("checkReviews", { expectedDestination: destination });
       if (!alive()) return;
-      check = answer.check; stale = false;
+      missing.clear(); setCheck(answer.check); stale = false;
       feedback.show(check?.topics.length ? `${plural(check.topics.length, "topic")} to revisit.` : "Check finished.", "success");
     } catch (error) {
       if (!alive()) return;
@@ -206,27 +221,32 @@ export function mountTopics(ctx: PluginFrontendContext, container: HTMLElement, 
       const sequence = ++loads;
       try {
         const [snap, last] = await Promise.all([ctx.call<Snapshot>("snapshot"), ctx.call<Answer>("lastReviewCheck", {})]);
-        if (alive() && sequence === loads) { snapshot = snap; check = last.check; stale = !!check; }
-      } catch { if (sequence === loads) check = null; }
+        if (alive() && sequence === loads) { snapshot = snap; setCheck(last.check); stale = !!check; }
+      } catch { if (sequence === loads) setCheck(null); }
     } finally {
       busy = false;
-      if (alive()) { renderBar(); render(); }
+      if (alive()) renderAll();
       // A Settings save or resync that arrived during the check is applied now.
       if (refreshPending && alive()) { refreshPending = false; void load(); }
     }
   }
 
   async function practise(): Promise<void> {
-    if (!alive() || busy || starting || !check || !chosen.size) return;
-    starting = true; renderBar(); render(); feedback.show("Starting a Practice session…");
+    if (!alive() || locked() || !check || !chosen.size) return;
+    starting = true; renderAll(); feedback.show("Starting a Practice session…");
     try {
       // Keep the order of the list on screen.
       const nodeIds = check.topics.map(t => t.nodeId).filter(id => chosen.has(id));
       const nodes = await ctx.call<PracticeNodes>("practiceNodes", { nodeIds });
       if (!alive()) return;
+      if (nodeIds.some(id => !chosen.has(id))) {
+        feedback.show("The review results changed. Select the ideas again.", "error");
+        return;
+      }
       if (nodes.missing.length) {
-        for (const id of nodes.missing) chosen.delete(id);
-        feedback.show(`Unticked ${plural(nodes.missing.length, "idea")} no longer in your graph. Press Practise selected again to continue.`, "error");
+        for (const id of nodes.missing) { chosen.delete(id); missing.add(id); }
+        const retry = chosen.size ? " Press Practise selected again to continue." : "";
+        feedback.show(`Unticked ${plural(nodes.missing.length, "idea")} no longer in your graph.${retry}`, "error");
         return;
       }
       const id = await startPracticeSession(nodes.propositions);
@@ -239,38 +259,45 @@ export function mountTopics(ctx: PluginFrontendContext, container: HTMLElement, 
       if (alive()) feedback.show(message(error), "error");
     } finally {
       starting = false;
-      if (alive()) { renderBar(); render(); }
+      if (alive()) renderAll();
     }
   }
 
   async function clear(): Promise<void> {
+    if (!alive() || locked() || !check) return;
     const ok = await confirmDialog(ctx, signal, { title: "Clear review results?", body: "This forgets the results of the last check. Nothing in Anki changes.", confirm: "Clear" });
-    if (!ok || !alive()) return;
+    if (!ok || !alive() || locked() || !check) return;
+    // Invalidate any in-flight reload that could bring the old result back.
+    clearing = true; loads++; renderBar();
     try {
       await ctx.call<Answer>("clearReviewCheck", {});
-      check = null; stale = false; feedback.show("Cleared.", "success");
-      // Start a fresh local reload so a reload begun before Clear cannot bring the old result back.
-      if (alive()) { void load(); return; }
-    } catch (error) { feedback.show(message(error), "error"); }
-    if (alive()) { renderBar(); render(); }
+      setCheck(null); stale = false; refreshPending = true; feedback.show("Cleared.", "success");
+    } catch (error) { if (alive()) feedback.show(message(error), "error"); }
+    finally {
+      clearing = false;
+      if (alive()) {
+        if (refreshPending) { refreshPending = false; void load(); }
+        else renderAll();
+      }
+    }
   }
 
   async function load(): Promise<void> {
     const sequence = ++loads;
-    renderBar(); render();
+    renderAll();
     try {
       // Both reads are local: the saved pairing and any result already in memory. No Anki request.
       const [snap, last] = await Promise.all([ctx.call<Snapshot>("snapshot"), ctx.call<Answer>("lastReviewCheck", {})]);
       // Overlapping reloads (resync and a Settings save) apply only the newest answer.
       if (!alive() || sequence !== loads) return;
-      snapshot = snap; check = last.check;
+      snapshot = snap; setCheck(last.check);
       if (last.running) feedback.show("A check is already running. Press Check Anki reviews again when it finishes.");
     } catch (error) { if (alive() && sequence === loads) feedback.show(message(error), "error"); }
-    if (alive() && sequence === loads) { renderBar(); render(); }
+    if (alive() && sequence === loads) renderAll();
   }
   void load();
   // Reload the local pairing after a host resync or a Settings save in another pane.
-  const refresh = () => { if (busy) refreshPending = true; else void load(); };
+  const refresh = () => { if (busy || clearing) refreshPending = true; else void load(); };
   const unsubscribe = ctx.onResync(refresh);
   peers.add(refresh);
   return () => { disposed = true; unsubscribe(); peers.delete(refresh); scope.dispose(); barScope.dispose(); root.remove(); };

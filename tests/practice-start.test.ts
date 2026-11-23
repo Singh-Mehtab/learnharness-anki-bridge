@@ -38,10 +38,10 @@ test('every failure explains the manual fallback and never returns a session', a
     ['missing route', { create: () => json({ error: 'nope' }, 404) }, /HTTP 404.*may not support/],
     ['bad id', { create: () => json({ id: '../x' }) }, /unexpected way/],
     ['not json', { create: () => new Response('<html>') }, /unexpected way/],
-    ['teach session', { read: () => json(saved({ kind: undefined })) }, /didn't attach/],
-    ['no marker', { read: () => json(saved({ messages: [] })) }, /didn't attach/],
-    ['wrong picks', { read: () => json(saved({ messages: [{ customType: 'graph-context', details: { propositions: [picks[0]] } }] })) }, /didn't attach/],
-    ['read fails', { read: () => json({}, 500) }, /didn't attach/],
+    ['teach session', { read: () => json(saved({ kind: undefined })) }, /couldn't verify/],
+    ['no marker', { read: () => json(saved({ messages: [] })) }, /couldn't verify/],
+    ['wrong picks', { read: () => json(saved({ messages: [{ customType: 'graph-context', details: { propositions: [picks[0]] } }] })) }, /couldn't verify/],
+    ['read fails', { read: () => json({}, 500) }, /couldn't verify/],
   ];
   for (const [name, responses, expected] of cases) {
     await assert.rejects(startPracticeSession(picks, host(responses).fetchLike), (error: Error) => {

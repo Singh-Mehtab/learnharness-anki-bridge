@@ -40,8 +40,9 @@ async function setup(options: { paired?: boolean; deferSessionButtons?: boolean;
   const state: State = { ...initialState(), settings: { url: anki.url, apiKey: "", lastDeck: "Scratch" }, destination: options.paired === false ? null : destination,
     cards: [card(0, "node-r", "Nuclear radius", "What is $R_0$?"), card(1, "node-f", "Femto prefix", "What does femto denote?", "chat-2"), card(2, "node-x", "Gone", "Deleted"), card(3, "node-y", "Changed", "Edited")] };
   await store.replace(state);
+  let onlyNodes = options.onlyNodes;
   const graph = () => ({
-    propositions: [{ id: "node-r", name: "Nuclear radius", statement: "Nuclear radius varies with mass number." }, { id: "node-f", name: "Femto prefix", statement: "Femto means 10^-15." }].filter(n => !options.onlyNodes || options.onlyNodes.includes(n.id)),
+    propositions: [{ id: "node-r", name: "Nuclear radius", statement: "Nuclear radius varies with mass number." }, { id: "node-f", name: "Femto prefix", statement: "Femto means 10^-15." }].filter(n => !onlyNodes || onlyNodes.includes(n.id)),
     nodeSessions: { "node-r": options.duplicateSessionTitles ? ["chat-1", "chat-3", "chat-4"] : ["chat-1"], "node-f": options.duplicateSessionTitles ? ["chat-5"] : [] },
     sessions: { "chat-1": "Nuclear lecture", "chat-2": options.duplicateSessionTitles ? "Nuclear lecture" : "Prefixes workshop", "chat-3": "Nuclear  lecture" },
   });
@@ -60,7 +61,7 @@ async function setup(options: { paired?: boolean; deferSessionButtons?: boolean;
   let mountSettings: PluginView["mount"];
   let tagTemplate = "";
   const resyncs: (() => void)[] = [];
-  let hold: Promise<void> | undefined;
+  let hold: Promise<void> | undefined, holdPracticeNodes: Promise<void> | undefined;
   const buttons = delayedButtons();
   const ui = fakeUi();
   const mountButton = ui.mountButton as PluginFrontendContext["ui"]["mountButton"];
@@ -79,7 +80,11 @@ async function setup(options: { paired?: boolean; deferSessionButtons?: boolean;
     call: async (name: string, input: any) => {
       calls.push(name);
       if (["checkReviews", "lastReviewCheck", "clearReviewCheck"].includes(name)) return service.command(name, input ?? {});
-      if (name === "practiceNodes") return service.practiceNodes(input ?? {});
+      if (name === "practiceNodes") {
+        const result = service.practiceNodes(input ?? {});
+        if (holdPracticeNodes) await holdPracticeNodes;
+        return result;
+      }
       if (name === "snapshot" || name === "settings") {
         if (name === "settings") tagTemplate = input.tagTemplate;
         const s = store.snapshot(); const wait = hold; if (wait) await wait;
@@ -129,7 +134,7 @@ async function setup(options: { paired?: boolean; deferSessionButtons?: boolean;
   const click = async (label: string | RegExp) => { const b = find(label); assert.ok(b, `button ${label}`); assert.equal(b.disabled, false, `button ${label} is enabled`); b.click(); await tick(); };
   const text = () => reviewRoot().textContent!;
   const cleanup = async () => { scope.abort(); service.close(); await store.close(); await anki.close(); await rm(directory, { recursive: true, force: true }); };
-  return { commitButtons: buttons.commitButtons, setHold: (p: Promise<void> | undefined) => { hold = p; }, ctx, scope, resyncs, destination, anki, store, service, views, actions, calls, shown, sessions, sessionReads, opened: () => opened, settingsOpened: () => settingsOpened, doc, container, window, tab, panel, openReviews, openSettings, mount, mountReviews, find, click, text, cleanup };
+  return { setOnlyNodes: (ids: string[]) => { onlyNodes = ids; }, holdPracticeNodes: (p: Promise<void>) => { holdPracticeNodes = p; }, commitButtons: buttons.commitButtons, setHold: (p: Promise<void> | undefined) => { hold = p; }, ctx, scope, resyncs, destination, anki, store, service, views, actions, calls, shown, sessions, sessionReads, opened: () => opened, settingsOpened: () => settingsOpened, doc, container, window, tab, panel, openReviews, openSettings, mount, mountReviews, find, click, text, cleanup };
 }
 
 test("Topics to revisit reads nothing until Check Anki reviews, then groups cards by node with evidence and links", async () => {
@@ -668,4 +673,71 @@ test("#52: ideas missing from the graph can't be ticked, and Clear drops the sel
     dialogConfirm.click(); await settle(() => /Not checked yet/.test(t.text()));
     assert.equal(t.find(/^Practise selected/), undefined);
   } finally { await t.cleanup(); }
+});
+
+function topicBox(t: Awaited<ReturnType<typeof setup>>, id: string): HTMLInputElement | null {
+  return t.container.querySelector(`[data-node-id="${id}"] input[type="checkbox"]`);
+}
+
+test("#52: rechecking updates the Practice count when a selected topic drops out", async () => {
+  const t = await setup();
+  try {
+    await t.mountReviews();
+    await t.click("Check Anki reviews");
+    await settle(() => !!topicBox(t, "node-r"));
+    topicBox(t, "node-r")!.click();
+    topicBox(t, "node-f")!.click(); await tick();
+    assert.ok(t.find("Practise selected (2)"));
+    t.anki.state.notes.splice(0, 1);
+    await t.click("Check Anki reviews");
+    await settle(() => !topicBox(t, "node-r"));
+    assert.ok(topicBox(t, "node-f")!.checked);
+    assert.ok(t.find("Practise selected (1)"));
+  } finally { await t.cleanup(); }
+});
+
+test("#52: topics deleted after the check stay untickable until a new check", async () => {
+  const t = await setup();
+  try {
+    await t.mountReviews();
+    await t.click("Check Anki reviews");
+    await settle(() => !!topicBox(t, "node-r"));
+    topicBox(t, "node-r")!.click();
+    topicBox(t, "node-f")!.click(); await tick();
+    t.setOnlyNodes(["node-f"]);
+    await t.click("Practise selected (2)");
+    assert.match(t.text(), /Unticked 1 idea.*Press Practise selected again/);
+    assert.ok(!topicBox(t, "node-r"));
+    for (const refresh of t.resyncs) refresh();
+    await tick();
+    assert.ok(!topicBox(t, "node-r"), "reloading the same results does not re-enable a deleted idea");
+    assert.ok(topicBox(t, "node-f")!.checked);
+    t.setOnlyNodes([]);
+    await t.click("Practise selected (1)");
+    assert.ok(!topicBox(t, "node-f"));
+    assert.match(t.text(), /Unticked 1 idea/);
+    assert.doesNotMatch(t.text(), /Press Practise selected again/);
+    assert.deepEqual(t.sessions, []);
+  } finally { await t.cleanup(); }
+});
+
+test("#52: Clear and a new check are disabled while the Practice picks are being resolved", async () => {
+  const t = await setup();
+  const original = globalThis.fetch;
+  let release!: () => void;
+  try {
+    await t.mountReviews();
+    await t.click("Check Anki reviews");
+    await settle(() => !!topicBox(t, "node-r"));
+    topicBox(t, "node-r")!.click(); await tick();
+    t.holdPracticeNodes(new Promise<void>(resolve => { release = resolve; }));
+    globalThis.fetch = (async (url, init) => url === "/api/chats" ? new Response(null, { status: 404 }) : original(url, init)) as typeof fetch;
+    await t.click("Practise selected (1)");
+    assert.ok(t.calls.includes("practiceNodes"));
+    assert.equal(t.find("Clear")!.disabled, true);
+    assert.equal(t.find("Check Anki reviews")!.disabled, true);
+    release();
+    await settle(() => !t.find("Clear")!.disabled);
+    assert.equal(t.find("Clear")!.disabled, false);
+  } finally { release?.(); globalThis.fetch = original; await t.cleanup(); }
 });

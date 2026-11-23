@@ -44,7 +44,7 @@ export async function startPracticeSession(picks: readonly PracticePick[], fetch
       && savedIds.length === propositions.length && propositions.every((p, i) => savedIds[i] === p.id);
   } catch { attached = false; }
   if (!attached) {
-    throw new Error(`LearnHarness created a session called "${practiceTitle(picks)}" but didn't attach the selected ideas, so Bridge didn't open it. You can delete it from the sidebar. ${PRACTICE_FALLBACK}`);
+    throw new Error(`LearnHarness created a session called "${practiceTitle(picks)}" but Bridge couldn't verify that it attached the selected ideas, so it didn't open the session. Look for it in the sidebar. ${PRACTICE_FALLBACK}`);
   }
   return id;
 }
