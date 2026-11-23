@@ -234,13 +234,17 @@ export function mountDrafting(ctx: PluginFrontendContext, ideasHost: HTMLElement
       for (const skip of p.skipped) skipped.append(el("li", `${name(skip.nodeId)}: ${skip.reason}`));
       body.append(el("p", `${plural(p.skipped.length, "idea")} skipped:`, "ab-muted"), skipped);
     }
-    const flagSkips = (p.skippedFlagRequests ?? []).map(skip => `${plural(skip.count, "flag request")} skipped. ${skip.reason}`);
+    const flagSkipCounts = new Map<string, number>();
+    for (const { count, reason } of p.skippedFlagRequests ?? []) {
+      flagSkipCounts.set(reason, (flagSkipCounts.get(reason) ?? 0) + count);
+    }
+    const flagSkips = [...flagSkipCounts].map(([reason, count]) => `${plural(count, "flag request")} skipped. ${reason}`);
     for (const skip of flagSkips) body.append(el("p", skip, "ab-muted"));
     body.append(el("p", "Safe to leave this page.", "ab-muted"));
     if (!p.batches.length) {
       const reasons = p.skipped.slice(0, 3).map(skip => `${name(skip.nodeId)}: ${skip.reason}`);
       if (p.skipped.length > 3) reasons.push(`and ${plural(p.skipped.length - 3, "more idea")}.`);
-      throw new Error(["No ideas can be carded.", ...new Set(flagSkips), ...reasons].join(" "));
+      throw new Error(["No ideas can be carded.", ...flagSkips, ...reasons].join(" "));
     }
     const ok = await confirmDialog(ctx, signal, { title: "Write cards", body, confirm: "Start writing" });
     if (!ok || !alive()) return;
