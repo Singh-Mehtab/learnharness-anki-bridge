@@ -35,6 +35,7 @@ export function resultSchemaFor(kinds: readonly CardKind[] = CORE_KINDS, options
                 },
               },
             },
+            flagMatches: { type: "array", items: { type: "string" }, description: "IDs of reply notes that a card on this target directly answers; omit if none." },
             skipReason: { type: "string", description: "Required when cards is empty: one sentence on why." },
           },
         },

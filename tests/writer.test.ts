@@ -244,7 +244,7 @@ test("instructions describe only requested kinds; prompt carries cap and kinds",
 // #37: no constant-values toggle. A flag, or a flag note, is how a learner asks for a value.
 test("constant values are carded only on an explicit flag", () => {
   const text = writerInstructions();
-  assert.match(text, /Numerical values of physical constants.*are carded only on request: when the learner flagged a target that states the value, or a flag note asks for it\./);
+  assert.match(text, /Numerical values of physical constants.*are carded only on request: when a blank flag requests a target that states the value, or an applicable flag note asks for it\./);
   assert.doesNotMatch(text, /constant values are on/i);
   const flagged = writerPrompt({ ...input(), targets: [{ ...input().targets[0]!, flagged: true, maxCards: 12 }] });
   assert.match(flagged, /"flagged":true/);

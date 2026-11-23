@@ -2,11 +2,11 @@ import { randomUUID } from 'node:crypto';
 import type { PluginBackendContext } from '../../sdk/index.d.ts';
 import type { DeliveryService } from '../anki/delivery.ts';
 import type { StateStore } from '../anki/state.ts';
-import { graphCoverage } from '../coverage/service.ts';
+import { graphCoverage, statementHash } from '../coverage/service.ts';
 import type { Coverage, CoverageNode } from '../coverage/flow.ts';
 import { extractedMessageIds } from './extraction.ts';
 import {
-  failedOutputCallIds, flagIdeaHandled, flagNotesByNode, matchFlag, MAX_FLAG_MESSAGES, MAX_FLAGS, normalizeNote, sessionNodeIds, teacherProse,
+  failedOutputCallIds, flagIdeaHandled, matchFlag, MAX_FLAG_MESSAGES, MAX_FLAGS, normalizeNote, sessionNodeIds, teacherProse,
 } from './flow.ts';
 import type { CardCounts, Flag, GraphLike, MessageLike } from './flow.ts';
 
@@ -18,7 +18,7 @@ const MAX_SESSIONS = 200;
  * no-nodes: extraction covered it and produced no node anchored there.
  * missing: the session or a flagged message is gone from the saved record. */
 export type FlagStatus = 'matched' | 'waiting' | 'no-nodes' | 'missing';
-export interface FlagView extends Flag { status: FlagStatus; nodeIds: string[] }
+export interface FlagView extends Flag { status: FlagStatus; nodeIds: string[]; pendingNodeIds: string[] }
 /** `created` is false when the call updated an existing flag, so Undo must not remove it. */
 export interface FlagResult extends FlagView { created: boolean }
 export interface SessionNode { id: string; name: string; statement: string; flagged: boolean; pendingFlag: boolean; flagNotes: string[]; cards: CardCounts; statementHash: string; coverage: Coverage }
@@ -82,22 +82,21 @@ export class SessionService {
     try { return this.learning.readGraphFile('coverage.jsonl'); } catch { return []; }
   }
 
-  /** Flag notes for the writer (0.3.0 passes these as `flagNote` input extras). */
-  flagNotes(): Map<string, string> { return flagNotesByNode(this.store.snapshot().flags, this.graph()); }
-
   private views(flags: readonly Flag[], graph: GraphLike): FlagView[] {
     const records = new Map<string, Record_ | null>();
     let ledger: ReadonlyArray<{ chatId: string; fp: string }> | undefined;
+    const statements = new Map(graph.propositions.map(n => [n.id, n.statement]));
     return flags.map(flag => {
       const nodeIds = matchFlag(flag, graph);
+      const pendingNodeIds = nodeIds.filter(id => !flagIdeaHandled(flag, id, statementHash(statements.get(id)!)));
       if (!records.has(flag.sessionId)) records.set(flag.sessionId, this.session(flag.sessionId));
       const record = records.get(flag.sessionId);
-      if (!record || flag.messageIds.some(id => !record.messages.some(m => m.id === id))) return { ...flag, status: 'missing', nodeIds };
-      if (nodeIds.length) return { ...flag, status: 'matched', nodeIds };
+      if (!record || flag.messageIds.some(id => !record.messages.some(m => m.id === id))) return { ...flag, status: 'missing', nodeIds, pendingNodeIds };
+      if (nodeIds.length) return { ...flag, status: 'matched', nodeIds, pendingNodeIds };
       ledger ??= this.covered();
       const covered = new Set(ledger.filter(e => e.chatId === flag.sessionId).map(e => e.fp));
       const extracted = extractedMessageIds(record.messages, covered, flag.messageIds);
-      return { ...flag, status: flag.messageIds.every(id => extracted.has(id)) ? 'no-nodes' : 'waiting', nodeIds };
+      return { ...flag, status: flag.messageIds.every(id => extracted.has(id)) ? 'no-nodes' : 'waiting', nodeIds, pendingNodeIds };
     });
   }
 
@@ -183,7 +182,7 @@ export class SessionService {
     const coverage = graphCoverage(graph, state), byId = new Map(coverage.nodes.map(n => [n.id, n] as const));
     const nodes = ids.map(id => {
       const n = byId.get(id)!, mine = flags.filter(f => f.nodeIds.includes(id));
-      return { ...n, flagged: mine.length > 0, pendingFlag: mine.some(f => !flagIdeaHandled(f, id, n.statementHash)),
+      return { ...n, flagged: mine.length > 0, pendingFlag: mine.some(f => f.pendingNodeIds.includes(id)),
         flagNotes: [...new Set(mine.map(f => f.note).filter(Boolean))] };
     });
     const title = record?.title || flags[0]?.sessionTitle || graph.sessions?.[sessionId] || '';

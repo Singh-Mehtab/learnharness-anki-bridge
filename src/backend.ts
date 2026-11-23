@@ -17,7 +17,6 @@ export async function activate(ctx: PluginBackendContext): Promise<() => Promise
   // Review checks read Anki only when the user asks, and keep results in memory only.
   const reviews = new ReviewService(ctx.learning, store, { signal: ctx.signal });
   // Flag notes are part of the writer prompt, so editing a note makes an open estimate stale.
-  generation.flagNotes = () => session.flagNotes();
   const handlers: (() => void)[] = [];
   const close = async () => {
     for (const unregister of handlers.splice(0)) unregister();

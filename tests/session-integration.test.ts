@@ -109,16 +109,17 @@ test('saved drafts handle flag targets across Drop, but not a note edited during
   const flag = (messageId: string, note?: string) => f.c.call('flag', { sessionId: 'c1', messageIds: [messageId], note });
   const flow = () => f.c.call('sessionFlow', { sessionId: 'c1' });
   try {
-    await flag('m1');
-    await flag('m2', 'Original request');
-    const p = await f.c.call('preflight', { nodeIds: ['n_a', 'n_b'] });
+    const blank = await flag('m1');
+    const note = await flag('m2', 'Original request');
+    const p = await f.c.call('preflight', { nodeIds: ['n_a', 'n_b'], independentNodeIds: [],
+      flagScopes: [{ id: blank.id, nodeIds: ['n_a'] }, { id: note.id, nodeIds: ['n_b'] }] });
     await f.c.call('generate', { preflightId: p.preflightId });
     await until(() => f.host.workers.starts.length === 1, 'writer started');
     await flag('m2', 'A different request');
     await flag('m2', 'Original request'); // Reverting text still renews the revision.
-    f.host.workers.succeed('task-1', { targets: ['n_a', 'n_b'].map(nodeId => ({ nodeId, cards: [{ kind: 'fact',
-      front: nodeId === 'n_a' ? 'Which condition is required for the first result in this lecture to hold?' : 'What must the system exchange with its surroundings?',
-      back: nodeId === 'n_a' ? 'Assumption A.' : 'Nothing.' }] })) });
+    f.host.workers.succeed('task-1', { targets: [{ nodeId: 'n_b', flagMatches: [note.id], cards: [{ kind: 'fact',
+      front: 'What must the system exchange with its surroundings?', back: 'Nothing.' }] }, { nodeId: 'n_a', cards: [{ kind: 'fact',
+      front: 'Which condition is required for the first result in this lecture to hold?', back: 'Assumption A.' }] }] });
     await until(async () => (await f.c.call('generationStatus')).generations[0].status !== 'running', 'generation settled');
     const generation = (await f.c.call('generationStatus')).generations[0];
     assert.equal(generation.status, 'completed', JSON.stringify(generation.tasks.map((task: any) => task.error)));
@@ -134,6 +135,87 @@ test('saved drafts handle flag targets across Drop, but not a note edited during
     const saved = JSON.parse(await readFile(path.join(f.directory, 'state.json'), 'utf8'));
     assert.equal(saved.flags[0].handledIdeas[0].nodeId, 'n_a');
     assert.equal(saved.flags[1].handledIdeas, undefined);
+  } finally { await f.close(); }
+});
+
+test('overlapping notes share one request; only an answered note is handled, including exact duplicates', async () => {
+  const f = await setup();
+  try {
+    f.host.nodes[0].provenance!.push({ chatId: 'c1', messageId: 'm2' });
+    const a = await f.c.call('flag', { sessionId: 'c1', messageIds: ['m1'], note: 'Recall why assumption A is needed.' });
+    const b = await f.c.call('flag', { sessionId: 'c1', messageIds: ['m2'], note: 'Recall the condition on exchange.' });
+    const selection = { nodeIds: ['n_a', 'n_b'], independentNodeIds: ['n_a'], flagScopes: [{ id: a.id, nodeIds: ['n_a'] }, { id: b.id, nodeIds: ['n_a', 'n_b'] }] };
+    await assert.rejects(f.c.call('preflight', { ...selection, flagScopes: [{ id: a.id, nodeIds: ['n_b'] }] }), /flag or its ideas changed/);
+    const card = { kind: 'fact', front: 'Which condition is required for the first result in this lecture to hold?', back: 'Assumption A.' };
+    const pending = async () => (await f.c.call('sessionFlow', { sessionId: 'c1' })).flags.map((flag: any) => flag.pendingNodeIds);
+    const run = async (number: number, match?: string) => {
+      const p = await f.c.call('preflight', selection);
+      assert.deepEqual(p.batches.map((batch: any) => batch.nodeIds), [['n_a', 'n_b']]);
+      await f.c.call('generate', { preflightId: p.preflightId });
+      await until(() => f.host.workers.starts.length === number, 'worker started');
+      const start = f.host.workers.starts[number - 1];
+      const input = start.input as import('../src/writer/types.ts').WriterInput;
+      assert.deepEqual(input.flagRequests, selection.flagScopes.map((scope, i) => ({ ...scope, note: [a.note, b.note][i] })));
+      assert.equal(start.prompt.split(b.note).length, 2, 'the shared note appears once in the prompt');
+      assert.deepEqual(input.targets.map(t => [t.nodeId, t.noteOnly, t.flagNote]), [['n_a', undefined, undefined], ['n_b', true, undefined]]);
+      f.host.workers.succeed(`task-${number}`, { targets: [
+        { nodeId: 'n_a', cards: [card], ...(match ? { flagMatches: [match] } : {}) },
+        { nodeId: 'n_b', cards: [], skipReason: 'No card answers the request from this source.' },
+      ] });
+      await until(async () => (await f.c.call('generationStatus')).generations.at(-1).status !== 'running', 'generation settled');
+      const status = await f.c.call('generationStatus');
+      assert.equal(status.generations.at(-1).status, 'completed');
+      return status;
+    };
+    await run(1); // The ordinary card is not evidence that either note was answered.
+    assert.deepEqual(await pending(), [['n_a'], ['n_a', 'n_b']]);
+    const status = await run(2, b.id);
+    assert.equal(status.cards.length, 1);
+    assert.equal(status.generations.at(-1).tasks[0].duplicatesOmitted, 1);
+    assert.deepEqual(await pending(), [['n_a'], []]);
+  } finally { await f.close(); }
+});
+
+test('an oversized noted group is not split and does not block independent writing', async () => {
+  const f = await setup();
+  try {
+    f.host.nodes[0].provenance!.push({ chatId: 'c1', messageId: 'm2' });
+    const note = await f.c.call('flag', { sessionId: 'c1', messageIds: ['m2'], note: 'Focus on the required condition.' });
+    const { outputAllowance } = await import('../src/writer/input.ts');
+    f.host.catalog.models[0].maxTokens = outputAllowance(1, 12);
+    const p = await f.c.call('preflight', { nodeIds: ['n_a', 'n_b'], independentNodeIds: ['n_a'], flagScopes: [{ id: note.id, nodeIds: ['n_a', 'n_b'] }] });
+    assert.deepEqual(p.batches.map((batch: any) => batch.nodeIds), [['n_a']]);
+    assert.equal(p.maximumCards, 2);
+    assert.ok(p.skipped.every((skip: any) => /group cannot fit/.test(skip.reason)));
+    await f.c.call('generate', { preflightId: p.preflightId });
+    await until(() => f.host.workers.starts.length === 1, 'independent writer started');
+    assert.doesNotMatch(f.host.workers.starts[0].prompt, /Focus on the required condition/);
+    await f.c.call('cancelGeneration', { id: p.preflightId });
+    const flow = await f.c.call('sessionFlow', { sessionId: 'c1' });
+    assert.deepEqual(flow.flags[0].pendingNodeIds, ['n_a', 'n_b']);
+  } finally { await f.close(); }
+});
+
+test('a failed note result leaves the flag pending and Retry keeps the original scope', async () => {
+  const f = await setup();
+  try {
+    const note = await f.c.call('flag', { sessionId: 'c1', messageIds: ['m1'], note: 'What assumption is needed?' });
+    const p = await f.c.call('preflight', { nodeIds: ['n_a'], independentNodeIds: [], flagScopes: [{ id: note.id, nodeIds: ['n_a'] }] });
+    await f.c.call('generate', { preflightId: p.preflightId });
+    await until(() => f.host.workers.starts.length === 1, 'writer started');
+    f.host.workers.succeed('task-1', { targets: [{ nodeId: 'n_a', cards: [{ kind: 'fact', front: 'Which condition is required?', back: 'Assumption A.' }] }] });
+    await until(async () => (await f.c.call('generationStatus')).generations[0].status === 'failed', 'invalid result rejected');
+    assert.deepEqual((await f.c.call('sessionFlow', { sessionId: 'c1' })).flags[0].pendingNodeIds, ['n_a']);
+    const retry = await f.c.call('retryGeneration', { id: p.preflightId });
+    assert.equal(retry.maximumCards, 12);
+    assert.equal(f.host.workers.starts.length, 1);
+    await f.c.call('generate', { preflightId: retry.preflightId });
+    await until(() => f.host.workers.starts.length === 2, 'retry started');
+    assert.deepEqual(f.host.workers.starts[1].input, f.host.workers.starts[0].input);
+    await f.c.call('cancelGeneration', { id: retry.preflightId });
+    await f.c.call('flag', { sessionId: 'c1', messageIds: ['m1'], note: 'A revised request.' });
+    await assert.rejects(f.c.call('retryGeneration', { id: p.preflightId }), /flag changed/);
+    assert.equal(f.host.workers.starts.length, 2);
   } finally { await f.close(); }
 });
 
@@ -164,13 +246,14 @@ test('flag notes reach saved writer input and worker prompt; changing a note inv
   const f = await setup();
   try {
     const flag = await f.c.call('flag', { sessionId: 'c1', messageIds: ['m1'], note: 'Remember the sign condition' });
-    const old = await f.c.call('preflight', { nodeIds: ['n_a'] });
+    const selection = { nodeIds: ['n_a'], flagScopes: [{ id: flag.id, nodeIds: ['n_a'] }], independentNodeIds: [] };
+    const old = await f.c.call('preflight', selection);
     await f.c.call('flag', { sessionId: 'c1', messageIds: ['m1'], note: 'Explain why assumption A is necessary' });
     await assert.rejects(f.c.call('generate', { preflightId: old.preflightId }), /stale/);
     assert.equal(f.host.workers.starts.length, 0);
-    const p = await f.c.call('preflight', { nodeIds: ['n_a'] });
+    const p = await f.c.call('preflight', selection);
     const snapshot = await f.c.call('generate', { preflightId: p.preflightId });
-    assert.equal(snapshot.generations[0].tasks[0].input.targets[0].flagNote, 'Explain why assumption A is necessary');
+    assert.deepEqual(snapshot.generations[0].tasks[0].input.flagRequests, [{ id: flag.id, note: 'Explain why assumption A is necessary', nodeIds: ['n_a'] }]);
     await until(() => f.host.workers.starts.length === 1, 'worker start');
     assert.match(JSON.stringify(f.host.workers.starts[0]), /Explain why assumption A is necessary/);
     assert.doesNotMatch(JSON.stringify(f.host.workers.starts[0]), /Remember the sign condition/);
@@ -178,7 +261,7 @@ test('flag notes reach saved writer input and worker prompt; changing a note inv
     await f.c.call('unflag', { id: flag.id });
     const unflagged = await f.c.call('preflight', { nodeIds: ['n_a'] });
     const cleared = await f.c.call('generate', { preflightId: unflagged.preflightId });
-    assert.equal(cleared.generations.at(-1).tasks[0].input.targets[0].flagNote, undefined);
+    assert.equal(cleared.generations.at(-1).tasks[0].input.flagRequests, undefined);
     await f.c.call('cancelGeneration', { id: unflagged.preflightId });
   } finally { await f.close(); }
 });
