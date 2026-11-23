@@ -56,6 +56,7 @@ export function mountDrafting(ctx: PluginFrontendContext, ideasHost: HTMLElement
   let disposed = false, state: DraftingSnapshot | undefined, scope: Scope;
   let nodes: CoverageRow[] = [];
   let modelLevels: string[] | undefined;
+  let syncCloze: (() => void) | undefined;
   let coverageRequest = 0, choiceRevision = 0;
   let widgets: Array<{ dispose(): void }> = [], activityWidgets: Array<{ dispose(): void }> = [];
   let loading = false, examplesOpen = false;
@@ -336,6 +337,10 @@ export function mountDrafting(ctx: PluginFrontendContext, ideasHost: HTMLElement
         void run(async () => {
           try { await snapshot("generationSettings", { model: { provider: pin.provider, id: pin.id, ...(value ? { thinkingLevel: value } : {}) } }); }
           catch (error) { level.value = pin.thinkingLevel ?? ""; throw error; }
+        }, true, () => {
+          // A Clear or model change queued first wins; don't restore this model.
+          const now = state?.generationSettings?.model;
+          return now?.provider === pin.provider && now.id === pin.id;
         });
       };
       levelField.append(el("span", "Reasoning level", "ab-label"), level);
@@ -395,6 +400,7 @@ export function mountDrafting(ctx: PluginFrontendContext, ideasHost: HTMLElement
     };
     const savedStop = () => CLOZE_STOPS.findIndex(stop => stop.value === activeCloze(state?.generationSettings ?? settings));
     showStop(savedStop());
+    syncCloze = () => showStop(savedStop());
     range.oninput = () => showStop(Number(range.value));
     range.onchange = () => {
       const { value } = CLOZE_STOPS[Number(range.value)]!;
@@ -402,7 +408,7 @@ export function mountDrafting(ctx: PluginFrontendContext, ideasHost: HTMLElement
       void run(async () => {
         if (value === activeCloze(state?.generationSettings ?? settings)) return;
         try { await snapshot("generationSettings", { cloze: value }); }
-        catch (error) { showStop(savedStop()); throw error; }
+        finally { syncCloze?.(); }
       }, false);
     };
     clozeField.append(el("span", "Cloze cards", "ab-label"), range, stops, clozeHelp);

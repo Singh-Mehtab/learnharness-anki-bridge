@@ -26,6 +26,7 @@ function setup(options: { catalogUnavailable?: boolean; initialGraphFailure?: bo
   const peers = new Set<() => void>();
   let failNextCoverage = options.initialGraphFailure;
   let recovery: (() => unknown) | undefined;
+  let settingsGate: Promise<void> | undefined;
   let mutationGate: Promise<void> | undefined, hold: Promise<void> | undefined, graphHold: Promise<void> | undefined;
   let refreshed = 0, modelMounts = 0, knowledgeMounts = 0;
   const ctx = {
@@ -44,6 +45,7 @@ function setup(options: { catalogUnavailable?: boolean; initialGraphFailure?: bo
           state: dismissed ? "dismissed" : "no-cards", base: dismissed ? "dismissed" : "no-cards" });
         return structuredClone(graph);
       }
+      if (name === "generationSettings") await settingsGate;
       if (name === "generationSettings") {
         // Like the backend: a toggle applies to the saved types at the moment it arrives.
         const { toggleKind, ...rest } = input;
@@ -100,6 +102,7 @@ function setup(options: { catalogUnavailable?: boolean; initialGraphFailure?: bo
       mutationGate = new Promise<void>((yes, no) => { resolve = yes; reject = no; });
       return { resolve: () => { mutationGate = undefined; resolve(); }, reject: () => { mutationGate = undefined; reject(new Error("Graph read failed")); } };
     },
+    holdSettings: () => { let release!: () => void; settingsGate = new Promise(r => { release = r; }); return () => { settingsGate = undefined; release(); }; },
     holdEstimates: () => { let release!: () => void; hold = new Promise(r => { release = r; }); return () => { hold = undefined; release(); }; },
     onRetry: (handler: () => unknown) => { recovery = handler; },
     refreshed: () => refreshed, modelMounts: () => modelMounts, knowledgeMounts: () => knowledgeMounts,
@@ -123,6 +126,36 @@ test("Write offers only levels supported by the pinned model and clears the over
     assert.equal(selector(), undefined);
     [...f.write.querySelectorAll("button")].find(button => button.textContent === "Clear")!.click(); await tick();
     assert.equal(f.state.generationSettings.model, null);
+  } finally { await f.close(); }
+});
+
+test("a queued reasoning change does not restore a model that was cleared first", async () => {
+  const f = setup({ model: true });
+  try {
+    await f.panel.setScope(undefined); await tick();
+    const selector = () => [...f.write.querySelectorAll("select")].find(select => select.closest("label")?.textContent?.startsWith("Reasoning level"));
+    const level = selector()!;
+    const release = f.holdSettings();
+    [...f.write.querySelectorAll("button")].find(button => button.textContent === "Clear")!.click();
+    level.value = "high"; level.dispatchEvent(f.event("change") as never);
+    release(); await tick(); await tick();
+    assert.equal(f.state.generationSettings.model, null);
+    assert.equal(f.calls.filter(c => c.name === "generationSettings").length, 1);
+  } finally { await f.close(); }
+});
+
+test("the Cloze slider shows the saved stop after an earlier queued save redraws Write", async () => {
+  const f = setup();
+  try {
+    await f.panel.setScope(undefined); await tick();
+    const cap = () => [...f.write.querySelectorAll("select")].find(select => select.closest("label")?.textContent?.startsWith("Most cards per idea"))!;
+    const slider = () => f.write.querySelector(".ab-write-cloze input[type=range]") as unknown as HTMLInputElement;
+    const release = f.holdSettings();
+    cap().value = "3"; cap().dispatchEvent(f.event("change") as never);
+    slider().value = "2"; slider().dispatchEvent(f.event("change") as never);
+    release(); await tick(); await tick();
+    assert.equal(f.state.generationSettings.cloze, "prefer");
+    assert.equal(slider().value, "2");
   } finally { await f.close(); }
 });
 
