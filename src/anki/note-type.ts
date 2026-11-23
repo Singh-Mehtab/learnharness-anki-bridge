@@ -66,6 +66,25 @@ export function noteTypeInput(value: unknown): NoteTypeSpec {
   throw new Error("Unknown note type.");
 }
 
+interface NativeModel { type: 0 | 1; css?: string }
+
+/** Anki's model names are editable. Only the native `type` distinguishes Cloze. */
+export async function readNativeModels(client: Pick<AnkiClient, 'call'>, names: string[]): Promise<Map<string, NativeModel>> {
+  const types = new Map<string, NativeModel>();
+  if (!names.length) return types;
+  const models = await client.call<unknown>('findModelsByName', { modelNames: names });
+  if (!Array.isArray(models)) return types;
+  for (const entry of models) {
+    if (!entry || !names.includes(entry.name) || (entry.type !== 0 && entry.type !== 1) || types.has(entry.name)) return new Map();
+    types.set(entry.name, { type: entry.type, ...(typeof entry.css === 'string' ? { css: entry.css } : {}) });
+  }
+  return types;
+}
+
+export const nativeTypeMatches = (model: NativeModel | undefined, spec: NoteTypeSpec): boolean => model?.type === (spec.isCloze ? 1 : 0);
+const ownsStyle = (css: string, spec: NoteTypeSpec): boolean => css.includes(MARKER) || (spec.key === 'basic' && css.includes(LEGACY_MARKER));
+export const hasOwnedStyle = (model: NativeModel | undefined, spec: NoteTypeSpec): boolean => ownsStyle(model?.css ?? '', spec);
+
 function fail(message: string): never {
   throw new AnkiError("api", message);
 }
@@ -73,9 +92,11 @@ function fail(message: string): never {
 async function inspect(client: AnkiClient, spec: NoteTypeSpec): Promise<string[]> {
   const styling = await client.call<{ css: string }>("modelStyling", { modelName: spec.name });
   const fields = await client.call<string[]>("modelFieldNames", { modelName: spec.name });
-  if (!styling.css.includes(MARKER) && !(spec.key === "basic" && styling.css.includes(LEGACY_MARKER))) {
+  if (!ownsStyle(styling.css, spec)) {
     fail(`The note type "${spec.name}" is not owned by Anki Bridge (CSS marker missing). Rename it in Anki before continuing.`);
   }
+  const native = (await readNativeModels(client, [spec.name])).get(spec.name);
+  if (!nativeTypeMatches(native, spec)) fail(`Cannot verify that "${spec.name}" has the expected Anki note type.`);
   return fields;
 }
 

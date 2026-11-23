@@ -219,8 +219,12 @@ export function clozeProblems(card: DraftCard): string[] {
   if (place.where === "math" && /\\\(|\\\)|\\\[|\\\]|(?<!\\)\$/.test(back)) {
     problems.push(`the blank is inside maths, so the hidden part is raw TeX without \\( \\) or $ delimiters`);
   }
-  if (place.where === "math" && /\\(?:left|right|middle|[bB]igg?[lmr]?)\s*$/.test(front.slice(place.segment.start + place.segment.open.length, front.indexOf(BLANK)))) {
-    problems.push("a maths blank cannot replace a TeX sizing delimiter; move the delimiter outside the blank");
+  if (place.where === "math") {
+    const before = front.slice(place.segment.start + place.segment.open.length, front.indexOf(BLANK));
+    if ((before.match(/\\+$/)?.[0].length ?? 0) % 2) problems.push("a maths blank cannot start inside a TeX command; hide the whole command instead");
+    if (/\\(?:left|right|middle|[bB]igg?[lmr]?)\s*$/.test(before)) {
+      problems.push("a maths blank cannot replace a TeX sizing delimiter; move the delimiter outside the blank");
+    }
   }
   if (place.where === "math" && !balancedBraces(back)) {
     problems.push("the hidden part must be a whole TeX group: its { and } must balance");

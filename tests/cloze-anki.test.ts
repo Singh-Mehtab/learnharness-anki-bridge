@@ -105,6 +105,7 @@ test('FI-8: a cloze card whose LH_ID finds a basic note reports a conflict and s
     // A basic package was imported in Anki without Mark as imported, then the card was switched.
     const existing: Note = { noteId: 9, fields: { Front: '<p>old</p>', Back: 'x', LH_ID: card }, deckName: 'Scratch', modelName: 'LearnHarness Basic', tags: [] };
     f.notes.push(structuredClone(existing));
+    f.models.set(existing.modelName, { isCloze: false, fields: Object.keys(existing.fields), css: '', templates: {} });
     const result = await f.send([card]);
     assert.deepEqual(result.delivery.failed, [card]);
     assert.deepEqual(result.delivery.found, []);
@@ -116,6 +117,7 @@ test('FI-8: a cloze card whose LH_ID finds a basic note reports a conflict and s
     assert.deepEqual(f.notes, [existing]);
     // A matching cloze note is adopted as before.
     f.notes[0] = { ...existing, fields: { Text: 'x', LH_ID: card }, modelName: CLOZE_MODEL_NAME };
+    f.models.set(CLOZE_MODEL_NAME, { isCloze: true, fields: ['Text', 'LH_ID'], css: CLOZE_CSS, templates: {} });
     assert.deepEqual((await f.send([card])).delivery.found, [card]);
   } finally { await f.close(); }
 });
@@ -128,6 +130,7 @@ test('FI-8 (round 1, S1): a note of the other plugin type is refused even with a
     // LearnHarness Basic with a Text field added by hand is still a basic note.
     const existing: Note = { noteId: 9, fields: { Front: '<p>old</p>', Back: 'x', Text: '', LH_ID: card }, deckName: 'Scratch', modelName: 'LearnHarness Basic', tags: [] };
     f.notes.push(structuredClone(existing));
+    f.models.set(existing.modelName, { isCloze: false, fields: Object.keys(existing.fields), css: '', templates: {} });
     assert.deepEqual((await f.send([card])).delivery.failed, [card]);
     assert.match(f.store.snapshot().cards[0]!.lastError!, /already in Anki as a basic note/);
     f.notes[0]!.modelName = 'Renamed Basic';
@@ -142,6 +145,22 @@ test('FI-8 (round 1, S1): a note of the other plugin type is refused even with a
     assert.equal(saved.status, 'failed');
     assert.equal(saved.noteId, undefined);
     assert.match(saved.lastError!, /already in Anki as a basic note/);
+    assert.equal(f.calls.filter(c => c.action === 'addNote').length, 0);
+  } finally { await f.close(); }
+});
+
+test('a Basic model named LearnHarness Cloze cannot be adopted as Cloze or used for writes', async () => {
+  const f = await fixture();
+  try {
+    const id = await f.draft(HBAR);
+    await f.service.command('approve', { ids: [id] });
+    const fields = ['Text', 'Extra', 'Source', 'LH_ID', 'LH_Node'];
+    f.models.set(CLOZE_MODEL_NAME, { isCloze: false, fields, css: CLOZE_CSS, templates: {} });
+    f.notes.push({ noteId: 9, modelName: CLOZE_MODEL_NAME, fields: { Text: 'Old Basic card', LH_ID: id }, deckName: 'Scratch', tags: [] });
+    assert.deepEqual((await f.send([id])).delivery.failed, [id]);
+    assert.match(f.store.snapshot().cards[0]!.lastError!, /already in Anki as a basic note/);
+    f.notes.length = 0;
+    await assert.rejects(f.send([id]), /expected Anki note type/);
     assert.equal(f.calls.filter(c => c.action === 'addNote').length, 0);
   } finally { await f.close(); }
 });

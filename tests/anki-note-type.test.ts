@@ -26,6 +26,7 @@ class FakeAnki extends AnkiClient {
       }
       case "modelStyling": result = { css: this.css }; break;
       case "modelFieldNames": result = [...this.fields]; break;
+      case "findModelsByName": result = [{ name: MODEL_NAME, type: 0, css: this.css }]; break;
       case "modelTemplates": result = this.templates; break;
       case "modelFieldAdd": this.fields.push(params.fieldName as string); break;
       case "updateModelStyling": this.css = (params.model as { css: string }).css; break;
@@ -52,7 +53,7 @@ test("ensureNoteType creates one owned model and verifies ownership and fields e
   assert.doesNotMatch(JSON.stringify(client.templates), /LH_ID|LH_Node/);
   client.calls = [];
   await ensureNoteType(client);
-  assert.deepEqual(client.calls.map(({ action }) => action), ["modelNames", "modelStyling", "modelFieldNames"]);
+  assert.deepEqual(client.calls.map(({ action }) => action), ["modelNames", "modelStyling", "modelFieldNames", "findModelsByName"]);
   assert.equal(mutations(client).length, 0);
 });
 
@@ -98,7 +99,7 @@ test("explicit update replaces edited Card 1 content only after ownership and fi
   assert.equal(mutations(client).length, 0);
   client.calls = [];
   await updateStyling(client);
-  assert.deepEqual(client.calls.map(({ action }) => action), ["modelStyling", "modelFieldNames", "modelTemplates", "updateModelStyling", "updateModelTemplates"]);
+  assert.deepEqual(client.calls.map(({ action }) => action), ["modelStyling", "modelFieldNames", "findModelsByName", "modelTemplates", "updateModelStyling", "updateModelTemplates"]);
   assert.ok(client.css.includes(MARKER));
   assert.ok(client.css.includes(STYLE_REVISION));
   assert.equal(client.templates["Card 1"]!.Front, "{{Front}}");

@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { AnkiClient, AnkiError, normalizeUrl } from './client.ts';
 import { noteFields, packageFingerprint } from './apkg.ts';
-import { CLOZE_MODEL_NAME, MODEL_NAME, ensureNoteType, noteTypeFor, noteTypeInput, repairFields, updateStyling } from './note-type.ts';
+import { ensureNoteType, nativeTypeMatches, noteTypeFor, noteTypeInput, readNativeModels, repairFields, updateStyling } from './note-type.ts';
 import { clozeCardProblems } from '../writer/cloze.ts';
 import { renderMarkdown } from './render.ts';
 import { StateStore, sameDestination } from './state.ts';
@@ -173,8 +173,8 @@ export class DeliveryService {
   }
   /** FI-8 (S22): a note found by LH_ID must be the card's kind of note. A basic
    *  package imported without Mark as imported leaves the card editable, so it can
-   *  be switched to cloze and then find the old basic note. Use Anki's native type
-   *  for renamed models; custom fields cannot reliably identify them. */
+   *  be switched to cloze and then find the old basic note. Neither a model's
+   *  display name nor its fields reliably identify its native type. */
   private async formatConflict(client: AnkiClient, card: Card, found: number[]): Promise<boolean> {
     await this.destination(client);
     const notes = await client.call<unknown>('notesInfo', { notes: found });
@@ -190,18 +190,11 @@ export class DeliveryService {
       (fields(n) as Record<string, { value?: unknown }>).LH_ID?.value !== card.id)) {
       throw new Error('Cannot verify existing Anki note metadata. Check unconfirmed sends again.');
     }
-    const types = new Map<string, number>([[MODEL_NAME, 0], [CLOZE_MODEL_NAME, 1]]);
-    const names = notes.map(n => model(n) as string);
-    const renamed = [...new Set(names.filter(name => !types.has(name)))];
-    if (renamed.length) {
-      const models = await client.call<unknown>('findModelsByName', { modelNames: renamed });
-      await this.destination(client);
-      if (Array.isArray(models)) for (const entry of models) {
-        if (entry && renamed.includes(entry.name) && (entry.type === 0 || entry.type === 1)) types.set(entry.name, entry.type);
-      }
-      if (renamed.some(name => !types.has(name))) throw new Error('Cannot verify the existing Anki note type. Check its note type in Anki and try again.');
-    }
-    if (names.every(name => types.get(name) === (card.format === 'cloze' ? 1 : 0))) return false;
+    const names = [...new Set(notes.map(n => model(n) as string))];
+    const types = await readNativeModels(client, names);
+    await this.destination(client);
+    if (names.some(name => !types.has(name))) throw new Error('Cannot verify the existing Anki note type. Check its note type in Anki and try again.');
+    if (names.every(name => nativeTypeMatches(types.get(name), noteTypeFor(card)))) return false;
     const other = card.format === 'cloze' ? 'basic' : 'cloze';
     const message = `This card is already in Anki as a ${other} note. Delete that note in Anki or switch the card back to ${other}.`;
     await this.patchCard(card.id, { status: 'failed', lastError: message });

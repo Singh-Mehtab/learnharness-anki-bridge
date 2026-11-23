@@ -83,6 +83,8 @@ test("an ungrouped deletion stays one TeX argument on both faces", () => {
   assert.equal(field.replace('{{c1::2}}', '[...]'), String.raw`<p>\[F = \sqrt{[...]}\]</p>`);
   assert.equal(field.replace('{{c1::2}}', '2'), String.raw`<p>\[F = \sqrt{2}\]</p>`);
   bad(String.raw`\(\left{{blank}}x\right)\)`, '(', /sizing delimiter/);
+  bad(String.raw`\(F = \{{blank}}\)`, 'alpha', /inside a TeX command/);
+  ok(String.raw`\(F = {{blank}}\)`, String.raw`\alpha`);
 });
 
 const input = (cloze?: "auto" | "prefer"): WriterInput => ({

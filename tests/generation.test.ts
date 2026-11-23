@@ -296,6 +296,26 @@ test('preflight trims optional context against the full prompt and output budget
   } finally { await close(); }
 }));
 
+test('tight preflight preserves the neighbour needed for a Discriminate card', () => withHost(async (host, directory) => {
+  const c = host.context(directory), close = await activate(c.ctx);
+  try {
+    host.chains = [{ id: 'link', premises: ['n_a'], conclusion: 'n_b' }];
+    host.nodes[1].statement = 'This fixture compares two assumptions. '.repeat(12).trim();
+    await c.call('generationSettings', { model: { provider: 'scratch', id: 'writer' }, cardsPerNode: 1, enabledKinds: ['discriminate'] });
+    const input = { nodeIds: ['n_a'] };
+    const [full] = (await c.call('preflight', input)).batches;
+    host.catalog.models[0].contextWindow = full.inputTokens + full.outputAllowance - 30;
+    const estimate = await c.call('preflight', input);
+    assert.deepEqual(estimate.skipped, []);
+    await c.call('generate', { preflightId: estimate.preflightId });
+    await until(() => host.workers.starts.length === 1);
+    const [target] = (host.workers.starts[0].input as WriterInput).targets;
+    assert.deepEqual(target.allowedKinds, ['discriminate']);
+    assert.deepEqual(target.neighbours.map(entry => entry.id), ['n_b']);
+    assert.deepEqual(target.feeds, []);
+  } finally { await close(); }
+}));
+
 test('preflight reserves only the context that fits and does not add requests for duplicate checking', () => withHost(async (host, directory) => {
   const c = host.context(directory), close = await activate(c.ctx);
   try {

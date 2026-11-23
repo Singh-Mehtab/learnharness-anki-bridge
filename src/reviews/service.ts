@@ -2,7 +2,7 @@
 // Runs only when the user presses the button. The result stays in memory; nothing is
 // written to state.json, Anki, the graph or a model.
 import { AnkiClient, AnkiError, normalizeUrl } from '../anki/client.ts';
-import { noteTypeFor } from '../anki/note-type.ts';
+import { hasOwnedStyle, nativeTypeMatches, noteTypeFor, readNativeModels } from '../anki/note-type.ts';
 import { ReviewReader } from '../anki/review-reader.ts';
 import { sameDestination } from '../anki/destination.ts';
 import type { Card, Destination, StateStore } from '../anki/state.ts';
@@ -172,13 +172,19 @@ export class ReviewService {
         if (note.profile !== paired.profile) throw new ProfileMismatch(`AnkiConnect answered from the profile "${String(note.profile)}". Open the paired profile "${paired.profile}" or re-pair in Settings.`);
         byId.set(note.noteId as number, note);
       }
-      for (const card of batch) {
+      const matches = batch.flatMap(card => {
         const note = byId.get(card.noteId);
-        if (!note) { missing++; continue; }
+        if (!note) { missing++; return []; }
         const lh = record(note.fields) ? note.fields.LH_ID : undefined;
-        const lhValue = record(lh) && typeof lh.value === 'string' ? lh.value : undefined;
-        // The note must still be the bridge's note type for this card's format and carry its delivery ID.
-        if (note.modelName !== noteTypeFor(card).name || lhValue !== card.id) { changed++; continue; }
+        if (!record(lh) || lh.value !== card.id || typeof note.modelName !== 'string') { changed++; return []; }
+        return [{ card, note, name: note.modelName }];
+      });
+      const names = [...new Set(matches.map(match => match.name))];
+      const models = await this.retry(() => readNativeModels(reader, names), guard);
+      if (names.length) await guard();
+      for (const { card, note, name } of matches) {
+        const spec = noteTypeFor(card), model = models.get(name);
+        if (!nativeTypeMatches(model, spec) || (name !== spec.name && !hasOwnedStyle(model, spec))) { changed++; continue; }
         owned.push({ card, tags: note.tags as string[], cardIds: note.cards as number[] });
       }
     }

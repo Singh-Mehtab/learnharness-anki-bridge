@@ -10,7 +10,7 @@ import { writerInstructions, writerPrompt } from '../writer/prompt.ts';
 import { resultSchemaFor } from '../writer/schema.ts';
 import { validateResult } from '../writer/validate.ts';
 import { clozeCardProblems } from '../writer/cloze.ts';
-import { allowedKindsFor, capFor } from '../writer/kinds.ts';
+import { allowedKindsFor, capFor, minimumNeighbours } from '../writer/kinds.ts';
 import { CORE_KINDS, isCoreKind, isStoredKind } from '../writer/types.ts';
 import type { Batch } from '../writer/input.ts';
 import type { WriterInput, WriterResult } from '../writer/types.ts';
@@ -283,7 +283,7 @@ export class GenerationService {
         const trimmed = trimTarget(target, candidate => {
           const node = withKinds(candidate);
           return node.allowedKinds.length > 0 && fits(batch({ ...current, targets: [node] }));
-        });
+        }, minimumNeighbours(target, settings.enabledKinds));
         if (!trimmed) skipped.push({ nodeId: target.nodeId, reason: 'Model limits cannot fit this target, prompt and reserved output.' });
         else current = { ...current, targets: [withKinds(trimmed)] };
       }
