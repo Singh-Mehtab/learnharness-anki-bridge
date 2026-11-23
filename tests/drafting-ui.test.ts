@@ -26,6 +26,7 @@ function setup(options: { catalogUnavailable?: boolean; initialGraphFailure?: bo
   const peers = new Set<() => void>();
   let failNextCoverage = options.initialGraphFailure;
   let recovery: (() => unknown) | undefined;
+  let settingsGate: Promise<void> | undefined;
   let mutationGate: Promise<void> | undefined, hold: Promise<void> | undefined, graphHold: Promise<void> | undefined;
   let refreshed = 0, modelMounts = 0, knowledgeMounts = 0;
   const ctx = {
@@ -35,6 +36,7 @@ function setup(options: { catalogUnavailable?: boolean; initialGraphFailure?: bo
       if (name === "coverageContext") { if (failNextCoverage) { failNextCoverage = false; throw new Error("Initial graph read failed"); } const result = structuredClone(graph); await graphHold; return result; }
       if (name === "sessionFlow") return structuredClone(session);
       if (name === "generationContext") throw new Error("Catalog unavailable");
+      if (name === "writerModelLevels") return input.id === "writer" ? ["low", "high"] : [];
       if (name === "dismissNode" || name === "restoreNode") {
         await mutationGate;
         const node = graph.nodes.find((n: any) => n.id === input.nodeId);
@@ -43,6 +45,7 @@ function setup(options: { catalogUnavailable?: boolean; initialGraphFailure?: bo
           state: dismissed ? "dismissed" : "no-cards", base: dismissed ? "dismissed" : "no-cards" });
         return structuredClone(graph);
       }
+      if (name === "generationSettings") await settingsGate;
       if (name === "generationSettings") {
         // Like the backend: a toggle applies to the saved types at the moment it arrives.
         const { toggleKind, ...rest } = input;
@@ -99,12 +102,112 @@ function setup(options: { catalogUnavailable?: boolean; initialGraphFailure?: bo
       mutationGate = new Promise<void>((yes, no) => { resolve = yes; reject = no; });
       return { resolve: () => { mutationGate = undefined; resolve(); }, reject: () => { mutationGate = undefined; reject(new Error("Graph read failed")); } };
     },
+    holdSettings: () => { let release!: () => void; settingsGate = new Promise(r => { release = r; }); return () => { settingsGate = undefined; release(); }; },
     holdEstimates: () => { let release!: () => void; hold = new Promise(r => { release = r; }); return () => { hold = undefined; release(); }; },
     onRetry: (handler: () => unknown) => { recovery = handler; },
     refreshed: () => refreshed, modelMounts: () => modelMounts, knowledgeMounts: () => knowledgeMounts,
     menu: async (label: string) => { (ideas.querySelector("button.ab-icon-button") as unknown as HTMLButtonElement).click(); await chooseMenu(label); },
     close: async () => { panel.dispose(); controller.abort(); await window.happyDOM.close(); } };
 }
+
+test("Write offers only levels supported by the pinned model and clears the override with the model", async () => {
+  const f = setup();
+  try {
+    await f.panel.setScope(undefined);
+    const selector = () => [...f.write.querySelectorAll("select")].find(select => select.closest("label")?.textContent?.startsWith("Reasoning level"));
+    assert.equal(selector(), undefined);
+    await f.pickModel({ provider: "scratch", id: "writer" });
+    assert.deepEqual([...selector()!.options].map(option => option.value), ["", "low", "high"]);
+    selector()!.value = "high"; selector()!.dispatchEvent(f.event("change") as never); await tick();
+    assert.deepEqual(f.state.generationSettings.model, { provider: "scratch", id: "writer", thinkingLevel: "high" });
+    assert.equal(selector()!.value, "high");
+    await f.pickModel({ provider: "scratch", id: "new-model" });
+    assert.deepEqual(f.state.generationSettings.model, { provider: "scratch", id: "new-model" });
+    assert.equal(selector(), undefined);
+    [...f.write.querySelectorAll("button")].find(button => button.textContent === "Clear")!.click(); await tick();
+    assert.equal(f.state.generationSettings.model, null);
+  } finally { await f.close(); }
+});
+
+test("a queued reasoning change does not restore a model that was cleared first", async () => {
+  const f = setup({ model: true });
+  try {
+    await f.panel.setScope(undefined); await tick();
+    const selector = () => [...f.write.querySelectorAll("select")].find(select => select.closest("label")?.textContent?.startsWith("Reasoning level"));
+    const level = selector()!;
+    const release = f.holdSettings();
+    [...f.write.querySelectorAll("button")].find(button => button.textContent === "Clear")!.click();
+    level.value = "high"; level.dispatchEvent(f.event("change") as never);
+    release(); await tick(); await tick();
+    assert.equal(f.state.generationSettings.model, null);
+    assert.equal(f.calls.filter(c => c.name === "generationSettings").length, 1);
+  } finally { await f.close(); }
+});
+
+test("the Cloze slider shows the saved stop after an earlier queued save redraws Write", async () => {
+  const f = setup();
+  try {
+    await f.panel.setScope(undefined); await tick();
+    const cap = () => [...f.write.querySelectorAll("select")].find(select => select.closest("label")?.textContent?.startsWith("Most cards per idea"))!;
+    const slider = () => f.write.querySelector(".ab-write-cloze input[type=range]") as unknown as HTMLInputElement;
+    const release = f.holdSettings();
+    cap().value = "3"; cap().dispatchEvent(f.event("change") as never);
+    slider().value = "2"; slider().dispatchEvent(f.event("change") as never);
+    release(); await tick(); await tick();
+    assert.equal(f.state.generationSettings.cloze, "prefer");
+    assert.equal(slider().value, "2");
+  } finally { await f.close(); }
+});
+
+test("picking a model while Clear is still saving keeps the pick", async () => {
+  const f = setup({ model: true });
+  try {
+    await f.panel.setScope(undefined); await tick();
+    const release = f.holdSettings();
+    [...f.write.querySelectorAll("button")].find(button => button.textContent === "Clear")!.click();
+    void f.pickModel({ provider: "scratch", id: "writer" });
+    release(); await tick(); await tick();
+    assert.deepEqual(f.state.generationSettings.model, { provider: "scratch", id: "writer" });
+  } finally { await f.close(); }
+});
+
+test("a finished Cloze save does not move the slider during the next drag", async () => {
+  const f = setup();
+  try {
+    await f.panel.setScope(undefined); await tick();
+    const slider = () => f.write.querySelector(".ab-write-cloze input[type=range]") as unknown as HTMLInputElement;
+    const release = f.holdSettings();
+    slider().value = "2"; slider().dispatchEvent(f.event("change") as never);
+    slider().value = "0"; slider().dispatchEvent(f.event("input") as never);
+    release(); await tick(); await tick();
+    assert.equal(f.state.generationSettings.cloze, "prefer");
+    assert.equal(slider().value, "0", "the drag in progress keeps its stop");
+    slider().dispatchEvent(f.event("change") as never); await tick(); await tick();
+    assert.equal(f.state.generationSettings.cloze, "off");
+    assert.equal(slider().value, "0");
+  } finally { await f.close(); }
+});
+
+test("a redraw from another Write setting keeps the Cloze slider and its drag", async () => {
+  const f = setup();
+  try {
+    await f.panel.setScope(undefined); await tick();
+    const cap = () => [...f.write.querySelectorAll("select")].find(select => select.closest("label")?.textContent?.startsWith("Most cards per idea"))!;
+    const slider = () => f.write.querySelector(".ab-write-cloze input[type=range]") as unknown as HTMLInputElement;
+    const dragged = slider();
+    const release = f.holdSettings();
+    cap().value = "3"; cap().dispatchEvent(f.event("change") as never);
+    dragged.value = "2"; dragged.dispatchEvent(f.event("input") as never);
+    release(); await tick(); await tick();
+    assert.equal(f.state.generationSettings.cardsPerNode, 3);
+    assert.ok(slider() === dragged, "the redraw keeps the same slider mounted");
+    assert.equal(dragged.isConnected, true);
+    assert.equal(dragged.value, "2");
+    dragged.dispatchEvent(f.event("change") as never); await tick(); await tick();
+    assert.equal(f.state.generationSettings.cloze, "prefer");
+    assert.equal(slider().value, "2");
+  } finally { await f.close(); }
+});
 
 test("split runs disclose that earlier drafts and edits can be sent to the model", async () => {
   const f = setup({ estimate: { ...preflight, nodeIds: ["n_a", "n_b"], nodeCount: 2,
@@ -127,7 +230,7 @@ test("writing needs a selection, defaults to the cheap model, confirms the estim
   const f = setup();
   try {
     await f.panel.setScope(undefined); await tick();
-    assert.match(f.text(), /Model to write cards.*Blank uses the cheap model\./s);
+    assert.match(f.text(), /Model to write cards.*Blank uses the cheap model and its reasoning level\./s);
     assert.doesNotMatch(f.text(), /LearnHarness cheap model/);
     assert.equal(f.modelValue(), undefined, "the picker starts blank");
     const clear = () => [...f.write.querySelectorAll(".ab-model-row button")].find(b => b.textContent === "Clear") as unknown as HTMLButtonElement | undefined;

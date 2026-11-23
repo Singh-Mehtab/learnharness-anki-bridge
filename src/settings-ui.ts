@@ -32,19 +32,19 @@ export function connectionText(url: string, result: Connection | Error): { text:
   return { tone: "success", text: `Connected. Profile ${result.profile}, ${plural(result.decks.length, "deck")}.` };
 }
 
-interface SettingsSnapshot { settings: Settings; destination: Destination | null; generationSettings?: { enabledKinds: CoreCardKind[]; cloze?: ClozeSetting; writerNotes?: string } }
+interface SettingsSnapshot { settings: Settings; destination: Destination | null; generationSettings?: { enabledKinds: CoreCardKind[]; writerNotes?: string } }
 export const WRITER_NOTES_EXAMPLE = "Make prefix facts such as femto- = 10^-15 cloze cards.\nOn units cards, name the unit system, e.g. \"In natural units with energy in eV\".";
-type ClozeSetting = "off" | "auto" | "prefer";
-/** FI-8: the three stops of the Cloze cards slider. A missing setting means auto. */
-export const CLOZE_STOPS: { value: ClozeSetting; label: string; help: string }[] = [
-  { value: "off", label: "Off", help: "Every card is a question and answer." },
-  { value: "auto", label: "Writer chooses", help: "Cloze where the notation already says what is asked, such as [ħ] = [...]." },
-  { value: "prefer", label: "Prefer cloze", help: "Cloze for every fact and equation card that can be one." },
-];
-
 export function mountSettings(ctx: PluginFrontendContext, container: HTMLElement, signal: AbortSignal, peers: Peers): () => void {
   const root = el("div", undefined, "anki-bridge ab-settings");
-  root.append(el("span", `Version ${ctx.manifest.version}`, "ab-muted"));
+  // The host owns the heading. Keep the version in the panel on hosts with different markup.
+  const heading = container.closest('[data-testid="section-plugin-anki-bridge"]')?.querySelector(":scope > h2");
+  const version = heading
+    ? el("span", ` v${ctx.manifest.version}`, "ab-settings-title-version")
+    : el("span", `Version ${ctx.manifest.version}`, "ab-muted");
+  (heading ?? root).append(version);
+  const removeVersion = () => version.remove();
+  if (signal.aborted) removeVersion();
+  else signal.addEventListener("abort", removeVersion, { once: true });
   container.append(root);
   let state: SettingsSnapshot | undefined;
   let disposed = false, busy = false, tagsQueued = false, loads = 0;
@@ -110,42 +110,6 @@ export function mountSettings(ctx: PluginFrontendContext, container: HTMLElement
   }
   kinds.append(kindStatus);
 
-  // Cloze cards (FI-8)
-  const cloze = el("section", undefined, "ab-panel");
-  const clozeRange = el("input", undefined, "ab-range");
-  clozeRange.type = "range"; clozeRange.min = "0"; clozeRange.max = "2"; clozeRange.step = "1";
-  clozeRange.setAttribute("aria-label", "Cloze cards");
-  const clozeStops = el("div", undefined, "ab-range-stops");
-  clozeStops.setAttribute("aria-hidden", "true");
-  for (const stop of CLOZE_STOPS) clozeStops.append(el("span", stop.label));
-  const clozeHelp = el("p", undefined, "ab-muted");
-  const clozeStatus = status();
-  cloze.append(el("h3", "Cloze cards", "ab-panel-title"),
-    el("p", "A cloze card hides one part of a statement, such as the units in [ħ] = [...]. Only fact and equation cards can be cloze.", "ab-muted ab-panel-intro"),
-    clozeRange, clozeStops, clozeHelp, clozeStatus);
-  const clozeIndex = () => Math.max(0, CLOZE_STOPS.findIndex(s => s.value === (state?.generationSettings?.cloze ?? "auto")));
-  function showClozeStop(index: number): void {
-    const stop = CLOZE_STOPS[index]!;
-    clozeRange.value = String(index);
-    clozeRange.setAttribute("aria-valuetext", stop.label);
-    clozeHelp.textContent = stop.help;
-    clozeStops.querySelectorAll("span").forEach((span, i) => { span.dataset.selected = String(i === index); });
-  }
-  function syncCloze(): void {
-    cloze.hidden = !state?.generationSettings;
-    if (state?.generationSettings) showClozeStop(clozeIndex());
-  }
-  clozeRange.oninput = () => showClozeStop(Number(clozeRange.value));
-  clozeRange.onchange = () => {
-    const stop = CLOZE_STOPS[Number(clozeRange.value)]!;
-    if (busy) { syncCloze(); clozeStatus.show("Wait for the current action to finish.", "error"); return; }
-    if (stop.value === (state?.generationSettings?.cloze ?? "auto")) return;
-    void act(clozeStatus, async () => {
-      await apply("generationSettings", { cloze: stop.value });
-      return `Cloze cards: ${stop.label}.`;
-    }, "Saving…").then(() => { if (alive()) syncCloze(); });
-  };
-
   // Writer notes (#54)
   const notesPanel = el("section", undefined, "ab-panel");
   const notes = textarea("", 5);
@@ -181,7 +145,7 @@ export function mountSettings(ctx: PluginFrontendContext, container: HTMLElement
     el("p", "Use only if Anki Bridge reports a problem with the LearnHarness Basic or LearnHarness Cloze note type.", "ab-muted ab-panel-intro"),
     field("Note type", noteChoice), noteActions, noteStatus);
 
-  root.append(connection, destination, tags, kinds, cloze, notesPanel, noteType);
+  root.append(connection, destination, tags, kinds, notesPanel, noteType);
 
   let saveButton: ButtonHandle, testButton: ButtonHandle, pairButton: ButtonHandle, removeKey: ButtonHandle | undefined;
   let savedUrl = "";
@@ -375,7 +339,7 @@ export function mountSettings(ctx: PluginFrontendContext, container: HTMLElement
     }
     pairButton.update({ label: d ? "Switch to the open profile" : "Use the open profile" });
     if (!notesTouched) notes.value = next.generationSettings?.writerNotes ?? "";
-    syncKinds(); syncCloze(); urlAdvice(); syncButtons();
+    syncKinds(); urlAdvice(); syncButtons();
   }
   async function load(): Promise<void> {
     const sequence = ++loads;
@@ -392,5 +356,8 @@ export function mountSettings(ctx: PluginFrontendContext, container: HTMLElement
   peers.add(refreshFromPeer);
   const unsubscribe = ctx.onResync(refreshFromPeer);
   void load();
-  return () => { disposed = true; peers.delete(refreshFromPeer); unsubscribe(); keyScope.dispose(); root.remove(); };
+  return () => {
+    disposed = true; peers.delete(refreshFromPeer); unsubscribe(); keyScope.dispose();
+    signal.removeEventListener("abort", removeVersion); removeVersion(); root.remove();
+  };
 }

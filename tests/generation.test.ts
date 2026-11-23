@@ -71,6 +71,31 @@ test('preflight follows the cheap slot unless overridden, needs an available mod
   } finally { await close(); }
 }));
 
+test('a supported pinned reasoning level survives activation and reaches the worker', () => withHost(async (host, directory) => {
+  const c = host.context(directory);
+  const base = { provider: 'scratch', id: 'writer' };
+  const pin = { ...base, thinkingLevel: 'high' };
+  (host.catalog.models[0] as { supportedLevels?: string[] }).supportedLevels = ['low', 'high'];
+  const close = await activate(c.ctx);
+  try {
+    assert.deepEqual(await c.call('writerModelLevels', base), ['low', 'high']);
+    await assert.rejects(c.call('generationSettings', { model: { ...base, thinkingLevel: 'medium' } }), /does not support/);
+    await c.call('generationSettings', { model: base });
+    const estimate = await c.call('preflight', { nodeIds: ['n_a'] });
+    await c.call('generationSettings', { model: pin });
+    await assert.rejects(c.call('generate', { preflightId: estimate.preflightId }), /Preflight expired/);
+  } finally { await close(); }
+  const reopened = host.context(directory), stop = await activate(reopened.ctx);
+  try {
+    assert.deepEqual((await reopened.call('generationStatus')).generationSettings.model, pin);
+    const estimate = await reopened.call('preflight', { nodeIds: ['n_a'] });
+    assert.deepEqual(estimate.model, pin);
+    await reopened.call('generate', { preflightId: estimate.preflightId });
+    await until(() => host.workers.starts.length === 1);
+    assert.deepEqual(host.workers.starts[0].model, pin);
+  } finally { await stop(); }
+}));
+
 test('defaults carry the cheap slot’s thinking through confirmation, worker start and durable history', () => withHost(async (host, directory) => {
   const c = host.context(directory), close = await activate(c.ctx);
   try {

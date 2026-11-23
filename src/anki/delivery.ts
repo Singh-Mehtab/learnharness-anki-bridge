@@ -346,6 +346,10 @@ export class DeliveryService {
         if (cards.some(c => c.status === 'imported')) throw new Error('This card was imported and cannot be edited here. Edit it in Anki.');
         if (cards.some(c => c.noteId || ['sending', 'sent', 'dropped'].includes(c.status))) throw new Error('Only unsent drafts or failed cards can be approved.');
         await this.save(s => { for (const card of s.cards) if (cards.some(c => c.id === card.id)) card.status = 'approved'; });
+      } else if (name === 'unapprove') {
+        const card = this.card(requiredText(value.id, 'Card'));
+        if (card.status !== 'approved' || card.noteId !== undefined) throw new Error('Only approved, unsent cards can be returned to Draft.');
+        await this.save(s => { s.cards.find(c => c.id === card.id)!.status = 'draft'; });
       } else if (name === 'send') {
         const ids = idsInput(value.ids);
         const deck = requiredText(value.deck, 'Deck').trim();
