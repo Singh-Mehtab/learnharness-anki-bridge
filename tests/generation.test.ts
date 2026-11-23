@@ -6,6 +6,7 @@ import os from 'node:os';
 import { activate } from '../src/backend.ts';
 import { FakeHost, until } from './fake-host.ts';
 import { initialState, StateStore, validateState } from '../src/anki/state.ts';
+import { packageFingerprint } from '../src/anki/apkg.ts';
 import { statementHash } from '../src/coverage/service.ts';
 import { estimateTokens, outputAllowance, pack } from '../src/writer/input.ts';
 import { writerNotesSection, writerPrompt } from '../src/writer/prompt.ts';
@@ -248,6 +249,72 @@ for (const mode of ['edit during writing', 'drop before restart'] as const) {
     } finally { await close(); }
   }));
 }
+
+test('marking an earlier draft imported does not invalidate a running request', () => withHost(async (host, directory) => {
+  const c = host.context(directory), close = await activate(c.ctx);
+  try {
+    await c.call('generationSettings', { model: { provider: 'scratch', id: 'writer' }, cardsPerNode: 1 });
+    host.catalog.models[0].maxTokens = outputAllowance(1, 1);
+    const p = await c.call('preflight', { nodeIds: ['n_a', 'n_b'] });
+    await c.call('generate', { preflightId: p.preflightId });
+    await until(() => host.workers.starts.length === 1);
+    host.workers.succeed('task-1', result(['n_a']));
+    await until(() => host.workers.starts.length === 2);
+    assert.match(host.workers.starts[1].prompt, /Earlier drafts from this run/);
+    const card = (await c.call('generationStatus')).cards[0];
+    await c.call('approve', { ids: [card.id] });
+    await c.call('markImported', { ids: [card.id], fingerprints: [packageFingerprint(card)], deck: 'Synthetic' });
+    host.workers.succeed('task-2', { targets: [{ nodeId: 'n_b', cards: [{ kind: 'fact', front: 'What type of system conserves beta?', back: 'Closed system.' }] }] });
+    await until(async () => (await c.call('generationStatus')).generations[0].status !== 'running');
+    const snap = await c.call('generationStatus');
+    assert.deepEqual(snap.generations[0].tasks.map((task: { status: string }) => task.status), ['applied', 'applied']);
+    assert.deepEqual(snap.cards.map((entry: { status: string }) => entry.status), ['imported', 'draft']);
+  } finally { await close(); }
+}));
+
+test('preflight trims optional context against the full prompt and output budget', () => withHost(async (host, directory) => {
+  const c = host.context(directory), close = await activate(c.ctx);
+  try {
+    await c.call('generationSettings', { model: { provider: 'scratch', id: 'writer' }, cardsPerNode: 1, writerNotes: 'Prefer direct wording.' });
+    const input = { nodeIds: ['n_a'] };
+    const baseline = (await c.call('preflight', input)).batches[0];
+    await c.call('draft', { nodeId: 'n_a', front: 'What distinguishes this fixture from the previous one? '.repeat(11).trim(), back: 'A narrower condition.' });
+    const withContext = (await c.call('preflight', input)).batches[0];
+    assert.ok(withContext.inputTokens > baseline.inputTokens + 5);
+    const window = baseline.inputTokens + baseline.outputAllowance + 5;
+    host.catalog.models[0].contextWindow = window;
+    const estimate = await c.call('preflight', input);
+    assert.deepEqual(estimate.skipped, []);
+    const [batch] = estimate.batches;
+    assert.equal(batch.inputTokens, baseline.inputTokens);
+    assert.ok(batch.inputTokens + batch.outputAllowance <= window);
+    await c.call('generate', { preflightId: estimate.preflightId });
+    await until(() => host.workers.starts.length === 1);
+    const worker = host.workers.starts[0];
+    assert.match(worker.prompt, /Prefer direct wording/);
+    assert.deepEqual((worker.input as WriterInput).targets[0].existingCards, []);
+  } finally { await close(); }
+}));
+
+test('tight preflight preserves the neighbour needed for a Discriminate card', () => withHost(async (host, directory) => {
+  const c = host.context(directory), close = await activate(c.ctx);
+  try {
+    host.chains = [{ id: 'link', premises: ['n_a'], conclusion: 'n_b' }];
+    host.nodes[1].statement = 'This fixture compares two assumptions. '.repeat(12).trim();
+    await c.call('generationSettings', { model: { provider: 'scratch', id: 'writer' }, cardsPerNode: 1, enabledKinds: ['discriminate'] });
+    const input = { nodeIds: ['n_a'] };
+    const [full] = (await c.call('preflight', input)).batches;
+    host.catalog.models[0].contextWindow = full.inputTokens + full.outputAllowance - 30;
+    const estimate = await c.call('preflight', input);
+    assert.deepEqual(estimate.skipped, []);
+    await c.call('generate', { preflightId: estimate.preflightId });
+    await until(() => host.workers.starts.length === 1);
+    const [target] = (host.workers.starts[0].input as WriterInput).targets;
+    assert.deepEqual(target.allowedKinds, ['discriminate']);
+    assert.deepEqual(target.neighbours.map(entry => entry.id), ['n_b']);
+    assert.deepEqual(target.feeds, []);
+  } finally { await close(); }
+}));
 
 test('preflight reserves only the context that fits and does not add requests for duplicate checking', () => withHost(async (host, directory) => {
   const c = host.context(directory), close = await activate(c.ctx);

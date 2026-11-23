@@ -66,12 +66,29 @@ test("leak checks by blank position", () => {
 
 test("Anki text field escaping", () => {
   const field = (front: string, back: string) => clozeTextField(front, back);
-  assert.equal(field("\\(\\vec{p} = {{blank}}\\)", "\\gamma m \\vec{v}"), "<p>\\[\\vec{p} = {{c1::\\gamma m \\vec{v}<!-- -->}}\\]</p>");
-  assert.equal(field("\\(\\frac{1}{\\sqrt{2}} = {{blank}}\\)", "x"), "<p>\\[\\frac{1}{\\sqrt{2}<!-- -->} = {{c1::x}}\\]</p>");
-  assert.equal(field("\\(x^{{{blank}}}\\)", "2"), "<p>\\[x^{<!-- -->{{c1::2}}<!-- -->}\\]</p>");
+  assert.equal(field("\\(\\vec{p} = {{blank}}\\)", "\\gamma m \\vec{v}"), "<p>\\[\\vec{p} = {<!-- -->{{c1::\\gamma m \\vec{v}<!-- -->}}<!-- -->}\\]</p>");
+  assert.equal(field("\\(\\frac{1}{\\sqrt{2}} = {{blank}}\\)", "x"), "<p>\\[\\frac{1}{\\sqrt{2}<!-- -->} = {<!-- -->{{c1::x}}<!-- -->}\\]</p>");
+  assert.equal(field("\\(x^{{{blank}}}\\)", "2"), "<p>\\[x^{{<!-- -->{{c1::2}}<!-- -->}<!-- -->}\\]</p>");
   assert.equal(field("a::b {{blank}}", "c::d"), "<p>a::b {{c1::c:<!-- -->:d}}</p>");
   assert.equal(field("say {{c1::x}} then {{blank}}", "y"), "<p>say {<!-- -->{c1::x}<!-- -->} then {{c1::y}}</p>");
   assert.equal(field("triple }}} {{blank}}", "y"), "<p>triple }<!-- -->}<!-- -->} {{c1::y}}</p>");
+});
+
+test("an ungrouped deletion stays one TeX argument on both faces", () => {
+  const front = String.raw`\(F = \sqrt{{blank}}\)`;
+  assert.deepEqual(clozeProblems(cloze(front, '2')), []);
+  assert.equal(questionPreview(front), String.raw`$$F = \sqrt{[...]}$$`);
+  assert.equal(answerPreview(front, '2'), String.raw`$$F = \sqrt{2}$$`);
+  const field = clozeTextField(front, '2').replaceAll('<!-- -->', '');
+  assert.equal(field.replace('{{c1::2}}', '[...]'), String.raw`<p>\[F = \sqrt{[...]}\]</p>`);
+  assert.equal(field.replace('{{c1::2}}', '2'), String.raw`<p>\[F = \sqrt{2}\]</p>`);
+  bad(String.raw`\(\left{{blank}}x\right)\)`, '(', /sizing delimiter/);
+  bad(String.raw`\(F = \{{blank}}\)`, 'alpha', /inside a TeX command/);
+  ok(String.raw`\(F = {{blank}}\)`, String.raw`\alpha`);
+  bad(String.raw`\(F = {{blank}}\)`, '\\alpha\\', /end with an unmatched backslash/);
+  bad(String.raw`\(F = {{blank}}\)`, '\\alpha\\   ', /end with an unmatched backslash/);
+  ok(String.raw`\(F = {{blank}}\)`, 'x' + '\\'.repeat(99_998));
+  bad(String.raw`\(F = {{blank}}\)`, 'x' + '\\'.repeat(99_999), /end with an unmatched backslash/);
 });
 
 const input = (cloze?: "auto" | "prefer"): WriterInput => ({
@@ -113,8 +130,8 @@ test("maths blanks are laid out as a lead-in and a display equation", () => {
   const prose = "The prefix femto- (f) means {{blank}}.";
   assert.equal(laidOutFront(prose), prose);
   assert.equal(clozeTextField("In natural units with energy in eV, \\([t] = {{blank}}\\)", "\\mathrm{eV^{-1}}"),
-    "<p>In natural units with energy in eV,</p>\n<p>\\[[t] = {{c1::\\mathrm{eV^{-1}<!-- -->}<!-- -->}}\\]</p>");
-  assert.equal(questionPreview("Rest energy: \\(E_0 = {{blank}}\\)"), "Rest energy:\n\n$$E_0 = [...]$$");
+    "<p>In natural units with energy in eV,</p>\n<p>\\[[t] = {<!-- -->{{c1::\\mathrm{eV^{-1}<!-- -->}<!-- -->}}<!-- -->}\\]</p>");
+  assert.equal(questionPreview("Rest energy: \\(E_0 = {{blank}}\\)"), "Rest energy:\n\n$$E_0 = {[...]}$$");
 });
 
 test("an equation inside bold or a link stays inline (S23)", () => {
@@ -139,10 +156,10 @@ test("assembled forbidden-content check skips maths (C6)", () => {
 });
 
 test("previews and the basic conversion used by the editor, Review and Topics", () => {
-  assert.equal(answerPreview("In SI units, \\([\\hbar] = {{blank}}\\)", "\\mathrm{J\\,s}"), "In SI units,\n\n$$[\\hbar] = \\mathrm{J\\,s}$$");
+  assert.equal(answerPreview("In SI units, \\([\\hbar] = {{blank}}\\)", "\\mathrm{J\\,s}"), "In SI units,\n\n$$[\\hbar] = {\\mathrm{J\\,s}}$$");
   assert.equal(answerPreview("The prefix femto- means {{blank}}.", "\\(10^{-15}\\)"), "The prefix femto- means **\\(10^{-15}\\)**.");
   assert.equal(answerPreview("Costs {{blank}}.", "$$5"), "Costs **$$5**.", "a replacement string is inserted literally");
-  assert.deepEqual(toBasic({ front: "In SI units, \\([\\hbar] = {{blank}}\\)", back: "\\mathrm{J\\,s}" }), { front: "In SI units, \\([\\hbar] = [...]\\)", back: "\\(\\mathrm{J\\,s}\\)" });
+  assert.deepEqual(toBasic({ front: "In SI units, \\([\\hbar] = {{blank}}\\)", back: "\\mathrm{J\\,s}" }), { front: "In SI units, \\([\\hbar] = {[...]}\\)", back: "\\(\\mathrm{J\\,s}\\)" });
   assert.deepEqual(toBasic({ front: "femto- means {{blank}}.", back: "\\(10^{-15}\\)" }), { front: "femto- means [...].", back: "\\(10^{-15}\\)" });
 });
 

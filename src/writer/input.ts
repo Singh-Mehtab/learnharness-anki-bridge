@@ -23,7 +23,7 @@ import type {
   WriterTarget,
 } from "./types.ts";
 import { FLAGGED_CARD_CAP } from "./types.ts";
-import { allowedKindsFor, capFor } from "./kinds.ts";
+import { allowedKindsFor, capFor, minimumNeighbours } from "./kinds.ts";
 
 export const SOURCE_CHAR_CAP = 1500;
 export const MAX_FEEDS = 3;
@@ -194,18 +194,25 @@ export function neighbours(graph: GraphLike, nodeId: string, limit = MAX_NEIGHBO
 /** Drop optional context until the target fits `limit` tokens: oldest
  *  existing cards, then neighbours, then feeding chains (whole, last first).
  *  Returns null when statement, concluding chains and source alone don't fit. */
-export function trimToFit(target: WriterTarget, limit: number): WriterTarget | null {
+export function trimToFit(target: WriterTarget, limit: number, minNeighbours = 0): WriterTarget | null {
+  return trimTarget(target, candidate => estimateTokens(JSON.stringify(candidate)) <= limit, minNeighbours);
+}
+
+export function trimTarget(target: WriterTarget, fits: (candidate: WriterTarget) => boolean, minNeighbours = 0): WriterTarget | null {
   const t: WriterTarget = {
     ...target,
     feeds: [...target.feeds],
     neighbours: [...target.neighbours],
     existingCards: [...target.existingCards],
   };
-  const size = () => estimateTokens(JSON.stringify(t));
-  while (size() > limit && t.existingCards.length) t.existingCards.pop();
-  while (size() > limit && t.neighbours.length) t.neighbours.pop();
-  while (size() > limit && t.feeds.length) t.feeds.pop();
-  return size() > limit ? null : t;
+  if (fits(t)) return t;
+  for (const [optional, keep] of [[t.existingCards, 0], [t.neighbours, minNeighbours], [t.feeds, 0]] as const) {
+    while (optional.length > keep) {
+      optional.pop();
+      if (fits(t)) return t;
+    }
+  }
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -273,7 +280,7 @@ export function pack(
     }
     let tokens = estimateTokens(JSON.stringify(target));
     if (tokens > ceiling) {
-      const trimmed = trimToFit(target, ceiling);
+      const trimmed = trimToFit(target, ceiling, minimumNeighbours(target, enabledKinds));
       if (!trimmed) {
         skipped.push({
           nodeId,

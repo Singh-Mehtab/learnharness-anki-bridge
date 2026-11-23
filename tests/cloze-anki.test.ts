@@ -38,6 +38,9 @@ async function fixture() {
         models.set(params.modelName, { fields: [...params.inOrderFields], css: params.css, isCloze: params.isCloze, templates: { [t.Name]: { Front: t.Front, Back: t.Back } } });
         result = { id: models.size, name: params.modelName };
       } else if (action === 'modelFieldNames') result = model(params.modelName).fields;
+      else if (action === 'findModelsByName') result = (params.modelNames as string[]).map(name => {
+        const m = model(name); return { name, type: m.isCloze ? 1 : 0, css: m.css };
+      });
       else if (action === 'modelStyling') result = { css: model(params.modelName).css };
       else if (action === 'modelTemplates') result = model(params.modelName).templates;
       else if (action === 'modelFieldAdd') model(params.modelName).fields.push(params.fieldName);
@@ -102,6 +105,7 @@ test('FI-8: a cloze card whose LH_ID finds a basic note reports a conflict and s
     // A basic package was imported in Anki without Mark as imported, then the card was switched.
     const existing: Note = { noteId: 9, fields: { Front: '<p>old</p>', Back: 'x', LH_ID: card }, deckName: 'Scratch', modelName: 'LearnHarness Basic', tags: [] };
     f.notes.push(structuredClone(existing));
+    f.models.set(existing.modelName, { isCloze: false, fields: Object.keys(existing.fields), css: '', templates: {} });
     const result = await f.send([card]);
     assert.deepEqual(result.delivery.failed, [card]);
     assert.deepEqual(result.delivery.found, []);
@@ -113,6 +117,7 @@ test('FI-8: a cloze card whose LH_ID finds a basic note reports a conflict and s
     assert.deepEqual(f.notes, [existing]);
     // A matching cloze note is adopted as before.
     f.notes[0] = { ...existing, fields: { Text: 'x', LH_ID: card }, modelName: CLOZE_MODEL_NAME };
+    f.models.set(CLOZE_MODEL_NAME, { isCloze: true, fields: ['Text', 'LH_ID'], css: CLOZE_CSS, templates: {} });
     assert.deepEqual((await f.send([card])).delivery.found, [card]);
   } finally { await f.close(); }
 });
@@ -125,10 +130,12 @@ test('FI-8 (round 1, S1): a note of the other plugin type is refused even with a
     // LearnHarness Basic with a Text field added by hand is still a basic note.
     const existing: Note = { noteId: 9, fields: { Front: '<p>old</p>', Back: 'x', Text: '', LH_ID: card }, deckName: 'Scratch', modelName: 'LearnHarness Basic', tags: [] };
     f.notes.push(structuredClone(existing));
+    f.models.set(existing.modelName, { isCloze: false, fields: Object.keys(existing.fields), css: '', templates: {} });
     assert.deepEqual((await f.send([card])).delivery.failed, [card]);
     assert.match(f.store.snapshot().cards[0]!.lastError!, /already in Anki as a basic note/);
     f.notes[0]!.modelName = 'Renamed Basic';
-    assert.deepEqual((await f.send([card])).delivery.failed, [card], 'an ambiguous renamed model must not be adopted as cloze');
+    f.models.set('Renamed Basic', { isCloze: false, fields: Object.keys(existing.fields), css: '', templates: {} });
+    assert.deepEqual((await f.send([card])).delivery.failed, [card], 'a renamed Basic model must not be adopted as cloze');
     // An interrupted send whose LH_ID now finds the basic note is not marked as delivered.
     const state = structuredClone(f.store.snapshot());
     Object.assign(state.cards[0]!, { status: 'sending', destination: state.destination, deck: 'Scratch', lastError: undefined });
@@ -137,8 +144,43 @@ test('FI-8 (round 1, S1): a note of the other plugin type is refused even with a
     const saved = f.store.snapshot().cards[0]!;
     assert.equal(saved.status, 'failed');
     assert.equal(saved.noteId, undefined);
-    assert.match(saved.lastError!, /Cannot verify/);
+    assert.match(saved.lastError!, /already in Anki as a basic note/);
     assert.equal(f.calls.filter(c => c.action === 'addNote').length, 0);
+  } finally { await f.close(); }
+});
+
+test('a Basic model named LearnHarness Cloze cannot be adopted as Cloze or used for writes', async () => {
+  const f = await fixture();
+  try {
+    const id = await f.draft(HBAR);
+    await f.service.command('approve', { ids: [id] });
+    const fields = ['Text', 'Extra', 'Source', 'LH_ID', 'LH_Node'];
+    f.models.set(CLOZE_MODEL_NAME, { isCloze: false, fields, css: CLOZE_CSS, templates: {} });
+    f.notes.push({ noteId: 9, modelName: CLOZE_MODEL_NAME, fields: { Text: 'Old Basic card', LH_ID: id }, deckName: 'Scratch', tags: [] });
+    assert.deepEqual((await f.send([id])).delivery.failed, [id]);
+    assert.match(f.store.snapshot().cards[0]!.lastError!, /already in Anki as a basic note/);
+    f.notes.length = 0;
+    await assert.rejects(f.send([id]), /expected Anki note type/);
+    assert.equal(f.calls.filter(c => c.action === 'addNote').length, 0);
+  } finally { await f.close(); }
+});
+
+test('an interrupted Cloze delivery reconciles after a note type rename', async () => {
+  const f = await fixture();
+  try {
+    const id = await f.draft(HBAR);
+    await f.service.command('approve', { ids: [id] });
+    await f.send([id]);
+    const state = structuredClone(f.store.snapshot());
+    Object.assign(state.cards[0]!, { status: 'sending', noteId: undefined, presence: undefined });
+    await f.store.replace(state);
+    f.models.set('Renamed Cloze', f.models.get(CLOZE_MODEL_NAME)!);
+    f.models.delete(CLOZE_MODEL_NAME);
+    f.notes[0]!.modelName = 'Renamed Cloze';
+    await f.service.command('reconcile');
+    assert.equal(f.store.snapshot().cards[0]!.noteId, f.notes[0]!.noteId);
+    assert.equal(f.store.snapshot().cards[0]!.status, 'sent');
+    assert.equal(f.notes.length, 1);
   } finally { await f.close(); }
 });
 
@@ -197,8 +239,10 @@ test('round 3 S9 and S10: ambiguous renamed cloze is not adopted as basic; incon
     const card = await f.draft({ kind: 'fact', front: 'Question?', back: 'Answer' });
     await f.service.command('approve', { ids: [card] });
     f.notes.push({ noteId: 9, fields: { Front: 'x', Text: '{{c1::x}}', LH_ID: card }, deckName: 'Scratch', modelName: 'Renamed Cloze', tags: [] });
+    await assert.rejects(f.send([card]), /model was not found/);
+    f.models.set('Renamed Cloze', { isCloze: true, fields: ['Front', 'Text', 'LH_ID'], css: '', templates: {} });
     assert.deepEqual((await f.send([card])).delivery.failed, [card]);
-    assert.match(f.store.snapshot().cards[0]!.lastError!, /Cannot verify the existing Anki note type/);
+    assert.match(f.store.snapshot().cards[0]!.lastError!, /already in Anki as a cloze note/);
     const state = structuredClone(f.store.snapshot());
     Object.assign(state.cards[0]!, { status: 'sending', destination: state.destination, deck: 'Scratch' });
     await f.store.replace(state);

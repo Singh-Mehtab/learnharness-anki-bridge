@@ -1333,7 +1333,7 @@ test("FI-8: a cloze card previews as a question with [...], and the editor switc
     f.button("Switch to basic", rows()[0]).click(); await tick();
     const front = () => rows()[0].querySelector("textarea") as HTMLTextAreaElement;
     assert.equal(front().getAttribute("aria-label"), "Front");
-    assert.equal(front().value, "In SI units, \\([\\hbar] = [...]\\)");
+    assert.equal(front().value, "In SI units, \\([\\hbar] = {[...]}\\)");
     assert.equal((rows()[0].querySelectorAll("textarea")[1] as HTMLTextAreaElement).value, "\\(\\mathrm{J\\,s}\\)");
     f.button("Switch to cloze", rows()[0]).click(); await tick();
     assert.equal(front().value, "In SI units, \\([\\hbar] = {{blank}}\\)");

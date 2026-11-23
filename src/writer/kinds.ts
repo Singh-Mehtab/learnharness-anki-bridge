@@ -21,3 +21,7 @@ export const capFor = (target: Pick<WriterTarget, "maxCards">, maxCardsPerNode: 
 
 export const allowedKindsFor = (target: KindContext, enabled: readonly CardKind[]): CardKind[] =>
   enabled.filter((k) => !kindMisfit(k, target));
+
+/** The last neighbour is not optional if it is the only way to write any card. */
+export const minimumNeighbours = (target: KindContext, enabled: readonly CardKind[]): number =>
+  target.neighbours.length && !allowedKindsFor({ ...target, neighbours: [] }, enabled).length ? 1 : 0;

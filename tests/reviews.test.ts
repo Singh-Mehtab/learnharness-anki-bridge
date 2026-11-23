@@ -6,6 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { AnkiClient } from '../src/anki/client.ts';
 import { REVIEW_READ_ACTIONS, ReviewReader } from '../src/anki/review-reader.ts';
+import { CLOZE_CSS } from '../src/anki/note-type.ts';
 import { initialState, StateStore } from '../src/anki/state.ts';
 import type { Card, State } from '../src/anki/state.ts';
 import { ReviewService, REVIEW_BATCH } from '../src/reviews/service.ts';
@@ -133,6 +134,40 @@ test('unrelated notes, other profiles, drafts, changed notes and wrong note type
     assert.deepEqual(asked.sort(), [1000, 1003, 1004], 'only notes sent to the paired profile are requested');
     const cards = t.anki.state.requests.filter(r => r.action === 'cardsInfo' || r.action === 'getReviewsOfCards').flatMap(r => r.params.cards);
     assert.deepEqual([...new Set(cards)], [2000], 'cards of changed or unrelated notes are never read');
+    allowedOnly(t.anki.actions());
+  } finally { await t.cleanup(); }
+});
+
+test('review checks accept a renamed owned Cloze model of the right native type', async () => {
+  const t = await setup([
+    { node: 'node-a', format: 'cloze', front: 'The conserved quantity is {{blank}}.' },
+    { node: 'node-b', format: 'cloze', front: 'This fixture is {{blank}}.' },
+  ], ids => [
+    { noteId: 1000, lhId: ids[0]!, modelName: 'Renamed Cloze', cards: [{ cardId: 2000, lapses: 3, reps: 8 }] },
+    { noteId: 1001, lhId: ids[1]!, modelName: 'LearnHarness Cloze', cards: [{ cardId: 2001, lapses: 6, reps: 8 }] },
+  ]);
+  try {
+    t.anki.state.models.set('Renamed Cloze', { type: 1, css: CLOZE_CSS });
+    t.anki.state.models.set('LearnHarness Cloze', { type: 0, css: CLOZE_CSS });
+    const { check } = await t.call('checkReviews', { expectedDestination: t.destination });
+    assert.deepEqual(check!.topics.map(topic => topic.nodeId), ['node-a']);
+    assert.equal(check!.counts.checked, 1);
+    assert.equal(check!.counts.changed, 1);
+    allowedOnly(t.anki.actions());
+  } finally { await t.cleanup(); }
+});
+
+test('malformed native model metadata fails a review instead of counting changed notes', async () => {
+  const t = await setup([{ node: 'node-a' }], ids => [
+    { noteId: 1000, lhId: ids[0]!, cards: [{ cardId: 2000, lapses: 4, reps: 8 }] },
+  ]);
+  try {
+    for (const malformed of [{}, [], [{ name: 'LearnHarness Basic', type: 'basic', css: '' }]]) {
+      t.anki.state.raw.set('findModelsByName', malformed);
+      await assert.rejects(t.call('checkReviews', { expectedDestination: t.destination }), /AnkiConnect returned unexpected note type metadata/);
+      assert.equal((await t.call('lastReviewCheck')).check, null);
+    }
+    assert.ok(!t.anki.actions().includes('cardsInfo'));
     allowedOnly(t.anki.actions());
   } finally { await t.cleanup(); }
 });
@@ -281,7 +316,7 @@ test('the reader refuses every action outside the allowlist before any request',
     await assert.rejects(reader.call(action), /may not call/);
   }
   assert.deepEqual(sent, []);
-  assert.deepEqual([...REVIEW_READ_ACTIONS].sort(), ['cardsInfo', 'getActiveProfile', 'getReviewsOfCards', 'notesInfo', 'version']);
+  assert.deepEqual([...REVIEW_READ_ACTIONS].sort(), ['cardsInfo', 'findModelsByName', 'getActiveProfile', 'getReviewsOfCards', 'notesInfo', 'version']);
 });
 
 test('signal thresholds and the 30-day window', () => {

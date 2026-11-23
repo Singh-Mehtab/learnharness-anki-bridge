@@ -2,7 +2,7 @@ import type { AnkiClient } from './client.ts';
 
 /** The only AnkiConnect actions a review check may send. All of them read; none
  * writes, schedules, tags, suspends or opens Anki windows (docs/fi-1-weak-spots-design.md). */
-export const REVIEW_READ_ACTIONS: ReadonlySet<string> = new Set(['version', 'getActiveProfile', 'notesInfo', 'cardsInfo', 'getReviewsOfCards']);
+export const REVIEW_READ_ACTIONS: ReadonlySet<string> = new Set(['version', 'getActiveProfile', 'notesInfo', 'findModelsByName', 'cardsInfo', 'getReviewsOfCards']);
 
 /** Wraps a client so a review check cannot reach any other action, even by mistake. */
 export class ReviewReader {

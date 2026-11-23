@@ -195,6 +195,7 @@ test('package fields and tags match what AnkiConnect delivery sends for the same
     const results: Record<string, () => unknown> = {
       version: () => 6, getActiveProfile: () => 'Throwaway', deckNames: () => ['Default'], modelNames: () => fields.length ? [MODEL_NAME] : [],
       createModel: () => { fields = [...params.inOrderFields]; return { id: 1, name: MODEL_NAME }; }, modelFieldNames: () => fields, modelStyling: () => ({ css: CSS }),
+      findModelsByName: () => [{ name: MODEL_NAME, type: 0, css: CSS }],
       createDeck: () => 1, findNotes: () => [], addNote: () => { added.push(params.note); return 1000 + added.length; },
     };
     if (!results[action]) throw new Error(`Unexpected action ${action}`);

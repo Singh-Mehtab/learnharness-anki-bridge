@@ -5,17 +5,17 @@ import type { ModelCatalogEntry } from '../../sdk/src/core/contracts/models.d.ts
 import { StateStore } from '../anki/state.ts';
 import { DeliveryService } from '../anki/delivery.ts';
 import { renderMarkdown } from '../anki/render.ts';
-import { pack, sourcePassage, estimateTokens, targetsAllowance } from '../writer/input.ts';
+import { pack, sourcePassage, estimateTokens, targetsAllowance, trimTarget } from '../writer/input.ts';
 import { writerInstructions, writerPrompt } from '../writer/prompt.ts';
 import { resultSchemaFor } from '../writer/schema.ts';
 import { validateResult } from '../writer/validate.ts';
 import { clozeCardProblems } from '../writer/cloze.ts';
-import { capFor } from '../writer/kinds.ts';
+import { allowedKindsFor, capFor, minimumNeighbours } from '../writer/kinds.ts';
 import { CORE_KINDS, isCoreKind, isStoredKind } from '../writer/types.ts';
 import type { Batch } from '../writer/input.ts';
 import type { WriterInput, WriterResult } from '../writer/types.ts';
 import { activeCloze, MAX_BATCH_CONTEXT_TOKENS, normaliseWriterNotes, validGenerationSettings, WRITER_NOTES_LIMIT } from './types.ts';
-import { batchContext } from './batch-context.ts';
+import { replayBatchContext, selectBatchContext } from './batch-context.ts';
 import type { Generation, GenerationSettings, GenerationTask, SourceSnapshot } from './types.ts';
 import { graphCoverage, statementHash } from '../coverage/service.ts';
 import { MAX_SELECTED_NODES } from '../coverage/flow.ts';
@@ -186,7 +186,7 @@ export class GenerationService {
       const stored = generation.tasks.find(t => t.requestId === requestId)!;
       if (stored.status === 'applied') return;
       // A changed draft may have suppressed a card even if the target still got other cards.
-      if (stored.batchContextDigest && stored.batchContextDigest !== digest(batchContext(generation, stored, s.cards))) {
+      if (stored.batchContextDigest && stored.batchContextDigest !== digest(replayBatchContext(generation, stored, s.cards))) {
         stored.taskId = worker.id; stored.status = 'failed'; delete stored.resultPending;
         stored.error = 'An earlier draft used to check for repeats changed while writing. Retry requires a new estimate.';
         return;
@@ -278,9 +278,14 @@ export class GenerationService {
       for (const target of original.input.targets) {
         const next = batch({ ...current, targets: [...current.targets, target] });
         if (current.targets.length && !fits(next)) { batches.push(batch(current)); current = { ...current, targets: [] }; }
-        const alone = batch({ ...current, targets: [...current.targets, target] });
-        if (!fits(alone)) skipped.push({ nodeId: target.nodeId, reason: 'Model limits cannot fit this target, prompt and reserved output.' });
-        else current = alone.input;
+        if (fits(next)) { current = next.input; continue; }
+        const withKinds = (candidate: typeof target) => ({ ...candidate, allowedKinds: allowedKindsFor(candidate, settings.enabledKinds) });
+        const trimmed = trimTarget(target, candidate => {
+          const node = withKinds(candidate);
+          return node.allowedKinds.length > 0 && fits(batch({ ...current, targets: [node] }));
+        }, minimumNeighbours(target, settings.enabledKinds));
+        if (!trimmed) skipped.push({ nodeId: target.nodeId, reason: 'Model limits cannot fit this target, prompt and reserved output.' });
+        else current = { ...current, targets: [withKinds(trimmed)] };
       }
       if (current.targets.length) batches.push(batch(current));
     }
@@ -452,9 +457,12 @@ export class GenerationService {
         if (generation.status !== 'running') return;
         const t = generation.tasks.find(t => t.status === 'pending');
         if (!t) { await this.finish(id); return; }
-        const earlierDrafts = t.batchContextTokens ? batchContext(generation, t, this.store.snapshot().cards) : '';
+        const { prompt: earlierDrafts, ids } = selectBatchContext(generation, t, this.store.snapshot().cards);
         // Record what the model saw before acceptance, so recovery after a crash can check it too.
-        if (earlierDrafts) await this.patch(id, t.requestId, { batchContextDigest: digest(earlierDrafts) });
+        if (earlierDrafts || t.batchContextDigest) await this.patch(id, t.requestId, {
+          batchContextDigest: earlierDrafts ? digest(earlierDrafts) : undefined,
+          batchContextCardIds: earlierDrafts ? ids : undefined,
+        });
         this.active();
         let w: PluginTaskSnapshot;
         try {
