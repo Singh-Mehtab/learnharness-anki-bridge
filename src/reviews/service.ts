@@ -7,14 +7,16 @@ import { ReviewReader } from '../anki/review-reader.ts';
 import { sameDestination } from '../anki/destination.ts';
 import type { Card, Destination, StateStore } from '../anki/state.ts';
 import { buildTopics, REVIEW_RULES } from './signals.ts';
+import { PRACTICE_LIMIT } from './practice-start.ts';
 import type { CardInfo, GraphInfo, NoteReading, ReviewCheck, ReviewRow } from './signals.ts';
 
 export const REVIEW_OPERATIONS = ['checkReviews', 'lastReviewCheck', 'clearReviewCheck'] as const;
+export interface PracticeNodes { propositions: { id: string; name: string; statement: string }[]; missing: string[] }
 /** Unmeasured guesses. cardsInfo is the heaviest call on 26.10.11.0, which renders each card. */
 export const REVIEW_BATCH = { notes: 50, cards: 25, reviews: 50 } as const;
 
 interface GraphSource {
-  graph(): { propositions: readonly { id: string }[]; nodeSessions: Record<string, string[]>; sessions: Record<string, string> };
+  graph(): { propositions: readonly { id: string; name?: string; statement?: string }[]; nodeSessions: Record<string, string[]>; sessions: Record<string, string> };
   listSessions?(): readonly { id: string; createdAt: string }[];
 }
 const record = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -64,6 +66,29 @@ export class ReviewService {
     const { destination, settings } = this.store.snapshot();
     if (this.last && (!sameDestination(this.last.destination, destination) || settings.url !== this.last.destination.url)) this.last = undefined;
     return this.last ?? null;
+  }
+  /** Current graph text for flagged ideas the user ticked. Reads memory and the graph only, never Anki. */
+  practiceNodes(input: unknown): PracticeNodes {
+    this.active();
+    if (!record(input) || Object.keys(input).some(k => k !== 'nodeIds') || !Array.isArray(input.nodeIds) || !input.nodeIds.every(id => typeof id === 'string' && id)) {
+      throw new Error('Expected a list of node IDs.');
+    }
+    const ids = [...new Set(input.nodeIds as string[])];
+    if (!ids.length) throw new Error('Select at least one idea to practise.');
+    if (ids.length > PRACTICE_LIMIT) throw new Error(`Select up to ${PRACTICE_LIMIT} ideas.`);
+    // Only ideas in the result on screen: a cleared or re-paired check can't start a session.
+    const flagged = new Set(this.current()?.topics.map(t => t.nodeId));
+    if (ids.some(id => !flagged.has(id))) throw new Error('The review results changed. Check Anki reviews again.');
+    let nodes: ReturnType<GraphSource['graph']>['propositions'];
+    try { nodes = this.learning.graph().propositions; } catch { throw new Error("Couldn't read the LearnHarness graph. Try again."); }
+    const byId = new Map(nodes.map(n => [n.id, n]));
+    const result: PracticeNodes = { propositions: [], missing: [] };
+    for (const id of ids) {
+      const n = byId.get(id);
+      if (n && typeof n.name === 'string' && typeof n.statement === 'string') result.propositions.push({ id, name: n.name, statement: n.statement });
+      else result.missing.push(id);
+    }
+    return result;
   }
   async command(name: string, input: unknown = {}): Promise<{ check: ReviewCheck | null; running: boolean }> {
     this.active();

@@ -21,7 +21,7 @@ const tick = async () => { for (let i = 0; i < 8; i++) await new Promise<void>(r
 const settle = async (until: () => boolean) => { for (let i = 0; i < 200 && !until(); i++) await new Promise<void>(r => setTimeout(r, 5)); };
 
 /** Real ReviewService and a fake AnkiConnect behind a fake host, so the page drives the actual backend. */
-async function setup(options: { paired?: boolean; deferSessionButtons?: boolean; duplicateSessionTitles?: boolean } = {}) {
+async function setup(options: { paired?: boolean; deferSessionButtons?: boolean; duplicateSessionTitles?: boolean; onlyNodes?: string[] } = {}) {
   const directory = await mkdtemp(path.join(os.tmpdir(), "anki-bridge-topics-ui-"));
   const ids = [randomUUID(), randomUUID(), randomUUID(), randomUUID()];
   const anki = await fakeAnkiConnect({ notes: [
@@ -41,7 +41,7 @@ async function setup(options: { paired?: boolean; deferSessionButtons?: boolean;
     cards: [card(0, "node-r", "Nuclear radius", "What is $R_0$?"), card(1, "node-f", "Femto prefix", "What does femto denote?", "chat-2"), card(2, "node-x", "Gone", "Deleted"), card(3, "node-y", "Changed", "Edited")] };
   await store.replace(state);
   const graph = () => ({
-    propositions: [{ id: "node-r" }, { id: "node-f" }],
+    propositions: [{ id: "node-r", name: "Nuclear radius", statement: "Nuclear radius varies with mass number." }, { id: "node-f", name: "Femto prefix", statement: "Femto means 10^-15." }].filter(n => !options.onlyNodes || options.onlyNodes.includes(n.id)),
     nodeSessions: { "node-r": options.duplicateSessionTitles ? ["chat-1", "chat-3", "chat-4"] : ["chat-1"], "node-f": options.duplicateSessionTitles ? ["chat-5"] : [] },
     sessions: { "chat-1": "Nuclear lecture", "chat-2": options.duplicateSessionTitles ? "Nuclear lecture" : "Prefixes workshop", "chat-3": "Nuclear  lecture" },
   });
@@ -79,6 +79,7 @@ async function setup(options: { paired?: boolean; deferSessionButtons?: boolean;
     call: async (name: string, input: any) => {
       calls.push(name);
       if (["checkReviews", "lastReviewCheck", "clearReviewCheck"].includes(name)) return service.command(name, input ?? {});
+      if (name === "practiceNodes") return service.practiceNodes(input ?? {});
       if (name === "snapshot" || name === "settings") {
         if (name === "settings") tagTemplate = input.tagTemplate;
         const s = store.snapshot(); const wait = hold; if (wait) await wait;
@@ -602,5 +603,69 @@ test("round 4 S2: a reload begun before Clear cannot bring the cleared result ba
     release(); await tick();
     assert.equal(t.container.querySelectorAll(".ab-topic").length, 0);
     assert.match(t.text(), /Not checked yet/);
+  } finally { await t.cleanup(); }
+});
+
+test("#52: Practise selected starts a Practice session with only the ticked ideas and opens it", async () => {
+  const t = await setup();
+  const original = globalThis.fetch;
+  const requests: { url: string; body?: any }[] = [];
+  let create = () => new Response(JSON.stringify({ id: "chat_new" }));
+  globalThis.fetch = (async (url: string, init?: RequestInit) => {
+    if (!String(url).startsWith("/api/chats")) return original(url, init);
+    requests.push({ url, body: init?.body ? JSON.parse(String(init.body)) : undefined });
+    if (url === "/api/chats") return create();
+    const propositions = requests.find(r => r.url === "/api/chats")!.body.graphContext.propositions;
+    return new Response(JSON.stringify({ kind: "practice", messages: [{ customType: "graph-context", details: { propositions } }] }));
+  }) as typeof fetch;
+  try {
+    await t.mountReviews();
+    assert.equal(t.find(/^Practise selected/), undefined, "nothing to practise before a check");
+    await t.click("Check Anki reviews");
+    await settle(() => !!t.container.querySelector(".ab-topic"));
+    assert.match(t.text(), /Practice gets the ideas, not their review counts/);
+    const practise = () => t.find(/^Practise selected/)!;
+    assert.equal(practise().disabled, true, "nothing ticked yet");
+    const boxes = Array.from(t.container.querySelectorAll('.ab-topic input[type="checkbox"]') as ArrayLike<HTMLInputElement>);
+    assert.deepEqual(boxes.map(b => b.getAttribute("aria-label")), ["Select Femto prefix for Practice", "Select Nuclear radius for Practice"]);
+    assert.ok(boxes.every(b => !b.checked), "nothing is preselected");
+    const ankiBefore = t.anki.state.requests.length;
+
+    // A host refusal keeps the selection and explains the fallback.
+    create = () => new Response("{}", { status: 404 });
+    boxes[1]!.click(); await tick();
+    assert.equal(practise().textContent, "Practise selected (1)");
+    await t.click(/^Practise selected/); await tick();
+    assert.match(t.text(), /HTTP 404.*Practice → Pick nodes instead/);
+    assert.deepEqual(t.sessions, []);
+    assert.equal(t.find(/^Practise selected/)!.textContent, "Practise selected (1)");
+
+    create = () => new Response(JSON.stringify({ id: "chat_new" }));
+    requests.length = 0;
+    await t.click(/^Practise selected/); await settle(() => t.sessions.length > 0);
+    assert.deepEqual(requests[0], { url: "/api/chats", body: { title: "Practice: Nuclear radius", kind: "practice",
+      graphContext: { propositions: [{ id: "node-r", name: "Nuclear radius", statement: "Nuclear radius varies with mass number." }] } } });
+    assert.deepEqual(t.sessions, ["chat_new"]);
+    assert.doesNotMatch(JSON.stringify(requests), /lapse|leech|Again|What is/, "no Anki evidence or card text reaches Practice");
+    assert.equal(t.anki.state.requests.length, ankiBefore, "starting Practice sends nothing to Anki");
+    assert.ok(Array.from(t.container.querySelectorAll('.ab-topic input[type="checkbox"]') as ArrayLike<HTMLInputElement>).every(b => !b.checked), "selection clears after opening");
+  } finally { globalThis.fetch = original; await t.cleanup(); }
+});
+
+test("#52: ideas missing from the graph can't be ticked, and Clear drops the selection", async () => {
+  const t = await setup({ onlyNodes: ["node-f"] });
+  try {
+    await t.mountReviews();
+    await t.click("Check Anki reviews");
+    await settle(() => !!t.container.querySelector(".ab-topic"));
+    const radius = t.container.querySelector('[data-node-id="node-r"]') as HTMLElement;
+    assert.match(radius.textContent!, /Missing from this graph read/);
+    assert.equal(radius.querySelector('input[type="checkbox"]'), null);
+    (t.container.querySelector('[data-node-id="node-f"] input[type="checkbox"]') as HTMLInputElement).click(); await tick();
+    assert.equal(t.find(/^Practise selected/)!.textContent, "Practise selected (1)");
+    await t.click("Clear");
+    const dialogConfirm = Array.from(t.doc.querySelectorAll("button") as ArrayLike<HTMLButtonElement>).filter(b => b.textContent === "Clear").pop()!;
+    dialogConfirm.click(); await settle(() => /Not checked yet/.test(t.text()));
+    assert.equal(t.find(/^Practise selected/), undefined);
   } finally { await t.cleanup(); }
 });

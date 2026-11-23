@@ -101,6 +101,8 @@ Open the **Check Anki reviews** tab and press **Check Anki reviews**. Anki Bridg
 
 Each topic lists its cards with their lapses, reviews, recent Again dates and deck. **Open session** goes to the session the idea came from, and **Show in Anki** opens the card. A topic on the list may mean the card is badly worded, not that you don't know it. Results stay in memory until you press **Clear**, change the Anki address, key or profile, or close LearnHarness. They are not saved, added to your graph or sent to a model.
 
+To practise topics from the list, tick them and press **Practise selected**. Anki Bridge starts a LearnHarness Practice session with those ideas attached and opens it, the same as picking them in **Practice → Pick nodes**. Type your first message there. Practice gets each idea's name and statement from your graph, not its review counts or cards. Nothing is preselected, and topics missing from your graph can't be ticked.
+
 ![Two review-check results, each with a card, review counts, Open session and Show in Anki.](docs/images/readme/topics.png)
 
 ## Install
@@ -146,10 +148,11 @@ From then on, the plugin checks the profile before every send and review check, 
 | Changed in Anki on request | Missing fields, styling and templates for the selected LearnHarness note type | Only when you confirm a repair or reset in Settings |
 | Read from Anki | The open profile, deck names and tags, the note type, and the notes Anki Bridge sent, to check they still exist | Profile, decks and tags when **Make cards** is first shown. The rest when you send, when you run a check from the **More** menu, and when LearnHarness starts with an unconfirmed send. |
 | Read for review checks | Lapses, reviews, review logs, fields, tags, deck and suspended status of the notes Anki Bridge sent to the paired profile | Only when you press **Check Anki reviews** |
+| Sent to LearnHarness | The name and statement of each idea you ticked, to start a Practice session | When you press **Practise selected** |
 | Saved to a file | Approved cards, their source names and their Anki Bridge and LearnHarness IDs, in an `.apkg` package | When you press **Download .apkg**. Neither Anki nor your model is contacted. |
 | Never changed | Existing note content, scheduling and review history | Never |
 
-If you set an API key, it goes with every AnkiConnect request. By default each note also gets the tags `learnharness` and `learnharness::kind::<type>`, so you can find plugin cards in Anki. Contrast cards use the type name `discriminate`. You can turn these tags off in settings. Drafts, flags and send records stay in the plugin's own data folder inside LearnHarness. Your LearnHarness graph and sessions are read, never changed.
+If you set an API key, it goes with every AnkiConnect request. By default each note also gets the tags `learnharness` and `learnharness::kind::<type>`, so you can find plugin cards in Anki. Contrast cards use the type name `discriminate`. You can turn these tags off in settings. Drafts, flags and send records stay in the plugin's own data folder inside LearnHarness. Your LearnHarness graph and existing sessions are read, never changed. **Practise selected** creates a new Practice session.
 
 ## Limitations
 
@@ -159,12 +162,12 @@ If you set an API key, it goes with every AnkiConnect request. By default each n
 - Tested in daily use on macOS with LearnHarness 0.6.1, a live model and Anki, including importing downloaded packages. Windows and Linux have not been tested.
 - Sending and review checks need Anki Desktop open with AnkiConnect. Don't switch Anki profiles during a send, because AnkiConnect cannot check the profile and write in a single step.
 - An optional AnkiConnect API key is stored in plain text in the plugin's data folder.
+- **Practise selected** sends the same request as LearnHarness's own Pick nodes. The plugin API has no documented way to start a session, so a future LearnHarness update could break it. If that happens, Anki Bridge shows an error and you can pick the ideas in **Practice → Pick nodes** instead. Tested with LearnHarness 0.7.0.
 
 ## Roadmap
 
 - Test on Windows and on newer LearnHarness versions.
 - Check card quality on subjects the writer was not tuned on.
-- An idea for later: practice sessions aimed at topics to revisit.
 
 ## Questions
 

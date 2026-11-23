@@ -224,6 +224,7 @@
 .anki-bridge .ab-topics-head { margin-bottom: 8px; }
 .anki-bridge .ab-topics-privacy { margin: 0 0 12px; max-width: 72ch; }
 .anki-bridge .ab-topics-summary { margin: 12px 0; }
+.anki-bridge .ab-topics-practise { margin: 0 0 12px; max-width: 72ch; }
 .anki-bridge .ab-topic-list { display: grid; gap: 16px; }
 .anki-bridge .ab-topic h3 { font-size: 14px; font-weight: 600; margin: 0; }
 .anki-bridge .ab-topic-body { display: grid; gap: 12px; padding: 12px 14px; }

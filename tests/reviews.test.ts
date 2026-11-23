@@ -484,3 +484,37 @@ test('FI-8: a cloze card matches only a LearnHarness Cloze note, and its evidenc
     allowedOnly(t.anki.actions());
   } finally { await t.cleanup(); }
 });
+
+test('#52: practiceNodes returns current graph text for flagged ideas only, without contacting Anki', async () => {
+  let nodes: { id: string; name?: string; statement?: string }[] = [
+    { id: 'node-a', name: 'Radius', statement: 'R grows as A to the one third.' },
+    { id: 'node-b', name: 'Femto', statement: 'Femto is 10^-15.' },
+    { id: 'node-c', name: 'Quiet', statement: 'Not flagged.' },
+  ];
+  const t = await setup([{ node: 'node-a' }, { node: 'node-b' }, { node: 'node-c' }], ids => [
+    { noteId: 1000, lhId: ids[0]!, cards: [{ cardId: 2000, lapses: 4 }] },
+    { noteId: 1001, lhId: ids[1]!, tags: ['leech'], cards: [{ cardId: 2001 }] },
+    { noteId: 1002, lhId: ids[2]!, cards: [{ cardId: 2002, lapses: 0, reps: 5 }] },
+  ], { graph: () => ({ propositions: nodes, nodeSessions: {}, sessions: {} }) });
+  try {
+    assert.throws(() => t.service.practiceNodes({ nodeIds: ['node-a'] }), /review results changed/);
+    await t.call('checkReviews', { expectedDestination: t.destination });
+    const before = t.anki.actions().length, bytes = await t.bytes();
+    assert.deepEqual(t.service.practiceNodes({ nodeIds: ['node-b', 'node-a', 'node-b'] }), { propositions: [
+      { id: 'node-b', name: 'Femto', statement: 'Femto is 10^-15.' },
+      { id: 'node-a', name: 'Radius', statement: 'R grows as A to the one third.' },
+    ], missing: [] });
+    // Unflagged or unknown ideas can't start a session from here.
+    assert.throws(() => t.service.practiceNodes({ nodeIds: ['node-c'] }), /review results changed/);
+    // The graph is read now: renamed text wins, deleted ideas come back as missing.
+    nodes = [{ id: 'node-a', name: 'Nuclear radius', statement: 'Updated.' }];
+    assert.deepEqual(t.service.practiceNodes({ nodeIds: ['node-a', 'node-b'] }), { propositions: [{ id: 'node-a', name: 'Nuclear radius', statement: 'Updated.' }], missing: ['node-b'] });
+    for (const bad of [{}, { nodeIds: 'node-a' }, { nodeIds: [''] }, { nodeIds: [1] }, { nodeIds: ['node-a'], extra: 1 }]) assert.throws(() => t.service.practiceNodes(bad), /Expected a list/);
+    assert.throws(() => t.service.practiceNodes({ nodeIds: [] }), /at least one/);
+    assert.throws(() => t.service.practiceNodes({ nodeIds: Array.from({ length: 65 }, (_, i) => `n${i}`) }), /up to 64/);
+    assert.equal(t.anki.actions().length, before, 'no Anki request');
+    assert.deepEqual(await t.bytes(), bytes, 'no state write');
+    await t.call('clearReviewCheck');
+    assert.throws(() => t.service.practiceNodes({ nodeIds: ['node-a'] }), /review results changed/);
+  } finally { await t.cleanup(); }
+});
