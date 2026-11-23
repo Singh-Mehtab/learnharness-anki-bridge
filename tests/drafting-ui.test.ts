@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { Window } from "happy-dom";
+import type { HTMLInputElement as HappyInput } from "happy-dom";
 import { mountDrafting, readableError } from "../src/drafting-ui.ts";
 import type { PluginFrontendContext } from "../sdk/index.d.ts";
 import { chooseMenu, fakeUi } from "./fake-ui.ts";
@@ -18,7 +19,8 @@ function setup(options: { catalogUnavailable?: boolean; initialGraphFailure?: bo
   const calls: Array<{ name: string; input: any }> = [];
   const graph: any = { nodes: [{ id: "n_a", name: "Alpha", statement: "Alpha holds under A.", statementHash: "a".repeat(64),
     cards: { waiting: 0, sent: 0, sentElsewhere: 0 }, coverage: coverage() }], missing: [], cardsPerNode: 2, paired: false, pairingWarning: false };
-  const session: any = { session: { id: "s1", title: "Session one", exists: true }, flags: [], cardsPerNode: 2, paired: false,
+  const session: any = { session: { id: "s1", title: "Session one", exists: true },
+    flags: [{ id: "f1", note: "", nodeIds: ["n_s"], pendingNodeIds: ["n_s"] }], cardsPerNode: 2, paired: false,
     nodes: [{ id: "n_s", name: "Session idea", statement: "Only in the session.", statementHash: "s".repeat(64), cards: { waiting: 0, sent: 0, sentElsewhere: 0 }, coverage: coverage(), flagged: true, flagNotes: [] }] };
   const state: any = { generationSettings: { cardsPerNode: 2, enabledKinds: ["fact", "equation"], model: options.model ? { provider: "scratch", id: "writer" } : null }, generations: [] };
   let model: ((v: { provider: string; id: string }) => void | Promise<void>) | undefined;
@@ -499,6 +501,43 @@ test("session scope reads only that session's ideas and preselects flagged ones;
     await f.panel.setScope(undefined); await tick();
     assert.match(f.text(), /Alpha/); assert.doesNotMatch(f.text(), /Session idea/);
     assert.match(f.text(), /No ideas selected/);
+  } finally { await f.close(); }
+});
+
+test("session preflight keeps overlap, group choices and direct choices separate", async () => {
+  const f = setup({ estimate: { ...preflight, nodeCount: 4, batches: [
+    { ...preflight.batches[0], nodeIds: ["n_s", "n_b", "n_c", "n_d"] }, { ...preflight.batches[0], nodeIds: ["n_b"] },
+  ] } });
+  try {
+    const names = ["Session idea", "Beta", "Gamma", "Delta", "Handled"];
+    const ids = ["n_s", "n_b", "n_c", "n_d", "n_e"];
+    f.session.nodes = ids.map((id, i) => ({ ...f.session.nodes[0], id, name: names[i] }));
+    f.session.flags = [
+      { id: "noted", note: "Only ask about Beta's exception", nodeIds: ids, pendingNodeIds: ids.slice(0, 4) },
+      { id: "blank", note: "", nodeIds: ["n_b"], pendingNodeIds: ["n_b"] },
+    ];
+    await f.panel.setScope({ sessionId: "s1" });
+    const toggle = (n: number) => f.ideas.querySelector<HappyInput>(`input[aria-label="Include flag ${n} request"]`)!;
+    const direct = (name: string) => [...f.ideas.querySelectorAll<HappyInput>(`input[aria-label="Select ${name} directly"]`)];
+    const estimate = async (count: number, input: unknown) => {
+      f.button(`Write cards for ${count} ${count === 1 ? "idea" : "ideas"}`).click(); await tick();
+      assert.deepEqual(f.calls.filter(c => c.name === "preflight").at(-1)!.input, input);
+    };
+    const dismiss = async () => { f.button("Cancel").click(); await tick(); };
+    assert.match(toggle(1).closest("fieldset")!.textContent!, /5 candidates.*Only ask about Beta's exception.*4 of 5 included/);
+    assert.match(toggle(2).closest("fieldset")!.textContent!, /1 candidate.*No note.*1 of 1 included/);
+    assert.equal(direct("Beta").length, 2);
+    const noted = { id: "noted", nodeIds: ids.slice(0, 4) }, blank = { id: "blank", nodeIds: ["n_b"] };
+    await estimate(4, { nodeIds: ids.slice(0, 4), backfillNodeIds: [], flagScopes: [noted, blank], independentNodeIds: [] });
+    assert.match(f.dialog()!.textContent!, /Ideas4Cards/); await dismiss();
+    toggle(1).click();
+    await estimate(1, { nodeIds: ["n_b"], backfillNodeIds: [], flagScopes: [blank], independentNodeIds: [] }); await dismiss();
+    direct("Beta")[0]!.click();
+    assert.ok(direct("Beta").every(box => box.checked), "duplicate rows share the same independent checkbox state");
+    toggle(2).click();
+    direct("Handled")[0]!.click();
+    await estimate(2, { nodeIds: ["n_b", "n_e"], backfillNodeIds: [], flagScopes: [], independentNodeIds: ["n_b", "n_e"] }); await dismiss();
+    assert.equal(f.calls.some(c => c.name === "generate"), false);
   } finally { await f.close(); }
 });
 

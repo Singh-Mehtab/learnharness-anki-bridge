@@ -12,22 +12,28 @@ const coverage: Coverage = { state: "no-cards", base: "no-cards", selectable: tr
 function row(id: string, changes: Partial<Coverage> = {}, extra: Partial<CoverageRow> = {}): CoverageRow {
   return { id, name: id, statement: `Statement for ${id}`, statementHash: "a".repeat(64), cards: { waiting: 0, sent: 0, sentElsewhere: 0 }, coverage: { ...coverage, ...changes }, ...extra };
 }
-function setup(defaults = false) {
+function flag(id: string, nodeIds: string[], pendingNodeIds = nodeIds, note = "") { return { id, note, nodeIds, pendingNodeIds }; }
+function setup() {
   const window = new Window(); Object.assign(globalThis, { document: window.document });
   let changes = 0;
   const mutations: unknown[] = [];
   const controller = new AbortController();
   const ctx = { signal: controller.signal, ui: fakeUi() } as unknown as PluginFrontendContext;
-  const picker = new CoveragePicker({ ctx, signal: controller.signal, defaults, changed: () => { changes++; }, mutate: (name, node) => mutations.push([name, node.id, node.statementHash]) });
+  const picker = new CoveragePicker({ ctx, signal: controller.signal, changed: () => { changes++; }, mutate: (name, node) => mutations.push([name, node.id, node.statementHash]) });
   window.document.body.append(picker.root as never);
   const view: CoverageView = { nodes: [], missing: [], cardsPerNode: 3, paired: true, pairingWarning: false };
   const buttons = () => [...picker.root.querySelectorAll("button")];
   const button = (prefix: string) => { const found = buttons().find(b => b.textContent?.startsWith(prefix)); assert.ok(found, prefix); return found; };
-  const box = (id: string) => { const found = picker.root.querySelector<HTMLInputElement>(`input[aria-label="Select ${id}"]`); assert.ok(found, id); return found; };
+  const box = (id: string, group?: number) => {
+    const scope = group === undefined ? picker.root : includeFlag(group).closest("fieldset")!;
+    const found = scope.querySelector<HTMLInputElement>(`input[aria-label="Select ${id}"], input[aria-label="Select ${id} directly"]`);
+    assert.ok(found, id); return found;
+  };
+  const includeFlag = (n: number) => { const found = picker.root.querySelector<HTMLInputElement>(`input[aria-label="Include flag ${n} request"]`); assert.ok(found, `flag ${n}`); return found; };
   const event = (type: string) => new window.Event(type) as never;
   const more = (id: string) => { const found = picker.root.querySelector<HTMLButtonElement>(`button[aria-label="More actions for ${id}"]`); assert.ok(found, `menu for ${id}`); return found; };
   const menu = async (id: string, label: string) => { more(id).click(); await chooseMenu(label); };
-  return { window, picker, view, button, box, event, more, menu, mutations, changes: () => changes, close: () => { controller.abort(); return window.happyDOM.close(); } };
+  return { window, picker, view, button, box, includeFlag, event, more, menu, mutations, changes: () => changes, close: () => { controller.abort(); return window.happyDOM.close(); } };
 }
 
 test("coverage picker labels mixed coverage and warnings, and only current dismissals offer Restore", async () => {
@@ -58,15 +64,26 @@ test("coverage picker labels mixed coverage and warnings, and only current dismi
   } finally { await f.close(); }
 });
 
-test("handled flag targets stay visible and can be selected, but start unticked", async () => {
-  const f = setup(true);
+test("handled flag targets stay visible on revisit and direct selection does not rerun requests", async () => {
+  const f = setup();
   try {
-    f.picker.update({ ...f.view, nodes: [row("handled", {}, { flagged: true, pendingFlag: false }), row("pending", {}, { flagged: true, pendingFlag: true })] }, true);
-    assert.deepEqual(f.picker.ids, ["pending"]);
-    assert.equal(f.box("handled").checked, false);
-    assert.equal(f.box("handled").disabled, false);
-    f.button("Select flagged").click();
-    assert.deepEqual(f.picker.ids, ["handled", "pending"]);
+    const nodes = [row("handled", {}, { flagged: true }), row("pending", {}, { flagged: true })];
+    const view = { ...f.view, nodes, flags: [flag("handled-flag", ["handled"], [], "A handled request"), flag("pending-flag", ["pending"])] };
+    f.picker.update(view, true);
+    assert.match(f.includeFlag(1).closest("fieldset")!.textContent!, /Flag 1 · 1 candidate.*A handled request.*0 of 1 included/);
+    assert.equal(f.includeFlag(1).checked, false);
+    assert.equal(f.includeFlag(1).disabled, false);
+    assert.equal(f.includeFlag(2).checked, true);
+    assert.deepEqual(f.picker.flagScopes, [{ id: "pending-flag", nodeIds: ["pending"] }]);
+    f.box("handled", 1).click();
+    assert.deepEqual(f.picker.independentNodeIds, ["handled"]);
+    assert.equal(f.includeFlag(1).checked, false);
+    f.picker.update({ ...view, flags: [view.flags[0]!, flag("pending-flag", ["pending"], [])] });
+    assert.deepEqual(f.picker.ids, ["handled"], "refresh drops handled defaults but keeps direct choices");
+    f.picker.update({ ...view, flags: [view.flags[0]!, flag("pending-flag", ["pending"], [])] }, true);
+    assert.deepEqual(f.picker.ids, [], "visiting again with No cards does not retick handled requests");
+    f.includeFlag(1).click();
+    assert.deepEqual(f.picker.flagScopes, [{ id: "handled-flag", nodeIds: ["handled"] }], "a handled request can be explicitly included again");
   } finally { await f.close(); }
 });
 
@@ -92,15 +109,16 @@ test("coverage picker uses shared No cards eligibility for visible bulk selectio
 });
 
 test("session coverage defaults flagged even sent, excludes blocked rows, and never reticks cleared choices on refresh", async () => {
-  const f = setup(true);
+  const f = setup();
   try {
     const nodes = [row("sent", { state: "sent", base: "sent", uncarded: false, canDismiss: false }, { flagged: true, cards: { waiting: 1, sent: 1, sentElsewhere: 0 } }),
       row("dismissed", { dismissed: true, selectable: false, uncarded: false }, { flagged: true }),
       row("generating", { generating: true, selectable: false, uncarded: false }, { flagged: true }),
       row("unresolved", { unresolved: 1, selectable: false, uncarded: false }, { flagged: true }), row("unflagged"),
       row("changed", { state: "source-changed", uncarded: false }, { flagged: false })];
-    const view = { ...f.view, nodes };
+    const view = { ...f.view, nodes, flags: [flag("request", nodes.filter(n => n.flagged).map(n => n.id))] };
     f.picker.update(view, true); assert.deepEqual(f.picker.ids, ["sent"]);
+    assert.match(f.includeFlag(1).closest("fieldset")!.textContent!, /4 candidates.*1 of 4 included/);
     f.button("Clear").click(); f.picker.update(structuredClone(view)); assert.deepEqual(f.picker.ids, []);
     f.box("changed").click(); f.picker.update(structuredClone(view)); assert.deepEqual(f.picker.ids, ["changed"]);
     f.picker.update({ ...view, nodes: nodes.map(n => n.id === "changed" ? { ...n, coverage: { ...n.coverage!, generating: true, selectable: false } } : n) });
@@ -110,12 +128,13 @@ test("session coverage defaults flagged even sent, excludes blocked rows, and ne
 });
 
 test("coverage read failure retains rows marked stale, disables selection and mutations, and refresh preserves explicit choices", async () => {
-  const f = setup(true);
+  const f = setup();
   try {
-    const view = { ...f.view, nodes: [row("alpha", {}, { flagged: true })] };
-    f.picker.update(view, true); const before = f.changes(); f.picker.markStale();
+    const view = { ...f.view, nodes: [row("alpha", {}, { flagged: true })], flags: [flag("request", ["alpha"])] };
+    f.picker.update(view, true); f.box("alpha").click(); const before = f.changes(); f.picker.markStale();
     assert.ok(f.changes() > before); assert.match(f.picker.root.textContent!, /may be out of date/);
     assert.equal(f.box("alpha").disabled, true);
+    assert.equal(f.includeFlag(1).disabled, true);
     assert.equal(f.button("Select ideas without cards").disabled, true);
     assert.equal(f.button("Clear").disabled, true);
     assert.equal(f.more("alpha").disabled, true);
@@ -124,17 +143,20 @@ test("coverage read failure retains rows marked stale, disables selection and mu
     assert.equal(search.disabled, true); assert.equal(scope.disabled, true);
     search.value = "unrelated"; search.oninput?.(new Event("input")); search.value = "";
     f.picker.select([]); assert.deepEqual(f.picker.ids, ["alpha"], "stale reads cannot change explicit choices");
-    f.picker.update(view); assert.equal(f.box("alpha").disabled, false); assert.deepEqual(f.picker.ids, ["alpha"]);
+    f.picker.update(view); assert.equal(f.box("alpha").disabled, false); assert.deepEqual(f.picker.independentNodeIds, ["alpha"]);
+    assert.deepEqual(f.picker.flagScopes, [{ id: "request", nodeIds: ["alpha"] }]);
   } finally { await f.close(); }
 });
 
 test("coverage intent distinguishes bulk, explicit and flagged choices across refresh and pruning", async () => {
-  const f = setup(true);
+  const f = setup();
   try {
     const nodes = [row("alpha", {}, { flagged: true }), row("beta")];
     f.picker.update({ ...f.view, nodes }, true);
+    assert.deepEqual(f.picker.ids, [], "whole graph does not default to flagged ideas");
+    f.button("Select flagged").click();
     assert.deepEqual(f.picker.ids, ["alpha"]);
-    assert.deepEqual(f.picker.backfillNodeIds, [], "flagged defaults are explicit");
+    assert.deepEqual(f.picker.backfillNodeIds, [], "global Select flagged is explicit");
     f.button("Select ideas without cards").click();
     assert.deepEqual(f.picker.backfillNodeIds, ["alpha", "beta"]);
     const sent = nodes.map(n => n.id === "alpha" ? row("alpha", { state: "sent", base: "sent", uncarded: false }, { flagged: true }) : n);
@@ -179,25 +201,54 @@ test("coverage picker enforces 1000/1001 for manual, bulk and programmatic selec
   } finally { await f.close(); }
 });
 
-test("flagged defaults enforce 1000/1001 on open and refresh without partial additions", async () => {
-  const f = setup(true);
+test("grouped defaults and group toggles enforce 1000 unique ideas without partial additions", async () => {
+  const f = setup();
   try {
     const nodes = limitRows(1001, true);
-    f.picker.update({ ...f.view, nodes }, true);
+    const first = flag("first", nodes.slice(0, 1000).map(n => n.id));
+    const second = flag("second", ["node-999", "node-1000"]);
+    const view = { ...f.view, nodes, flags: [first, second] };
+    f.picker.update(view, true);
     assert.deepEqual(f.picker.ids, []); assertLimitWarning(f.picker);
-    f.picker.update({ ...f.view, nodes: nodes.slice(0, 1000) }, true);
-    assert.equal(f.picker.ids.length, 1000); assert.deepEqual(f.picker.backfillNodeIds, []);
-    const before = f.picker.ids;
-    f.picker.update({ ...f.view, nodes }); assert.deepEqual(f.picker.ids, before); assertLimitWarning(f.picker);
-    f.button("Select flagged").click(); assert.deepEqual(f.picker.ids, before); assertLimitWarning(f.picker);
-    f.picker.update({ ...f.view, nodes: nodes.slice(0, 999) }, true);
-    f.picker.update({ ...f.view, nodes }); assert.equal(f.picker.ids.length, 999, "no partial fill to the limit on refresh"); assertLimitWarning(f.picker);
-    f.picker.update({ ...f.view, nodes: nodes.slice(0, 1000) }); assert.equal(f.picker.ids.length, 1000, "exactly 1000 refreshed defaults work");
+    f.picker.update({ ...view, flags: [first, { ...second, pendingNodeIds: ["node-999"] }] }, true);
+    assert.equal(f.picker.ids.length, 1000, "shared ideas count once");
+    assert.deepEqual(f.picker.flagScopes[1], { id: "second", nodeIds: ["node-999"] });
+    f.picker.update(view);
+    assert.deepEqual(f.picker.flagScopes[1], { id: "second", nodeIds: ["node-999"] }); assertLimitWarning(f.picker);
+    f.includeFlag(2).click(); f.includeFlag(2).click();
+    assert.equal(f.includeFlag(2).checked, false, "an oversized group is not partially added");
+    assert.equal(f.picker.ids.length, 1000); assertLimitWarning(f.picker);
+    f.box("node-999", 2).click();
+    assert.equal(f.picker.ids.length, 1000);
+    assert.deepEqual(f.picker.independentNodeIds, ["node-999"], "existing scoped idea can be separately selected at the limit");
+  } finally { await f.close(); }
+});
+
+test("session bulk picks stay independent of grouped matches and filters prune both", async () => {
+  const f = setup();
+  try {
+    const nodes = [row("alpha"), row("beta"), row("gamma")];
+    const view = { ...f.view, nodes, flags: [flag("request", ["alpha", "beta"])] };
+    f.picker.update(view, true);
+    f.button("Select ideas without cards").click();
+    assert.deepEqual(f.picker.flagScopes, [{ id: "request", nodeIds: ["alpha", "beta"] }]);
+    assert.deepEqual(f.picker.backfillNodeIds, ["alpha", "beta", "gamma"]);
+    const search = f.picker.root.querySelector<HTMLInputElement>('input[type="search"]')!;
+    search.value = "alpha"; search.dispatchEvent(f.event("input"));
+    assert.match(f.includeFlag(1).closest("fieldset")!.textContent!, /1 candidate.*1 of 1 included/);
+    assert.deepEqual(f.picker.flagScopes, [{ id: "request", nodeIds: ["alpha"] }]);
+    assert.deepEqual(f.picker.backfillNodeIds, ["alpha"]);
+    search.value = ""; search.dispatchEvent(f.event("input"));
+    f.picker.update(view);
+    assert.deepEqual(f.picker.ids, ["alpha"], "clearing filters and refreshing does not retick hidden choices");
+    f.includeFlag(1).click();
+    assert.deepEqual(f.picker.ids, ["alpha"], "excluding a group leaves an overlapping bulk choice");
+    assert.deepEqual(f.picker.flagScopes, []);
   } finally { await f.close(); }
 });
 
 test("current dismissal remains visible and restorable when the primary label is Sent", async () => {
-  const f = setup(true);
+  const f = setup();
   try {
     f.picker.update({ ...f.view, nodes: [row("repaired", { state: "sent", base: "sent", dismissed: true, selectable: false, uncarded: false, canDismiss: false }, { flagged: true, cards: { waiting: 0, sent: 1, sentElsewhere: 0 } })] });
     assert.match(f.picker.root.textContent!, /Not carding.*1 in Anki/);
@@ -207,7 +258,7 @@ test("current dismissal remains visible and restorable when the primary label is
 });
 
 test("a flagged idea without cards says No cards next to Flagged (#17)", async () => {
-  const f = setup(true);
+  const f = setup();
   try {
     f.picker.update({ ...f.view, nodes: [row("alpha", {}, { flagged: true }), row("beta", { state: "sent", base: "sent", uncarded: false }, { flagged: true, cards: { waiting: 0, sent: 1, sentElsewhere: 0 } })] });
     const pills = (id: string) => Array.from(f.box(id).closest(".ab-idea")!.querySelectorAll(".ab-pill")).map(p => p.textContent);
