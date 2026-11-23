@@ -36,7 +36,7 @@ Anki Bridge is a community plugin for [LearnHarness](https://github.com/amosblom
 
 ### Flag replies while you learn
 
-When a teaching reply covers something you want to keep, press **Flag for Anki** in the session's top bar. This flags the latest finished reply and every idea LearnHarness extracts from it. You can add a note for the card writer, such as a mistake you made. Cmd+Shift+A, or Ctrl+Shift+A on Windows and Linux, flags the reply straight away, and the confirmation offers to add a note. **Make cards** in the same bar opens Anki Bridge with the session's pending flagged ideas ticked. Once the writer saves a draft for a flagged idea, it stops being ticked by default. You can still pick it by hand or use **Select flagged**.
+When a teaching reply covers something you want to keep, press **Flag for Anki** in the session's top bar. This flags the latest finished reply. Without a note, the flag asks for a card for each idea LearnHarness extracts from the reply. Add a note, such as a mistake you made, to ask the writer to focus on the ideas that answer it. Cmd+Shift+A, or Ctrl+Shift+A on Windows and Linux, flags the reply straight away and offers to add a note.
 
 Flagging is optional. You can make cards for any idea in your graph.
 
@@ -44,9 +44,11 @@ Flagging is optional. You can make cards for any idea in your graph.
 
 Open **Anki Bridge** from the LearnHarness sidebar. The **Make cards** tab has three steps, top to bottom.
 
-Under **Ideas from**, pick a session or your whole graph, then tick the ideas you want cards for. Each idea has a badge such as Flagged, No cards, 1 to review, 1 in Anki or Changed since carded. **Select ideas without cards** ticks every idea in the current view that has none, up to 1,000. To leave an idea out of future card writing, choose **Don't make cards for this idea** from its menu.
+Under **Ideas from**, pick a session or your whole graph. **Make cards** in the session bar takes you straight to that session. Each reply flag groups its candidate ideas and starts included if its request is still pending. Use **Include request** to turn the group on or off. The checkbox next to an idea selects it separately, even if you turn off its flag.
 
-![Step 1, Choose ideas. A flag banner with the note about temperatures sits above a list of ideas from the heat engines session with badges such as Flagged, No cards, 1 to review, 1 in Anki and Changed since carded. A bar at the bottom reads 7 ideas selected.](docs/images/readme/choose-ideas.png)
+Once the writer satisfies a flag request, it stops being included by default. You can still select it again or tick an idea on its own. **Select ideas without cards** ticks ideas in the current view that have none, up to 1,000. To leave an idea out of future writing, choose **Don't make cards for this idea** from its menu.
+
+![Choose ideas in the heat engines session. A reply flag groups seven candidates under a note about temperatures. Include request is checked and the checkboxes for picking ideas separately are clear.](docs/images/readme/choose-ideas.png)
 
 ### 2. Write cards
 

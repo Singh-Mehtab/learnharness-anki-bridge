@@ -6,7 +6,7 @@ import { graphCoverage, statementHash } from '../coverage/service.ts';
 import type { Coverage, CoverageNode } from '../coverage/flow.ts';
 import { extractedMessageIds } from './extraction.ts';
 import {
-  failedOutputCallIds, flagIdeaHandled, matchFlag, MAX_FLAG_MESSAGES, MAX_FLAGS, normalizeNote, sessionNodeIds, teacherProse,
+  failedOutputCallIds, flagIdeaHandled, flagRevision, matchFlag, MAX_FLAG_MESSAGES, MAX_FLAGS, normalizeNote, sessionNodeIds, teacherProse,
 } from './flow.ts';
 import type { CardCounts, Flag, GraphLike, MessageLike } from './flow.ts';
 
@@ -89,14 +89,15 @@ export class SessionService {
     return flags.map(flag => {
       const nodeIds = matchFlag(flag, graph);
       const pendingNodeIds = nodeIds.filter(id => !flagIdeaHandled(flag, id, statementHash(statements.get(id)!)));
+      const scope = { revision: flagRevision(flag), nodeIds, pendingNodeIds };
       if (!records.has(flag.sessionId)) records.set(flag.sessionId, this.session(flag.sessionId));
       const record = records.get(flag.sessionId);
-      if (!record || flag.messageIds.some(id => !record.messages.some(m => m.id === id))) return { ...flag, status: 'missing', nodeIds, pendingNodeIds };
-      if (nodeIds.length) return { ...flag, status: 'matched', nodeIds, pendingNodeIds };
+      if (!record || flag.messageIds.some(id => !record.messages.some(m => m.id === id))) return { ...flag, status: 'missing', ...scope };
+      if (nodeIds.length) return { ...flag, status: 'matched', ...scope };
       ledger ??= this.covered();
       const covered = new Set(ledger.filter(e => e.chatId === flag.sessionId).map(e => e.fp));
       const extracted = extractedMessageIds(record.messages, covered, flag.messageIds);
-      return { ...flag, status: flag.messageIds.every(id => extracted.has(id)) ? 'no-nodes' : 'waiting', nodeIds, pendingNodeIds };
+      return { ...flag, status: flag.messageIds.every(id => extracted.has(id)) ? 'no-nodes' : 'waiting', ...scope };
     });
   }
 

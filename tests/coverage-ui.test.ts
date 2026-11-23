@@ -247,6 +247,25 @@ test("session bulk picks stay independent of grouped matches and filters prune b
   } finally { await f.close(); }
 });
 
+test("pending flag choices return after a failed run and note edits reset old group choices", async () => {
+  const f = setup();
+  try {
+    const flags = [{ ...flag("request", ["alpha"]), revision: "original" }];
+    const view = { ...f.view, nodes: [row("alpha", {}, { flagged: true })], flags };
+    f.picker.update(view, true);
+    assert.equal(f.includeFlag(1).checked, true);
+    f.picker.update({ ...view, nodes: [row("alpha", { generating: true, selectable: false })] });
+    assert.equal(f.includeFlag(1).checked, false);
+    f.picker.update(view);
+    assert.equal(f.includeFlag(1).checked, true);
+    f.includeFlag(1).click();
+    f.picker.update(view);
+    assert.equal(f.includeFlag(1).checked, false);
+    f.picker.update({ ...view, flags: [{ ...flags[0], revision: "edited", note: "New focus" }] });
+    assert.deepEqual(f.picker.flagScopes, [{ id: "request", revision: "edited", nodeIds: ["alpha"] }]);
+  } finally { await f.close(); }
+});
+
 test("current dismissal remains visible and restorable when the primary label is Sent", async () => {
   const f = setup();
   try {

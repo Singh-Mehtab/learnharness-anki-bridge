@@ -8,7 +8,7 @@ export interface CoverageRow {
   id: string; name: string; statement: string; statementHash?: string;
   cards: CardCounts; coverage?: Coverage; flagged?: boolean;
 }
-export interface CoverageFlag { id: string; note: string; nodeIds: string[]; pendingNodeIds: string[] }
+export interface CoverageFlag { id: string; revision?: string; note: string; nodeIds: string[]; pendingNodeIds: string[] }
 export type CoverageView = Omit<CoverageContext, "nodes" | "missing" | "pairingKey"> & { nodes: CoverageRow[]; missing?: CoverageRow[]; pairingKey?: string; flags?: CoverageFlag[] };
 
 const DOTS = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg>';
@@ -70,7 +70,7 @@ export class CoveragePicker {
     }
     this.scope.setAttribute("aria-label", "Show");
     this.search.type = "search"; this.search.placeholder = "Search ideas"; this.search.setAttribute("aria-label", "Search ideas");
-    const filter = () => { if (this.stale) return; this.selectionWarning.textContent = ""; this.prune(); this.options.changed("user"); this.render(); };
+    const filter = () => { if (this.stale) return; this.selectionWarning.textContent = ""; this.prune(true); this.options.changed("user"); this.render(); };
     this.search.oninput = filter; this.scope.onchange = filter;
     this.toolbar.append(this.search, this.scope);
     const { ctx, signal } = options;
@@ -92,8 +92,11 @@ export class CoveragePicker {
   get ids(): string[] { return [...this.selection()]; }
   get independentNodeIds(): string[] { return [...this.independent]; }
   get backfillNodeIds(): string[] { return this.independentNodeIds.filter(id => this.backfill.has(id)); }
-  get flagScopes(): { id: string; nodeIds: string[] }[] {
-    return [...this.scopes].map(([id, nodes]) => ({ id, nodeIds: [...nodes] }));
+  get flagScopes(): { id: string; revision?: string; nodeIds: string[] }[] {
+    return [...this.scopes].map(([id, nodes]) => {
+      const revision = this.view.flags?.find(f => f.id === id)?.revision;
+      return { id, ...(revision && { revision }), nodeIds: [...nodes] };
+    });
   }
   get isStale(): boolean { return this.stale; }
   get size(): number { return this.view.nodes.length; }
@@ -109,7 +112,7 @@ export class CoveragePicker {
   }
   private historical(n: CoverageRow): boolean { return !!this.view.missing?.includes(n) || n.coverage?.state === "source-missing"; }
   private eligible(n: CoverageRow): boolean { return !this.historical(n) && canSelectNode(n); }
-  private prune(allowed = new Set(this.visible().filter(n => this.eligible(n)).map(n => n.id))): void {
+  private prune(userFiltered: boolean, allowed = new Set(this.visible().filter(n => this.eligible(n)).map(n => n.id))): void {
     for (const id of this.independent) if (!allowed.has(id)) { this.independent.delete(id); this.backfill.delete(id); }
     const flags = new Map(this.view.flags?.map(f => [f.id, f]));
     for (const [id, nodes] of this.scopes) {
@@ -117,7 +120,7 @@ export class CoveragePicker {
       const matches = new Set(manual ? flag?.nodeIds : flag?.pendingNodeIds);
       for (const nodeId of nodes) {
         if (matches.has(nodeId) && allowed.has(nodeId)) continue;
-        if (!manual && matches.has(nodeId)) {
+        if (userFiltered && !manual && matches.has(nodeId)) {
           const pruned = this.prunedDefaults.get(id) ?? new Set<string>();
           pruned.add(nodeId); this.prunedDefaults.set(id, pruned);
         }
@@ -133,10 +136,14 @@ export class CoveragePicker {
     }
     const changed = JSON.stringify(this.view) !== JSON.stringify(view) || this.stale;
     const previousScopes = JSON.stringify(this.flagScopes);
+    const oldFlags = new Map(this.view.flags?.map(f => [f.id, f.revision]));
+    for (const flag of view.flags ?? []) if (oldFlags.has(flag.id) && oldFlags.get(flag.id) !== flag.revision) {
+      this.scopes.delete(flag.id); this.overriddenFlags.delete(flag.id); this.prunedDefaults.delete(flag.id);
+    }
     this.view = view; this.stale = false;
     this.selectionWarning.textContent = "";
     const allowed = new Set(this.visible().filter(n => this.eligible(n)).map(n => n.id));
-    this.prune(allowed);
+    this.prune(false, allowed);
     const scopes = new Map(this.scopes);
     for (const flag of view.flags ?? []) {
       if (this.overriddenFlags.has(flag.id)) continue;

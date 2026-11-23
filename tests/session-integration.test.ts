@@ -33,7 +33,8 @@ test('a session scope reaches writing with flagged and bulk intent, saved caps, 
   let dispose: void | (() => void | Promise<void>) = undefined;
   const cleanup: Array<() => void> = [];
   try {
-    await f.c.call('flag', { sessionId: 'c1', messageIds: ['m2'], note: 'Check the closed-system condition' });
+    const flag = await f.c.call('flag', { sessionId: 'c1', messageIds: ['m2'], note: 'Check the closed-system condition' });
+    const flagScopes = [{ id: flag.id, revision: flag.revision, nodeIds: ['n_b'] }];
     let view!: PluginView;
     const calls: Array<{ name: string; input: any }> = [];
     const ctx = {
@@ -59,14 +60,14 @@ test('a session scope reaches writing with flagged and bulk intent, saved caps, 
     assert.equal((container.querySelector('.ab-source-select') as unknown as HTMLSelectElement).value, 'c1');
     button(/^Write cards for 1 idea/).click();
     await until(() => !!dialog(), 'first estimate dialog');
-    assert.deepEqual(calls.filter(c => c.name === 'preflight').at(-1)?.input, { nodeIds: ['n_b'], backfillNodeIds: [] });
+    assert.deepEqual(calls.filter(c => c.name === 'preflight').at(-1)?.input, { nodeIds: ['n_b'], backfillNodeIds: [], flagScopes, independentNodeIds: [] });
     assert.match(dialog()!.textContent!, /Up to 12/);
     button('Cancel').click(); await settle();
     button('Select ideas without cards (2)').click(); await settle();
     assert.match(ideas().textContent!, /2 ideas selected/);
     button(/^Write cards for 2 ideas/).click();
     await until(() => !!dialog(), 'second estimate dialog');
-    assert.deepEqual(calls.filter(c => c.name === 'preflight').at(-1)?.input, { nodeIds: ['n_a', 'n_b'], backfillNodeIds: ['n_a', 'n_b'] });
+    assert.deepEqual(calls.filter(c => c.name === 'preflight').at(-1)?.input, { nodeIds: ['n_a', 'n_b'], backfillNodeIds: ['n_a', 'n_b'], flagScopes, independentNodeIds: ['n_a', 'n_b'] });
     button('Cancel').click(); await settle();
     assert.equal(calls.some(c => c.name === 'generate'), false);
     assert.equal(f.host.workers.starts.length, 0);
@@ -80,7 +81,7 @@ test('a session scope reaches writing with flagged and bulk intent, saved caps, 
     assert.match(dialog()!.textContent!, /Up to 16/);
     button('Start writing').click();
     await until(() => f.host.workers.starts.length === 1, 'generation start');
-    f.host.workers.succeed('task-1', { targets: ['n_a', 'n_b'].map(nodeId => ({ nodeId, cards: [{ kind: 'fact',
+    f.host.workers.succeed('task-1', { targets: ['n_a', 'n_b'].map(nodeId => ({ nodeId, ...(nodeId === 'n_b' ? { flagMatches: [flag.id] } : {}), cards: [{ kind: 'fact',
       front: 'Which condition is required for the first result in this lecture to hold?', back: 'Assumption A.' }] })) });
     await until(async () => {
       await settle(); // Include the panel's normal polling interval, not a manual refresh.
@@ -251,6 +252,7 @@ test('flag notes reach saved writer input and worker prompt; changing a note inv
     await f.c.call('flag', { sessionId: 'c1', messageIds: ['m1'], note: 'Explain why assumption A is necessary' });
     await assert.rejects(f.c.call('generate', { preflightId: old.preflightId }), /stale/);
     assert.equal(f.host.workers.starts.length, 0);
+    await assert.rejects(f.c.call('preflight', { ...selection, flagScopes: [{ ...selection.flagScopes[0], revision: flag.revision }] }), /flag or its ideas changed/);
     const p = await f.c.call('preflight', selection);
     const snapshot = await f.c.call('generate', { preflightId: p.preflightId });
     assert.deepEqual(snapshot.generations[0].tasks[0].input.flagRequests, [{ id: flag.id, note: 'Explain why assumption A is necessary', nodeIds: ['n_a'] }]);
