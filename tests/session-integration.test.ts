@@ -216,8 +216,14 @@ test('an oversized noted group is not split and does not block independent writi
     f.host.nodes[0].provenance!.push({ chatId: 'c1', messageId: 'm2' });
     const note = await f.c.call('flag', { sessionId: 'c1', messageIds: ['m2'], note: 'Focus on the required condition.' });
     const { outputAllowance } = await import('../src/writer/input.ts');
+    const nodeIds = ['n_a', 'n_b'], flagScopes = [{ id: note.id, nodeIds }];
+    f.host.catalog.models[0].maxTokens = outputAllowance(1, 2) - 1;
+    const empty = await f.c.call('preflight', { nodeIds, independentNodeIds: nodeIds, flagScopes });
+    assert.deepEqual(empty.batches, []);
+    assert.deepEqual(empty.skipped.map((skip: any) => skip.nodeId), nodeIds);
+    assert.deepEqual(empty.skippedFlagRequests.map((skip: any) => skip.count), [1]);
     f.host.catalog.models[0].maxTokens = outputAllowance(1, 12);
-    const p = await f.c.call('preflight', { nodeIds: ['n_a', 'n_b'], independentNodeIds: ['n_a'], flagScopes: [{ id: note.id, nodeIds: ['n_a', 'n_b'] }] });
+    const p = await f.c.call('preflight', { nodeIds, independentNodeIds: ['n_a'], flagScopes });
     assert.deepEqual(p.batches.map((batch: any) => batch.nodeIds), [['n_a']]);
     assert.equal(p.maximumCards, 2);
     assert.deepEqual(p.skipped.map((skip: any) => skip.nodeId), ['n_b']);

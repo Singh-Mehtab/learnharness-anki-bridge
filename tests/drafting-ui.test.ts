@@ -12,7 +12,7 @@ const preflight = { preflightId: "p1", nodeIds: ["n_a"], nodeCount: 1, maximumCa
 const coverage = () => ({ state: "no-cards", base: "no-cards", selectable: true, uncarded: true, canDismiss: true,
   dismissed: false, generating: false, unresolved: 0, olderSourceCards: 0, unknownSourceCards: 0, deletedNotes: 0 });
 
-function setup(options: { catalogUnavailable?: boolean; initialGraphFailure?: boolean; model?: boolean; estimate?: typeof preflight } = {}) {
+function setup(options: { catalogUnavailable?: boolean; initialGraphFailure?: boolean; model?: boolean; estimate?: Omit<typeof preflight, "skipped"> & { skipped: Array<{ nodeId: string; reason: string }>; skippedFlagRequests?: Array<{ count: number; reason: string }> } } = {}) {
   const window = new Window();
   Object.assign(globalThis, { document: window.document });
   const controller = new AbortController();
@@ -281,6 +281,21 @@ test("a selection change while the dialog is open blocks the start", async () =>
     f.button("Start writing").click(); await tick();
     assert.equal(f.calls.some(c => c.name === "generate"), false);
     assert.match(f.text(), /Selection changed\. Press Write cards again/);
+  } finally { await f.close(); }
+});
+
+test("an estimate with no writable batch explains why the flag request was skipped", async () => {
+  const f = setup({ estimate: { ...preflight, batches: [], maximumCards: 0,
+    skipped: [{ nodeId: "n_a", reason: "The model cannot fit an ordinary card request." }],
+    skippedFlagRequests: [{ count: 1, reason: "The noted flag group cannot fit one request." }] } });
+  try {
+    await f.panel.setScope(undefined); await tick();
+    f.select(true); await tick();
+    f.button("Write cards for 1 idea").click(); await tick();
+    assert.match(f.text(), /No ideas can be carded\. 1 flag request skipped\. The noted flag group cannot fit one request\./);
+    assert.match(f.text(), /Alpha: The model cannot fit an ordinary card request\./);
+    assert.equal(f.dialog(), null);
+    assert.equal(f.calls.some(c => c.name === "generate"), false);
   } finally { await f.close(); }
 });
 

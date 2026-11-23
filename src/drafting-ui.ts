@@ -234,14 +234,13 @@ export function mountDrafting(ctx: PluginFrontendContext, ideasHost: HTMLElement
       for (const skip of p.skipped) skipped.append(el("li", `${name(skip.nodeId)}: ${skip.reason}`));
       body.append(el("p", `${plural(p.skipped.length, "idea")} skipped:`, "ab-muted"), skipped);
     }
-    for (const skip of p.skippedFlagRequests ?? []) {
-      body.append(el("p", `${plural(skip.count, "flag request")} skipped. ${skip.reason}`, "ab-muted"));
-    }
+    const flagSkips = (p.skippedFlagRequests ?? []).map(skip => `${plural(skip.count, "flag request")} skipped. ${skip.reason}`);
+    for (const skip of flagSkips) body.append(el("p", skip, "ab-muted"));
     body.append(el("p", "Safe to leave this page.", "ab-muted"));
     if (!p.batches.length) {
       const reasons = p.skipped.slice(0, 3).map(skip => `${name(skip.nodeId)}: ${skip.reason}`);
       if (p.skipped.length > 3) reasons.push(`and ${plural(p.skipped.length - 3, "more idea")}.`);
-      throw new Error(["No ideas can be carded.", ...reasons].join(" "));
+      throw new Error(["No ideas can be carded.", ...new Set(flagSkips), ...reasons].join(" "));
     }
     const ok = await confirmDialog(ctx, signal, { title: "Write cards", body, confirm: "Start writing" });
     if (!ok || !alive()) return;
