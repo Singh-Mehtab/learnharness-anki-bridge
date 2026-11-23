@@ -590,6 +590,35 @@ test("Clear cannot report success while a check started in a previous mount is r
   } finally { release(); await t.cleanup(); }
 });
 
+test("#52: a rejected Clear does not discard a pending pairing refresh", async () => {
+  const t = await setup();
+  let releaseCheck!: () => void, releaseRefresh!: () => void;
+  const heldCheck = new Promise<void>(resolve => { releaseCheck = resolve; });
+  try {
+    const dispose = await t.mountReviews();
+    await t.click("Check Anki reviews");
+    await settle(() => !!topicBox(t, "node-r"));
+    t.anki.state.after = action => action === "version" ? heldCheck : undefined;
+    await t.click("Check Anki reviews");
+    assert.equal((await t.service.command("lastReviewCheck")).running, true);
+    dispose();
+    await t.mount();
+    assert.ok(t.find("Clear"));
+
+    await t.store.replace({ ...t.store.snapshot(), destination: null });
+    t.setHold(new Promise<void>(resolve => { releaseRefresh = resolve; }));
+    for (const refresh of t.resyncs) refresh();
+    await tick();
+    await t.click("Clear");
+    const confirm = Array.from(t.doc.querySelectorAll(".ab-dialog button") as ArrayLike<HTMLButtonElement>).find(b => b.textContent === "Clear")!;
+    confirm.click(); await tick();
+    assert.match(t.text(), /Wait for the review check to finish/);
+    releaseRefresh(); await tick();
+    assert.match(t.text(), /Not checked yet/);
+    assert.ok(!t.find("Clear"));
+  } finally { releaseRefresh?.(); releaseCheck(); await t.cleanup(); }
+});
+
 test("round 4 S2: a reload begun before Clear cannot bring the cleared result back", async () => {
   const t = await setup();
   try {
@@ -706,12 +735,16 @@ test("#52: topics deleted after the check stay untickable until a new check", as
     topicBox(t, "node-f")!.click(); await tick();
     t.setOnlyNodes(["node-f"]);
     await t.click("Practise selected (2)");
-    assert.match(t.text(), /Unticked 1 idea.*Press Practise selected again/);
+    assert.match(t.text(), /Unticked 1 idea no longer in your graph/);
     assert.ok(!topicBox(t, "node-r"));
     for (const refresh of t.resyncs) refresh();
     await tick();
     assert.ok(!topicBox(t, "node-r"), "reloading the same results does not re-enable a deleted idea");
     assert.ok(topicBox(t, "node-f")!.checked);
+    topicBox(t, "node-f")!.click(); await tick();
+    assert.equal(t.find("Practise selected")!.disabled, true);
+    assert.doesNotMatch(t.text(), /Press Practise selected again/);
+    topicBox(t, "node-f")!.click(); await tick();
     t.setOnlyNodes([]);
     await t.click("Practise selected (1)");
     assert.ok(!topicBox(t, "node-f"));

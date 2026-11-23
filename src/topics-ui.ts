@@ -245,8 +245,7 @@ export function mountTopics(ctx: PluginFrontendContext, container: HTMLElement, 
       }
       if (nodes.missing.length) {
         for (const id of nodes.missing) { chosen.delete(id); missing.add(id); }
-        const retry = chosen.size ? " Press Practise selected again to continue." : "";
-        feedback.show(`Unticked ${plural(nodes.missing.length, "idea")} no longer in your graph.${retry}`, "error");
+        feedback.show(`Unticked ${plural(nodes.missing.length, "idea")} no longer in your graph.`, "error");
         return;
       }
       const id = await startPracticeSession(nodes.propositions);
@@ -267,10 +266,10 @@ export function mountTopics(ctx: PluginFrontendContext, container: HTMLElement, 
     if (!alive() || locked() || !check) return;
     const ok = await confirmDialog(ctx, signal, { title: "Clear review results?", body: "This forgets the results of the last check. Nothing in Anki changes.", confirm: "Clear" });
     if (!ok || !alive() || locked() || !check) return;
-    // Invalidate any in-flight reload that could bring the old result back.
-    clearing = true; loads++; renderBar();
+    clearing = true; renderBar();
     try {
       await ctx.call<Answer>("clearReviewCheck", {});
+      // Reload on success so an older response can't restore a cleared result.
       setCheck(null); stale = false; refreshPending = true; feedback.show("Cleared.", "success");
     } catch (error) { if (alive()) feedback.show(message(error), "error"); }
     finally {
