@@ -188,6 +188,27 @@ test("a finished Cloze save does not move the slider during the next drag", asyn
   } finally { await f.close(); }
 });
 
+test("a redraw from another Write setting keeps the Cloze slider and its drag", async () => {
+  const f = setup();
+  try {
+    await f.panel.setScope(undefined); await tick();
+    const cap = () => [...f.write.querySelectorAll("select")].find(select => select.closest("label")?.textContent?.startsWith("Most cards per idea"))!;
+    const slider = () => f.write.querySelector(".ab-write-cloze input[type=range]") as unknown as HTMLInputElement;
+    const dragged = slider();
+    const release = f.holdSettings();
+    cap().value = "3"; cap().dispatchEvent(f.event("change") as never);
+    dragged.value = "2"; dragged.dispatchEvent(f.event("input") as never);
+    release(); await tick(); await tick();
+    assert.equal(f.state.generationSettings.cardsPerNode, 3);
+    assert.ok(slider() === dragged, "the redraw keeps the same slider mounted");
+    assert.equal(dragged.isConnected, true);
+    assert.equal(dragged.value, "2");
+    dragged.dispatchEvent(f.event("change") as never); await tick(); await tick();
+    assert.equal(f.state.generationSettings.cloze, "prefer");
+    assert.equal(slider().value, "2");
+  } finally { await f.close(); }
+});
+
 test("split runs disclose that earlier drafts and edits can be sent to the model", async () => {
   const f = setup({ estimate: { ...preflight, nodeIds: ["n_a", "n_b"], nodeCount: 2,
     batches: [...preflight.batches, { ...preflight.batches[0], nodeIds: ["n_b"] }] } });

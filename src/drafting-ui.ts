@@ -56,7 +56,44 @@ export function mountDrafting(ctx: PluginFrontendContext, ideasHost: HTMLElement
   let disposed = false, state: DraftingSnapshot | undefined, scope: Scope;
   let nodes: CoverageRow[] = [];
   let modelLevels: string[] | undefined;
-  let syncCloze: (() => void) | undefined;
+  // The Cloze slider is built once. Rebuilding it on every redraw would drop a drag in progress.
+  const clozeField = el("div", undefined, "ab-field ab-field-inline ab-write-cloze");
+  const range = el("input", undefined, "ab-range");
+  range.type = "range"; range.min = "0"; range.max = "2"; range.step = "1";
+  range.setAttribute("aria-label", "Cloze cards");
+  const stops = el("div", undefined, "ab-range-stops");
+  stops.setAttribute("aria-hidden", "true");
+  for (const stop of CLOZE_STOPS) stops.append(el("span", stop.label));
+  const clozeHelp = el("span", undefined, "ab-muted ab-hint");
+  clozeField.append(el("span", "Cloze cards", "ab-label"), range, stops, clozeHelp);
+  clozeField.hidden = true;
+  settingsRow.append(clozeField);
+  const showStop = (index: number) => {
+    const stop = CLOZE_STOPS[index]!;
+    range.value = String(index);
+    range.setAttribute("aria-valuetext", stop.label);
+    clozeHelp.textContent = stop.help;
+    stops.querySelectorAll("span").forEach((span, i) => { span.dataset.selected = String(i === index); });
+  };
+  const savedCloze = () => state?.generationSettings ? activeCloze(state.generationSettings) : undefined;
+  // A drag in progress is newer than any saved value; don't move the thumb under it.
+  let dragging = false;
+  const syncCloze = () => {
+    const index = CLOZE_STOPS.findIndex(stop => stop.value === savedCloze());
+    if (!dragging && index >= 0) showStop(index);
+  };
+  range.oninput = () => { dragging = true; showStop(Number(range.value)); };
+  range.onblur = () => { dragging = false; };
+  range.onchange = () => {
+    dragging = false;
+    const { value } = CLOZE_STOPS[Number(range.value)]!;
+    invalidate();
+    void run(async () => {
+      if (value === savedCloze()) return;
+      try { await snapshot("generationSettings", { cloze: value }); }
+      finally { syncCloze(); }
+    }, false);
+  };
   let coverageRequest = 0, choiceRevision = 0;
   let widgets: Array<{ dispose(): void }> = [], activityWidgets: Array<{ dispose(): void }> = [];
   let loading = false, examplesOpen = false;
@@ -295,9 +332,12 @@ export function mountDrafting(ctx: PluginFrontendContext, ideasHost: HTMLElement
 
   function render(): void {
     if (!alive()) return;
-    disposeWidgets(); settingsRow.replaceChildren(); writeBar.replaceChildren(); kindHelp.replaceChildren();
+    disposeWidgets(); writeBar.replaceChildren(); kindHelp.replaceChildren();
+    // The Cloze slider stays mounted so a redraw can't end a drag in progress.
+    for (const child of [...settingsRow.children]) if (child !== clozeField) child.remove();
     writeButton = undefined;
     if (!state?.generationSettings) {
+      clozeField.hidden = true;
       widgets.push(button(ctx, writeBar, signal, { label: "Load", onClick: () => run(load) }));
       renderActivity(); return;
     }
@@ -387,42 +427,10 @@ export function mountDrafting(ctx: PluginFrontendContext, ideasHost: HTMLElement
     cap.onchange = () => { invalidate(); void run(async () => { await snapshot("generationSettings", { cardsPerNode: Number(cap.value) }); }); };
     capField.append(el("span", "Most cards per idea", "ab-label"), cap);
     capField.title = `Flagged ideas can get up to ${FLAGGED_CARD_CAP} cards.`;
-    const clozeField = el("div", undefined, "ab-field ab-field-inline ab-write-cloze");
-    const range = el("input", undefined, "ab-range");
-    range.type = "range"; range.min = "0"; range.max = "2"; range.step = "1";
-    range.setAttribute("aria-label", "Cloze cards");
-    const stops = el("div", undefined, "ab-range-stops");
-    stops.setAttribute("aria-hidden", "true");
-    for (const stop of CLOZE_STOPS) stops.append(el("span", stop.label));
-    const clozeHelp = el("span", undefined, "ab-muted ab-hint");
-    const showStop = (index: number) => {
-      const stop = CLOZE_STOPS[index]!;
-      range.value = String(index);
-      range.setAttribute("aria-valuetext", stop.label);
-      clozeHelp.textContent = stop.help;
-      stops.querySelectorAll("span").forEach((span, i) => { span.dataset.selected = String(i === index); });
-    };
-    const savedStop = () => CLOZE_STOPS.findIndex(stop => stop.value === activeCloze(state?.generationSettings ?? settings));
-    showStop(savedStop());
-    // A drag in progress is newer than any saved value; don't move the thumb under it.
-    let dragging = false;
-    syncCloze = () => { if (!dragging) showStop(savedStop()); };
-    range.oninput = () => { dragging = true; showStop(Number(range.value)); };
-    range.onblur = () => { dragging = false; };
-    range.onchange = () => {
-      dragging = false;
-      const { value } = CLOZE_STOPS[Number(range.value)]!;
-      invalidate();
-      void run(async () => {
-        if (value === activeCloze(state?.generationSettings ?? settings)) return;
-        try { await snapshot("generationSettings", { cloze: value }); }
-        finally { syncCloze?.(); }
-      }, false);
-    };
-    clozeField.append(el("span", "Cloze cards", "ab-label"), range, stops, clozeHelp);
-    settingsRow.append(modelField);
-    if (levelField.childElementCount) settingsRow.append(levelField);
-    settingsRow.append(kindsField, capField, clozeField);
+    settingsRow.insertBefore(modelField, clozeField);
+    if (levelField.childElementCount) settingsRow.insertBefore(levelField, clozeField);
+    settingsRow.insertBefore(kindsField, clozeField); settingsRow.insertBefore(capField, clozeField);
+    clozeField.hidden = false; syncCloze();
 
     const help = el("div", undefined, "ab-kind-lines");
     for (const kind of WRITE_KINDS) { const line = el("span"); line.append(el("strong", KIND_NAMES[kind]), ` ${KIND_HELP[kind].replace(/\.$/, "")}.`); help.append(line); }
