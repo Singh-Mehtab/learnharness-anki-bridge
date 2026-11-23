@@ -41,6 +41,7 @@ async function fixture() {
       else if (action === 'deckNames') { if (deckGate) await deckGate; result = ['Default']; }
       else if (action === 'modelNames') result = fields.length ? ['LearnHarness Basic'] : [];
       else if (action === 'modelFieldNames') result = fields;
+      else if (action === 'findModelsByName') result = params.modelNames.map((name: string) => ({ name, type: 0 }));
       else if (action === 'modelStyling') result = { css };
       else if (action === 'modelTemplates') result = { 'Card 1': { Front: '{{Front}}', Back: '{{Back}}' } };
       else if (action === 'createModel') { fields = [...params.inOrderFields]; css = params.css; result = { id: 1, name: 'LearnHarness Basic' }; }
@@ -420,6 +421,7 @@ test('recovery finds an interrupted note by delivery ID even if the note type wa
     f.dropAfterAdd();
     await assert.rejects(f.send([id]));
     f.notes[0].modelName = 'Renamed in Anki';
+    f.notes[0].fields.Text = 'Custom Basic field';
     await f.send([id]);
     assert.equal(f.notes.length, 1); assert.equal(f.snap().cards[0].status, 'sent');
     const lookups = f.calls.filter(c => c.action === 'findNotes').map(c => c.params.query);
@@ -716,7 +718,7 @@ test('delivery receipt separates a matching imported note, a new add and a defin
     const foundOnly = await f.send([imported], 'Not the actual deck', ['not-applied']);
     assert.deepEqual(foundOnly.delivery, { added: [], found: [imported], skipped: [], failed: [], deck: null, tags: [] });
     // FI-8: notesInfo is a read, checking the found note's type (S22).
-    assert.ok(f.calls.slice(before).every(c => ['getActiveProfile', 'findNotes', 'notesInfo'].includes(c.action)));
+    assert.ok(f.calls.slice(before).every(c => ['getActiveProfile', 'findNotes', 'notesInfo', 'findModelsByName'].includes(c.action)));
     assert.equal(foundOnly.cards[0].deck, undefined);
     assert.equal(foundOnly.cards[0].existingNote, true);
     assert.equal(foundOnly.settings.lastDeck, '');

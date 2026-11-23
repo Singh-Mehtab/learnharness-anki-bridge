@@ -75,15 +75,23 @@ function topLevel(front: string, start: number, end: number): boolean {
   return stack.length === 1 && stack[0] === "p";
 }
 
+/** Keep a maths deletion one TeX argument on both faces. Anki substitutes
+ *  multiple tokens on the question side, even for a single-token answer. */
+const groupBlank = (front: string): string => front.replace(BLANK, `{${BLANK}}`);
+const renderFront = (front: string): string => {
+  const layout = laidOutFront(front);
+  return blankPlace(front)?.where === "math" ? groupBlank(layout) : layout;
+};
+
 /** Front as shown on the question side, for previews. */
-export const questionPreview = (front: string): string => laidOutFront(front).split(BLANK).join("[...]");
+export const questionPreview = (front: string): string => renderFront(front).split(BLANK).join("[...]");
 
 /** The answer side, for previews: the full text with the hidden part put back,
  *  bold when it sits in prose. Inside maths the raw TeX goes back in place. */
 export function answerPreview(front: string, back: string): string {
   const prose = blankPlace(front)?.where === "prose";
   // A draft mid-edit can hold more than one blank; the rest show as [...] (round 1 S6).
-  return laidOutFront(front).replace(BLANK, () => prose ? `**${back}**` : back).split(BLANK).join("[...]");
+  return renderFront(front).replace(BLANK, () => prose ? `**${back}**` : back).split(BLANK).join("[...]");
 }
 
 /** Basic to cloze (spec: Switching format): the old front becomes the text, to be
@@ -93,7 +101,7 @@ export const toCloze = (fields: { front: string; back: string }) => ({ front: fi
  *  wrapped in \(...\) when the blank was inside maths. */
 export function toBasic(fields: { front: string; back: string }): { front: string; back: string } {
   const inMath = blankPlace(fields.front)?.where === "math";
-  return { front: fields.front.split(BLANK).join("[...]"), back: inMath ? `\\(${fields.back}\\)` : fields.back };
+  return { front: (inMath ? groupBlank(fields.front) : fields.front).split(BLANK).join("[...]"), back: inMath ? `\\(${fields.back}\\)` : fields.back };
 }
 
 function balancedBraces(tex: string): boolean {
@@ -211,6 +219,9 @@ export function clozeProblems(card: DraftCard): string[] {
   if (place.where === "math" && /\\\(|\\\)|\\\[|\\\]|(?<!\\)\$/.test(back)) {
     problems.push(`the blank is inside maths, so the hidden part is raw TeX without \\( \\) or $ delimiters`);
   }
+  if (place.where === "math" && /\\(?:left|right|middle|[bB]igg?[lmr]?)\s*$/.test(front.slice(place.segment.start + place.segment.open.length, front.indexOf(BLANK)))) {
+    problems.push("a maths blank cannot replace a TeX sizing delimiter; move the delimiter outside the blank");
+  }
   if (place.where === "math" && !balancedBraces(back)) {
     problems.push("the hidden part must be a whole TeX group: its { and } must balance");
   }
@@ -227,8 +238,8 @@ export function clozeProblems(card: DraftCard): string[] {
   let marked: string;
   let plain: string;
   try {
-    marked = renderMarkdown(assemble(laidOutFront(front), back, true), { checkMath: true });
-    plain = renderMarkdown(assemble(laidOutFront(front), back), { checkMath: true });
+    marked = renderMarkdown(assemble(renderFront(front), back, true), { checkMath: true });
+    plain = renderMarkdown(assemble(renderFront(front), back), { checkMath: true });
   } catch (error) {
     problems.push(error instanceof Error ? error.message : String(error));
     return problems;
@@ -248,7 +259,7 @@ const COMMENT = "<!-- -->";
 /** The Anki Text field: rendered HTML with exactly one {{c1::...}}. Assumes
  *  clozeProblems(card) is empty. */
 export function clozeTextField(front: string, back: string): string {
-  let html = renderMarkdown(assemble(laidOutFront(front), back, true));
+  let html = renderMarkdown(assemble(renderFront(front), back, true));
   const escapeAll = (pattern: RegExp, fix: (s: string) => string, text: string) => {
     let prev: string;
     do { prev = text; text = text.replace(pattern, fix); } while (text !== prev);

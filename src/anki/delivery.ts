@@ -2,7 +2,6 @@ import { createHash, randomUUID } from 'node:crypto';
 import { AnkiClient, AnkiError, normalizeUrl } from './client.ts';
 import { noteFields, packageFingerprint } from './apkg.ts';
 import { CLOZE_MODEL_NAME, MODEL_NAME, ensureNoteType, noteTypeFor, noteTypeInput, repairFields, updateStyling } from './note-type.ts';
-import type { NoteTypeSpec } from './note-type.ts';
 import { clozeCardProblems } from '../writer/cloze.ts';
 import { renderMarkdown } from './render.ts';
 import { StateStore, sameDestination } from './state.ts';
@@ -174,22 +173,15 @@ export class DeliveryService {
   }
   /** FI-8 (S22): a note found by LH_ID must be the card's kind of note. A basic
    *  package imported without Mark as imported leaves the card editable, so it can
-   *  be switched to cloze and then find the old basic note. Field names tell the two
-   *  apart even if the note type was renamed. On a mismatch the card fails with a
-   *  conflict; nothing is added and the Anki note is left as it is. */
+   *  be switched to cloze and then find the old basic note. Use Anki's native type
+   *  for renamed models; custom fields cannot reliably identify them. */
   private async formatConflict(client: AnkiClient, card: Card, found: number[]): Promise<boolean> {
     await this.destination(client);
     const notes = await client.call<unknown>('notesInfo', { notes: found });
     await this.destination(client);
     if (!Array.isArray(notes)) throw new Error('Invalid notesInfo response.');
-    // A note of the other plugin type is always refused, whatever fields were added to
-    // it (S1, round 1). Otherwise a cloze card needs a Text field, and a basic card is
-    // refused only when the note is plainly cloze (Text and no Front), so basic
-    // adoption behaves as in 0.9.0.
     const fields = (n: unknown): object | undefined => typeof n === 'object' && n !== null && typeof (n as { fields?: unknown }).fields === 'object' && (n as { fields: object | null }).fields || undefined;
     const model = (n: unknown) => typeof n === 'object' && n !== null ? (n as { modelName?: unknown }).modelName : undefined;
-    const has = (n: unknown, name: string) => Object.hasOwn(fields(n) ?? {}, name);
-    const other = card.format === 'cloze' ? MODEL_NAME : CLOZE_MODEL_NAME;
     // Missing or mismatched metadata is not proof of a conflict: recovery must
     // remain unresolved until Anki provides reliable information (S10).
     if (notes.length !== found.length || notes.some((n, i) =>
@@ -198,16 +190,20 @@ export class DeliveryService {
       (fields(n) as Record<string, { value?: unknown }>).LH_ID?.value !== card.id)) {
       throw new Error('Cannot verify existing Anki note metadata. Check unconfirmed sends again.');
     }
-    const mismatch = notes.some(n => {
-      if (model(n) === other) return true;
-      if (card.format === 'cloze') return model(n) !== CLOZE_MODEL_NAME;
-      // A renamed Basic is safe only if its fields unambiguously identify it (S9).
-      return model(n) !== MODEL_NAME && has(n, 'Text');
-    });
-    if (!mismatch) return false;
-    const message = card.format === 'cloze'
-      ? notes.some(n => model(n) === MODEL_NAME) ? 'This card is already in Anki as a basic note. Delete that note in Anki or switch the card back to basic.' : 'Cannot verify that the existing Anki note is LearnHarness Cloze. Check its note type in Anki before retrying.'
-      : notes.some(n => model(n) === CLOZE_MODEL_NAME) ? 'This card is already in Anki as a cloze note. Delete that note in Anki or switch the card back to cloze.' : 'Cannot verify the existing Anki note type. Check it in Anki before retrying.';
+    const types = new Map<string, number>([[MODEL_NAME, 0], [CLOZE_MODEL_NAME, 1]]);
+    const names = notes.map(n => model(n) as string);
+    const renamed = [...new Set(names.filter(name => !types.has(name)))];
+    if (renamed.length) {
+      const models = await client.call<unknown>('findModelsByName', { modelNames: renamed });
+      await this.destination(client);
+      if (Array.isArray(models)) for (const entry of models) {
+        if (entry && renamed.includes(entry.name) && (entry.type === 0 || entry.type === 1)) types.set(entry.name, entry.type);
+      }
+      if (renamed.some(name => !types.has(name))) throw new Error('Cannot verify the existing Anki note type. Check its note type in Anki and try again.');
+    }
+    if (names.every(name => types.get(name) === (card.format === 'cloze' ? 1 : 0))) return false;
+    const other = card.format === 'cloze' ? 'basic' : 'cloze';
+    const message = `This card is already in Anki as a ${other} note. Delete that note in Anki or switch the card back to ${other}.`;
     await this.patchCard(card.id, { status: 'failed', lastError: message });
     return true;
   }
@@ -380,7 +376,6 @@ export class DeliveryService {
         if (cards.some(c => !['approved', 'failed'].includes(c.status))) throw new Error('Approve every selected draft before sending.');
         const skipped = ids.filter(id => !found.includes(id) && !cards.some(c => c.id === id));
         const added: string[] = [], failed: string[] = [], tags = new Set<string>();
-        const ready = new Set<NoteTypeSpec>();
         let deckReady = false;
         for (const selected of cards) {
           this.active();
@@ -394,7 +389,7 @@ export class DeliveryService {
           await this.destination(client);
           // Model fields may have been edited in Anki while this batch was running.
           const spec = noteTypeFor(card);
-          if (!ready.has(spec)) { await ensureNoteType(client, spec); ready.add(spec); }
+          await ensureNoteType(client, spec);
           if (!deckReady) {
             await this.destination(client);
             await client.call('createDeck', { deck });

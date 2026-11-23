@@ -38,6 +38,9 @@ async function fixture() {
         models.set(params.modelName, { fields: [...params.inOrderFields], css: params.css, isCloze: params.isCloze, templates: { [t.Name]: { Front: t.Front, Back: t.Back } } });
         result = { id: models.size, name: params.modelName };
       } else if (action === 'modelFieldNames') result = model(params.modelName).fields;
+      else if (action === 'findModelsByName') result = (params.modelNames as string[]).flatMap(name => {
+        const m = models.get(name); return m ? [{ name, type: m.isCloze ? 1 : 0 }] : [];
+      });
       else if (action === 'modelStyling') result = { css: model(params.modelName).css };
       else if (action === 'modelTemplates') result = model(params.modelName).templates;
       else if (action === 'modelFieldAdd') model(params.modelName).fields.push(params.fieldName);
@@ -128,7 +131,8 @@ test('FI-8 (round 1, S1): a note of the other plugin type is refused even with a
     assert.deepEqual((await f.send([card])).delivery.failed, [card]);
     assert.match(f.store.snapshot().cards[0]!.lastError!, /already in Anki as a basic note/);
     f.notes[0]!.modelName = 'Renamed Basic';
-    assert.deepEqual((await f.send([card])).delivery.failed, [card], 'an ambiguous renamed model must not be adopted as cloze');
+    f.models.set('Renamed Basic', { isCloze: false, fields: Object.keys(existing.fields), css: '', templates: {} });
+    assert.deepEqual((await f.send([card])).delivery.failed, [card], 'a renamed Basic model must not be adopted as cloze');
     // An interrupted send whose LH_ID now finds the basic note is not marked as delivered.
     const state = structuredClone(f.store.snapshot());
     Object.assign(state.cards[0]!, { status: 'sending', destination: state.destination, deck: 'Scratch', lastError: undefined });
@@ -137,8 +141,27 @@ test('FI-8 (round 1, S1): a note of the other plugin type is refused even with a
     const saved = f.store.snapshot().cards[0]!;
     assert.equal(saved.status, 'failed');
     assert.equal(saved.noteId, undefined);
-    assert.match(saved.lastError!, /Cannot verify/);
+    assert.match(saved.lastError!, /already in Anki as a basic note/);
     assert.equal(f.calls.filter(c => c.action === 'addNote').length, 0);
+  } finally { await f.close(); }
+});
+
+test('an interrupted Cloze delivery reconciles after a note type rename', async () => {
+  const f = await fixture();
+  try {
+    const id = await f.draft(HBAR);
+    await f.service.command('approve', { ids: [id] });
+    await f.send([id]);
+    const state = structuredClone(f.store.snapshot());
+    Object.assign(state.cards[0]!, { status: 'sending', noteId: undefined, presence: undefined });
+    await f.store.replace(state);
+    f.models.set('Renamed Cloze', f.models.get(CLOZE_MODEL_NAME)!);
+    f.models.delete(CLOZE_MODEL_NAME);
+    f.notes[0]!.modelName = 'Renamed Cloze';
+    await f.service.command('reconcile');
+    assert.equal(f.store.snapshot().cards[0]!.noteId, f.notes[0]!.noteId);
+    assert.equal(f.store.snapshot().cards[0]!.status, 'sent');
+    assert.equal(f.notes.length, 1);
   } finally { await f.close(); }
 });
 
@@ -197,8 +220,10 @@ test('round 3 S9 and S10: ambiguous renamed cloze is not adopted as basic; incon
     const card = await f.draft({ kind: 'fact', front: 'Question?', back: 'Answer' });
     await f.service.command('approve', { ids: [card] });
     f.notes.push({ noteId: 9, fields: { Front: 'x', Text: '{{c1::x}}', LH_ID: card }, deckName: 'Scratch', modelName: 'Renamed Cloze', tags: [] });
+    await assert.rejects(f.send([card]), /Cannot verify the existing Anki note type/);
+    f.models.set('Renamed Cloze', { isCloze: true, fields: ['Front', 'Text', 'LH_ID'], css: '', templates: {} });
     assert.deepEqual((await f.send([card])).delivery.failed, [card]);
-    assert.match(f.store.snapshot().cards[0]!.lastError!, /Cannot verify the existing Anki note type/);
+    assert.match(f.store.snapshot().cards[0]!.lastError!, /already in Anki as a cloze note/);
     const state = structuredClone(f.store.snapshot());
     Object.assign(state.cards[0]!, { status: 'sending', destination: state.destination, deck: 'Scratch' });
     await f.store.replace(state);

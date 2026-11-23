@@ -17,7 +17,7 @@
   <a href="CHANGELOG.md">Changelog</a>
 </p>
 
-<p align="center"><sub>Version 0.9.0 · <a href="https://github.com/Singh-Mehtab/learnharness-anki-bridge/releases/latest">Download</a> · AGPL-3.0</sub></p>
+<p align="center"><sub>Source version 0.9.1 · <a href="https://github.com/Singh-Mehtab/learnharness-anki-bridge/releases/latest">Download</a> · AGPL-3.0</sub></p>
 
 Anki Bridge is a community plugin for [LearnHarness](https://github.com/amosblomqvist/learnharness). Your model drafts flashcards from the ideas in your knowledge graph. You edit and approve each draft, then send it to [Anki](https://apps.ankiweb.net/) or download it as a package. Anki schedules the reviews.
 
@@ -104,7 +104,7 @@ Each topic lists its cards with their lapses, reviews, recent Again dates and de
 ## Install
 
 > [!NOTE]
-> Download `anki-bridge-v0.9.0.zip` from the [latest release](https://github.com/Singh-Mehtab/learnharness-anki-bridge/releases/latest).
+> Download the `anki-bridge-v*.zip` install archive from the [latest release](https://github.com/Singh-Mehtab/learnharness-anki-bridge/releases/latest).
 
 ### What you need
 
@@ -123,7 +123,7 @@ Each topic lists its cards with their lapses, reviews, recent Again dates and de
 To upgrade, quit LearnHarness, privately back up `anki-bridge/data/`, then replace only `anki-bridge/dist/`. Do not merge folders or replace the whole `anki-bridge` folder. The `data/` folder holds your drafts, flags, send history and any saved API key. The [install guide](docs/install.md) has the full upgrade, rollback and troubleshooting steps.
 
 > [!WARNING]
-> Make sure the file you put in the plugin folder is `anki-bridge` and not `anki-bridge-v0.9.0`. 
+> Make sure the file you put in the plugin folder is `anki-bridge` and not a version-named outer folder.
 
 ### Connect to Anki
 
@@ -139,9 +139,9 @@ From then on, the plugin checks the profile before every send and review check, 
 
 | | What | When |
 | --- | --- | --- |
-| To your model | The chosen ideas, nearby linked ideas, an excerpt of the reply each idea came from when there is one, your flag notes, and up to six recent cards Anki Bridge made for each idea. Later requests may also get a limited set of earlier drafts from the same run, including edits made in Anki Bridge. | When you press **Start writing** and while the run is in progress |
-| Written to Anki | Approved cards as new notes in the note type `LearnHarness Basic`, with the fields Front, Back, Extra, Source, LH_ID and LH_Node. A send also creates the deck and the note type if they are missing. | When you press **Send to Anki** |
-| Changed in Anki on request | The `LearnHarness Basic` note type's missing fields, styling and templates | Only when you confirm a repair or reset in settings |
+| To your model | The chosen ideas, nearby linked ideas, an excerpt of the reply each idea came from when there is one, your flag notes, any Writer notes saved in Settings, and up to six recent cards Anki Bridge made for each idea. Later requests may also get a limited set of earlier drafts from the same run, including edits made in Anki Bridge. | When you press **Start writing** and while the run is in progress |
+| Written to Anki | Approved cards as new `LearnHarness Basic` or `LearnHarness Cloze` notes, with source labels and delivery IDs. A send creates the deck and note types it needs if they are missing. | When you press **Send to Anki** |
+| Changed in Anki on request | Missing fields, styling and templates for the selected LearnHarness note type | Only when you confirm a repair or reset in Settings |
 | Read from Anki | The open profile, deck names and tags, the note type, and the notes Anki Bridge sent, to check they still exist | Profile, decks and tags when **Make cards** is first shown. The rest when you send, when you run a check from the **More** menu, and when LearnHarness starts with an unconfirmed send. |
 | Read for review checks | Lapses, reviews, review logs, fields, tags, deck and suspended status of the notes Anki Bridge sent to the paired profile | Only when you press **Check Anki reviews** |
 | Saved to a file | Approved cards, their source names and their Anki Bridge and LearnHarness IDs, in an `.apkg` package | When you press **Download .apkg**. Neither Anki nor your model is contacted. |
@@ -151,7 +151,7 @@ If you set an API key, it goes with every AnkiConnect request. By default each n
 
 ## Limitations
 
-- Cards are Basic front-and-back notes. Cloze, reversed and type-in cards are not yet supported.
+- Use Basic front-and-back notes or single-blank Cloze notes. Choose a Cloze preference in Settings for Fact and Equation drafts. Reversed and type-in cards are not supported.
 - Images and Mermaid diagrams cannot go in cards.
 - Card quality depends on your model, so check every draft. The writer was tuned on one lecture and has not been benchmarked on new subjects.
 - Tested in daily use on macOS with LearnHarness 0.6.1, a live model and Anki, including importing downloaded packages. Windows and Linux have not been tested.

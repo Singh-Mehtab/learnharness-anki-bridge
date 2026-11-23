@@ -195,17 +195,24 @@ export function neighbours(graph: GraphLike, nodeId: string, limit = MAX_NEIGHBO
  *  existing cards, then neighbours, then feeding chains (whole, last first).
  *  Returns null when statement, concluding chains and source alone don't fit. */
 export function trimToFit(target: WriterTarget, limit: number): WriterTarget | null {
+  return trimTarget(target, candidate => estimateTokens(JSON.stringify(candidate)) <= limit);
+}
+
+export function trimTarget(target: WriterTarget, fits: (candidate: WriterTarget) => boolean): WriterTarget | null {
   const t: WriterTarget = {
     ...target,
     feeds: [...target.feeds],
     neighbours: [...target.neighbours],
     existingCards: [...target.existingCards],
   };
-  const size = () => estimateTokens(JSON.stringify(t));
-  while (size() > limit && t.existingCards.length) t.existingCards.pop();
-  while (size() > limit && t.neighbours.length) t.neighbours.pop();
-  while (size() > limit && t.feeds.length) t.feeds.pop();
-  return size() > limit ? null : t;
+  if (fits(t)) return t;
+  for (const optional of [t.existingCards, t.neighbours, t.feeds]) {
+    while (optional.length) {
+      optional.pop();
+      if (fits(t)) return t;
+    }
+  }
+  return null;
 }
 
 // ---------------------------------------------------------------------------
