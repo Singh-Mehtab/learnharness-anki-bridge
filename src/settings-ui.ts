@@ -156,7 +156,7 @@ export function mountSettings(ctx: PluginFrontendContext, container: HTMLElement
   const notesActions = el("div", undefined, "ab-actions");
   const notesStatus = status();
   notesPanel.append(el("h3", "Writer notes", "ab-panel-title"),
-    el("p", "Your own preferences for how cards are written. The writer reads them with every request, after its built-in rules. They can't change the card format or turn off the card checks.", "ab-muted ab-panel-intro"),
+    el("p", "Your own preferences for how cards are written. The writer reads them with every request, after its built-in rules. They can't override the built-in rules or turn off the card checks.", "ab-muted ab-panel-intro"),
     notes, notesCount, notesActions, notesStatus);
   const savedNotes = () => state?.generationSettings?.writerNotes ?? "";
   const notesDirty = () => notes.value.trim() !== savedNotes();
