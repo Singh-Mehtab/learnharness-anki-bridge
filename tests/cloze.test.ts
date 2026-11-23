@@ -87,6 +87,8 @@ test("an ungrouped deletion stays one TeX argument on both faces", () => {
   ok(String.raw`\(F = {{blank}}\)`, String.raw`\alpha`);
   bad(String.raw`\(F = {{blank}}\)`, '\\alpha\\', /end with an unmatched backslash/);
   bad(String.raw`\(F = {{blank}}\)`, '\\alpha\\   ', /end with an unmatched backslash/);
+  ok(String.raw`\(F = {{blank}}\)`, 'x' + '\\'.repeat(99_998));
+  bad(String.raw`\(F = {{blank}}\)`, 'x' + '\\'.repeat(99_999), /end with an unmatched backslash/);
 });
 
 const input = (cloze?: "auto" | "prefer"): WriterInput => ({

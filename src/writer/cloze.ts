@@ -104,7 +104,11 @@ export function toBasic(fields: { front: string; back: string }): { front: strin
   return { front: (inMath ? groupBlank(fields.front) : fields.front).split(BLANK).join("[...]"), back: inMath ? `\\(${fields.back}\\)` : fields.back };
 }
 
-const endsInUnmatchedBackslash = (tex: string): boolean => ((tex.match(/\\+$/)?.[0].length ?? 0) % 2) === 1;
+function endsInUnmatchedBackslash(tex: string): boolean {
+  let start = tex.length;
+  while (start > 0 && tex[start - 1] === "\\") start--;
+  return (tex.length - start) % 2 === 1;
+}
 
 function balancedBraces(tex: string): boolean {
   let depth = 0;
