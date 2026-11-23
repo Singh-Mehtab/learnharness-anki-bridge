@@ -17,7 +17,7 @@ test('backend activation registers public operations without graph, model or net
   const directory = await mkdtemp(path.join(os.tmpdir(), 'anki-backend-'));
   const c = context(directory); const close = await activate(c.ctx);
   try {
-    assert.equal(c.handlers.size, 36);
+    assert.equal(c.handlers.size, 37);
     assert.ok(c.handlers.has('abandonGenerationResult'));
     const added = await c.call('draft', { front: 'Prompt', back: 'Answer' });
     assert.equal(added.cards[0].status, 'draft');
@@ -28,6 +28,7 @@ test('backend activation registers public operations without graph, model or net
     const realFetch = globalThis.fetch;
     globalThis.fetch = (() => { throw new Error('Downloading must not touch the network.'); }) as typeof fetch;
     try {
+      assert.deepEqual(await c.call('practiceNodeSuggestions'), { checkedAt: null, nodes: [] });
       const exported = await c.handlers.get('exportPackage')!({ ids: [added.cards[0].id], deck: 'Scratch' }) as { fileName: string; data: string; ids: string[] };
       assert.equal(exported.fileName, 'anki-bridge-scratch.apkg');
       assert.deepEqual(exported.ids, [added.cards[0].id]);
@@ -87,8 +88,10 @@ test('S4: changing the address or API key forgets the review result, even when c
   try {
     await c.call('checkReviews');
     assert.ok(await last());
+    assert.deepEqual((await c.call('practiceNodeSuggestions') as unknown as { nodes: unknown }).nodes, [{ nodeId: 'n', reason: '4 lapses' }]);
     await c.call('settings', { apiKey: 'new-key' });
     assert.equal(await last(), null, 'a new API key forgets the result');
+    assert.deepEqual(await c.call('practiceNodeSuggestions'), { checkedAt: null, nodes: [] });
     await c.call('settings', { apiKey: '' });
     await c.call('checkReviews');
     assert.ok(await last());

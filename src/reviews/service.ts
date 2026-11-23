@@ -7,6 +7,8 @@ import { ReviewReader } from '../anki/review-reader.ts';
 import { sameDestination } from '../anki/destination.ts';
 import type { Card, Destination, StateStore } from '../anki/state.ts';
 import { buildTopics, REVIEW_RULES } from './signals.ts';
+import { summarizePracticeSuggestions } from './practice-suggestions.ts';
+import type { PracticeNodeSuggestions } from './practice-suggestions.ts';
 import type { CardInfo, GraphInfo, NoteReading, ReviewCheck, ReviewRow } from './signals.ts';
 
 export const REVIEW_OPERATIONS = ['checkReviews', 'lastReviewCheck', 'clearReviewCheck'] as const;
@@ -64,6 +66,10 @@ export class ReviewService {
     const { destination, settings } = this.store.snapshot();
     if (this.last && (!sameDestination(this.last.destination, destination) || settings.url !== this.last.destination.url)) this.last = undefined;
     return this.last ?? null;
+  }
+  practiceSuggestions(): PracticeNodeSuggestions {
+    this.active();
+    return summarizePracticeSuggestions(this.current());
   }
   async command(name: string, input: unknown = {}): Promise<{ check: ReviewCheck | null; running: boolean }> {
     this.active();

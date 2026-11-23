@@ -101,6 +101,8 @@ Each topic lists its cards with their lapses, reviews, recent Again dates and de
 
 ![Two review-check results, each with a card, review counts, Open session and Show in Anki.](docs/images/readme/topics.png)
 
+On a LearnHarness build that supports plugin suggestions in **Practice → Pick nodes**, look for **From Anki** above the graph list after a review check. You can select suggested ideas and ordinary graph nodes together. The picker uses the last check without contacting Anki, and Practice receives only the graph nodes you select. LearnHarness 0.7.0 and older don't have this picker extension. Use the review results to find nodes by name on those builds.
+
 ## Install
 
 > [!NOTE]

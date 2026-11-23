@@ -6,6 +6,7 @@ import { GenerationService, GENERATION_OPERATIONS } from './generation/service.t
 import { SessionService, SESSION_OPERATIONS } from './session/service.ts';
 import { CoverageService, COVERAGE_OPERATIONS } from './coverage/service.ts';
 import { ReviewService, REVIEW_OPERATIONS } from './reviews/service.ts';
+import { PRACTICE_SUGGESTIONS_OPERATION } from './reviews/practice-suggestions.ts';
 
 export async function activate(ctx: PluginBackendContext): Promise<() => Promise<void>> {
   const store = await StateStore.open(ctx.dataDirectory);
@@ -57,6 +58,7 @@ export async function activate(ctx: PluginBackendContext): Promise<() => Promise
     for (const name of SESSION_OPERATIONS) handlers.push(ctx.handle(name, input => session.command(name, input ?? {})));
     for (const name of COVERAGE_OPERATIONS) handlers.push(ctx.handle(name, input => coverage.command(name, input ?? {})));
     for (const name of REVIEW_OPERATIONS) handlers.push(ctx.handle(name, input => reviews.command(name, input ?? {})));
+    handlers.push(ctx.handle(PRACTICE_SUGGESTIONS_OPERATION, () => reviews.practiceSuggestions()));
     return close;
   } catch (error) {
     await close().catch(() => {});

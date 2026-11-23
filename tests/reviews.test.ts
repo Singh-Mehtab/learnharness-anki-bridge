@@ -92,8 +92,21 @@ test('a check groups flagged cards by node with evidence and session links, and 
     assert.deepEqual(t.anki.state.forbidden, []);
     assert.ok((await t.bytes()).equals(before), 'state.json is unchanged by a check');
     assert.deepEqual((await t.call('lastReviewCheck')).check, check);
+    const beforePicker = t.anki.actions();
+    assert.deepEqual(t.service.practiceSuggestions(), {
+      checkedAt: NOW,
+      nodes: [
+        { nodeId: 'node-b', reason: '2 Again reviews in 30 days' },
+        { nodeId: 'node-a', reason: '4 lapses' },
+        { nodeId: 'node-gone', reason: '3 lapses' }, // The host checks current graph membership.
+        { nodeId: 'node-d', reason: 'Leech tag' },
+      ],
+    });
     await t.call('clearReviewCheck');
     assert.equal((await t.call('lastReviewCheck')).check, null);
+    assert.deepEqual(t.service.practiceSuggestions(), { checkedAt: null, nodes: [] });
+    assert.deepEqual(t.anki.actions(), beforePicker, 'picker reads never contact Anki');
+    assert.ok((await t.bytes()).equals(before), 'picker reads never save state');
   } finally { await t.cleanup(); }
 });
 

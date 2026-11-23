@@ -2,6 +2,7 @@ import type { PluginFrontendContext } from "../sdk/index.d.ts";
 import { mountDrafting } from "./drafting-ui.ts";
 import { ICON } from "./icons.ts";
 import { mountReview } from "./review-ui.ts";
+import { registerPracticeSuggestions } from "./reviews/practice-suggestions.ts";
 import { mountSources, registerSessionActions, SessionRequests } from "./session-ui.ts";
 import { mountSettings } from "./settings-ui.ts";
 import { mountTopics } from "./topics-ui.ts";
@@ -88,6 +89,7 @@ export function activate(ctx: PluginFrontendContext): void {
   const navigation: { tab: TabIndex } = { tab: 0 };
   ctx.cleanup(ctx.registerView({ id: "bridge", name: "Anki Bridge", mount: (container, signal) => mount(ctx, container, signal, requests, peers, navigation) }));
   registerSessionActions(ctx, requests);
+  registerPracticeSuggestions(ctx);
   ctx.cleanup(ctx.registerAction({ id: "open-bridge", name: "Anki Bridge", icon: ICON, run: () => ctx.app.openView("bridge") }));
   ctx.cleanup(ctx.placeAction({ id: "bridge-sidebar", actionId: "open-bridge", location: "sidebar" }));
   ctx.cleanup(ctx.registerSettings((container, signal) => mountSettings(ctx, container, signal, peers)));
