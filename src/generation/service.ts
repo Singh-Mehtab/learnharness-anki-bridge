@@ -230,12 +230,14 @@ export class GenerationService {
     const catalog = await this.ctx.inference.catalog();
     this.active();
     // Like core Flashcards: follow the host's cheap slot unless the learner overrides it.
-    const pin = settings.model ? { model: settings.model, thinkingLevel: undefined } : catalog.slots?.cheap;
+    const pin = settings.model ? { model: settings.model, thinkingLevel: settings.model.thinkingLevel } : catalog.slots?.cheap;
     if (!pin?.model) throw new Error('Set a cheap model in LearnHarness settings, or choose a model for Anki Bridge.');
     const pinned = pin.model;
     const model = catalog.models.find(m => m.provider === pinned.provider && m.id === pinned.id);
     if (!model || !catalog.providers.some(p => p.id === model.provider && p.keyPresent)) throw new Error(settings.model ? 'The selected model is unavailable. Choose an available model; no fallback is used.' : 'The cheap model slot is unavailable. Fix it in LearnHarness settings or choose a model for Anki Bridge.');
-    if (pin.thinkingLevel !== undefined && !model.supportedLevels?.includes(pin.thinkingLevel)) throw new Error(`The cheap model does not support its configured thinking level (${pin.thinkingLevel}). Fix it in LearnHarness settings or choose an override.`);
+    if (pin.thinkingLevel !== undefined && !model.supportedLevels?.includes(pin.thinkingLevel)) throw new Error(settings.model
+      ? `The selected model does not support ${pin.thinkingLevel} reasoning. Choose a supported level or Model default.`
+      : `The cheap model does not support its configured thinking level (${pin.thinkingLevel}). Fix it in LearnHarness settings or choose an override.`);
     const spec: PluginModelSpec = { provider: pinned.provider, id: pinned.id, ...(pin.thinkingLevel !== undefined ? { thinkingLevel: pin.thinkingLevel } : {}) };
     const graph = this.ctx.learning.graph();
     const state = this.store.snapshot(), coverage = graphCoverage(graph, state);
@@ -316,6 +318,12 @@ export class GenerationService {
   }
   async command(name: string, input: unknown = {}): Promise<unknown> {
     if (name === 'generationStatus') { this.active(); keys(object(input), []); return this.delivery.snapshot(); }
+    if (name === 'writerModelLevels') {
+      this.active();
+      const value = object(input); keys(value, ['provider', 'id']);
+      const catalog = await this.ctx.inference.catalog(); this.active();
+      return catalog.models.find(m => m.provider === value.provider && m.id === value.id)?.supportedLevels ?? [];
+    }
     return this.delivery.exclusive(async () => {
       this.active();
       const value = object(input);
@@ -343,8 +351,14 @@ export class GenerationService {
           if (!settings.enabledKinds.length) throw new Error('Keep at least one card type on.');
         }
         if (!validGenerationSettings(settings)) throw new Error('Choose 1–4 cards per node, one or more available card types, a cloze setting, and a model, or null for the cheap model.');
-        // A changed cloze mode or Writer notes (#54) changes what would be sent, so an open estimate can't be used.
-        const sent = (s: GenerationSettings) => JSON.stringify([activeCloze(s), s.writerNotes ?? '']);
+        if ('model' in patch && settings.model?.thinkingLevel !== undefined) {
+          const { provider, id, thinkingLevel } = settings.model;
+          const catalog = await this.ctx.inference.catalog(); this.active();
+          const model = catalog.models.find(m => m.provider === provider && m.id === id);
+          if (!model?.supportedLevels?.includes(thinkingLevel)) throw new Error('That model does not support the selected reasoning level.');
+        }
+        // Changes that affect the writer invalidate a previously prepared estimate.
+        const sent = (s: GenerationSettings) => JSON.stringify([activeCloze(s), s.writerNotes ?? '', s.model]);
         const before = sent(this.store.snapshot().generationSettings);
         try { await this.delivery.save(s => { s.generationSettings = settings; }); }
         finally { if (sent(this.store.snapshot().generationSettings) !== before) this.preflights.clear(); }
@@ -501,4 +515,4 @@ export class GenerationService {
   }
 }
 
-export const GENERATION_OPERATIONS = ['generationContext', 'generationSettings', 'preflight', 'generate', 'generationStatus', 'cancelGeneration', 'retryGeneration', 'abandonGenerationResult', 'dismissGeneration'] as const;
+export const GENERATION_OPERATIONS = ['generationContext', 'generationSettings', 'writerModelLevels', 'preflight', 'generate', 'generationStatus', 'cancelGeneration', 'retryGeneration', 'abandonGenerationResult', 'dismissGeneration'] as const;

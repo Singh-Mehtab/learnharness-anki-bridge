@@ -626,10 +626,14 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
       const now = edits.get(card.id);
       return !now || (now.front === card.front && now.back === card.back && now.extra === card.extra && now.format === card.format);
     };
-    let primary: ButtonHandle | undefined;
-    const primaryProps = (status: Card["status"]) => status === "draft"
-      ? { label: "Approve", onClick: () => run(async () => { await call("approve", { ids: [card.id] }); }, true) }
-      : { label: status === "failed" ? "Retry send" : "Send this card", onClick: () => run(() => send([card.id])) };
+    let footerActions: ButtonHandle[] | undefined;
+    function renderFooterActions(status: Card["status"]): ButtonHandle[] {
+      const actions: ButtonHandle[] = [];
+      if (status === "draft") actions.push(button(ctx, right, s, { label: "Approve", onClick: () => run(async () => { await call("approve", { ids: [card.id] }); }, true) }));
+      if (status === "approved") actions.push(button(ctx, right, s, { label: "Approved", variant: "outline", title: "Click to return to Draft", onClick: () => run(async () => { await call("unapprove", { id: card.id }); }, true) }));
+      if (status === "approved" || status === "failed") actions.push(button(ctx, right, s, { label: status === "failed" ? "Retry send" : "Send this card", onClick: () => run(() => send([card.id])) }));
+      return actions;
+    }
     if (editable) {
       if (isEditing) {
         button(ctx, left, s, { label: "Cancel", disabled: saving.has(card.id), onClick: () => { edits.delete(card.id); beforeSwitch.delete(card.id); editing.delete(card.id); feedback.show(""); render(); } });
@@ -677,7 +681,7 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
       } else {
         button(ctx, left, s, { label: "Edit", onClick: () => { if (packageMarkInFlight) return; editing.add(card.id); feedback.show(""); render(); article.ownerDocument.querySelector<HTMLTextAreaElement>(`[data-keep="card-${card.id}-front"]`)?.focus(); } });
         button(ctx, left, s, { label: "Drop", onClick: () => run(async () => { await call("drop", { ids: [card.id] }); edits.delete(card.id); return "Card dropped."; }) });
-        primary = button(ctx, right, s, primaryProps(card.status));
+        footerActions = renderFooterActions(card.status);
       }
     } else if (card.status === "imported") {
       if (card.deck) left.append(el("span", card.deck, "ab-muted"));
@@ -693,12 +697,11 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
       article.dataset.status = status;
       badge.textContent = STATUS[status].text;
       badge.dataset.tone = STATUS[status].tone;
-      if (primary) {
-        // The host updates callbacks before React commits labels. Retire this
-        // control without remounting the row or disturbing focus elsewhere.
-        if (primary.root.contains(article.ownerDocument.activeElement)) article.focus({ preventScroll: true });
-        primary.dispose(); primary.root.remove();
-        primary = button(ctx, right, s, primaryProps(status));
+      if (footerActions) {
+        // Retire old callbacks without remounting the row or disturbing focus elsewhere.
+        if (footerActions.some(action => action.root.contains(article.ownerDocument.activeElement))) article.focus({ preventScroll: true });
+        for (const action of footerActions) { action.dispose(); action.root.remove(); }
+        footerActions = renderFooterActions(status);
       }
     } };
   }

@@ -1,10 +1,11 @@
 import { CORE_KINDS, DEFAULT_KINDS, FLAGGED_CARD_CAP, isCoreKind, isStoredKind, WRITER_NOTES_LIMIT } from '../writer/types.ts';
 import type { CoreCardKind, StoredCardKind } from '../writer/types.ts';
 import type { WriterInput, WriterResult } from '../writer/types.ts';
+import type { PluginModelSpec } from '../../sdk/index.d.ts';
 
 interface SettingsBase {
   cardsPerNode: number;
-  model: { provider: string; id: string } | null;
+  model: PluginModelSpec | null;
 }
 /** FI-8 cloze setting. */
 export type ClozeSetting = 'off' | 'auto' | 'prefer';
@@ -101,7 +102,8 @@ const strings = (v: unknown): v is string[] => Array.isArray(v) && v.every(x => 
 const distinctKinds = (v: unknown): v is string[] => strings(v) && v.length > 0 && new Set(v).size === v.length;
 function validBaseSettings(v: unknown): v is SettingsBase & Record<string, unknown> {
   return object(v) && Number.isInteger(v.cardsPerNode) && Number(v.cardsPerNode) >= 1 && Number(v.cardsPerNode) <= 4
-    && (v.model === null || object(v.model) && typeof v.model.provider === 'string' && !!v.model.provider && typeof v.model.id === 'string' && !!v.model.id);
+    && (v.model === null || object(v.model) && typeof v.model.provider === 'string' && !!v.model.provider && typeof v.model.id === 'string' && !!v.model.id
+      && (v.model.thinkingLevel === undefined || (typeof v.model.thinkingLevel === 'string' && !!v.model.thinkingLevel)));
 }
 export function validGenerationSettings(v: unknown): v is GenerationSettings {
   return validBaseSettings(v) && distinctKinds(v.enabledKinds) && v.enabledKinds.every(isCoreKind) && !('constantValues' in v)

@@ -103,9 +103,11 @@
 
 /* Step 2: write */
 .anki-bridge .ab-write-settings { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 16px 24px; }
+.anki-bridge .ab-write-cloze { width: min(100%, 250px); }
+.ab-settings-title-version { margin-inline-start: 0.75em; color: var(--muted-foreground, #888); letter-spacing: normal; text-transform: none; white-space: nowrap; }
 .anki-bridge .ab-model { min-height: 32px; display: flex; align-items: center; }
 .anki-bridge .ab-model-row { display: flex; align-items: center; gap: 6px; }
-.anki-bridge .ab-model-field .ab-hint { font-size: 12px; margin-top: 4px; }
+.anki-bridge .ab-model-field .ab-hint { max-width: 220px; font-size: 12px; margin-top: 4px; }
 .anki-bridge .ab-field-inline { display: flex; flex-direction: column; }
 .anki-bridge .ab-kinds legend { padding: 0; }
 .anki-bridge .ab-chips { display: flex; flex-wrap: wrap; gap: 6px; }

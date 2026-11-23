@@ -89,6 +89,25 @@ async function fixture() {
     failFront: (v: string) => { failFront = v; }, dropAfterAdd: () => { dropAfterAdd = true; }, switchAfterAdd: () => { switchAfterAdd = true; }, gate: (v: Promise<void>) => { addGate = v; }, gateDecks: (v: Promise<void>) => { deckGate = v; }, gateVersion: (v: Promise<void>) => { versionGate = v; } };
 }
 
+test('returning an approved card to Draft preserves its content and requires approval before sending', async () => {
+  const f = await fixture();
+  try {
+    const id = await f.draft();
+    await assert.rejects(f.service.command('unapprove', { id }), /Only approved, unsent/);
+    await f.approve([id]);
+    const approved = f.snap().cards[0];
+    await f.service.command('unapprove', { id });
+    await f.reopen();
+    assert.deepEqual(f.snap().cards[0], { ...approved, status: 'draft' });
+    assert.equal(f.calls.length, 0);
+    await f.pair();
+    await assert.rejects(f.send([id]), /Approve every selected draft/);
+    await f.approve([id]);
+    await f.send([id]);
+    await assert.rejects(f.service.command('unapprove', { id }), /Only approved, unsent/);
+  } finally { await f.close(); }
+});
+
 test('mark imported and undo are atomic, offline, and reject later edits and sends', async () => {
   const { packageFingerprint } = await import('../src/anki/apkg.ts');
   const f = await fixture();

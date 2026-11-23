@@ -35,6 +35,7 @@ function setup(options: { catalogUnavailable?: boolean; initialGraphFailure?: bo
       if (name === "coverageContext") { if (failNextCoverage) { failNextCoverage = false; throw new Error("Initial graph read failed"); } const result = structuredClone(graph); await graphHold; return result; }
       if (name === "sessionFlow") return structuredClone(session);
       if (name === "generationContext") throw new Error("Catalog unavailable");
+      if (name === "writerModelLevels") return input.id === "writer" ? ["low", "high"] : [];
       if (name === "dismissNode" || name === "restoreNode") {
         await mutationGate;
         const node = graph.nodes.find((n: any) => n.id === input.nodeId);
@@ -106,6 +107,25 @@ function setup(options: { catalogUnavailable?: boolean; initialGraphFailure?: bo
     close: async () => { panel.dispose(); controller.abort(); await window.happyDOM.close(); } };
 }
 
+test("Write offers only levels supported by the pinned model and clears the override with the model", async () => {
+  const f = setup();
+  try {
+    await f.panel.setScope(undefined);
+    const selector = () => [...f.write.querySelectorAll("select")].find(select => select.closest("label")?.textContent?.startsWith("Reasoning level"));
+    assert.equal(selector(), undefined);
+    await f.pickModel({ provider: "scratch", id: "writer" });
+    assert.deepEqual([...selector()!.options].map(option => option.value), ["", "low", "high"]);
+    selector()!.value = "high"; selector()!.dispatchEvent(f.event("change") as never); await tick();
+    assert.deepEqual(f.state.generationSettings.model, { provider: "scratch", id: "writer", thinkingLevel: "high" });
+    assert.equal(selector()!.value, "high");
+    await f.pickModel({ provider: "scratch", id: "new-model" });
+    assert.deepEqual(f.state.generationSettings.model, { provider: "scratch", id: "new-model" });
+    assert.equal(selector(), undefined);
+    [...f.write.querySelectorAll("button")].find(button => button.textContent === "Clear")!.click(); await tick();
+    assert.equal(f.state.generationSettings.model, null);
+  } finally { await f.close(); }
+});
+
 test("split runs disclose that earlier drafts and edits can be sent to the model", async () => {
   const f = setup({ estimate: { ...preflight, nodeIds: ["n_a", "n_b"], nodeCount: 2,
     batches: [...preflight.batches, { ...preflight.batches[0], nodeIds: ["n_b"] }] } });
@@ -127,7 +147,7 @@ test("writing needs a selection, defaults to the cheap model, confirms the estim
   const f = setup();
   try {
     await f.panel.setScope(undefined); await tick();
-    assert.match(f.text(), /Model to write cards.*Blank uses the cheap model\./s);
+    assert.match(f.text(), /Model to write cards.*Blank uses the cheap model and its reasoning level\./s);
     assert.doesNotMatch(f.text(), /LearnHarness cheap model/);
     assert.equal(f.modelValue(), undefined, "the picker starts blank");
     const clear = () => [...f.write.querySelectorAll(".ab-model-row button")].find(b => b.textContent === "Clear") as unknown as HTMLButtonElement | undefined;

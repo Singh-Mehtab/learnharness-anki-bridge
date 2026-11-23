@@ -50,17 +50,19 @@ Under **Ideas from**, pick a session or your whole graph, then tick the ideas yo
 
 ### 2. Write cards
 
-Tick the card types you want and set the most cards per idea. **See examples** shows a sample card for each type. The model picker defaults to your LearnHarness cheap model.
+Tick the card types you want and set the most cards per idea. Use the **Cloze cards** slider to choose Off, Writer chooses, or Prefer cloze for Fact and Equation cards. **See examples** shows a sample card for each type.
+
+Leave the model picker blank to use LearnHarness's cheap model and its reasoning level. If you pick a model with adjustable reasoning, you can also choose its reasoning level.
 
 Press **Write cards** to see an estimate: the number of model calls, the most cards it can write, a cost estimate when the model has pricing, and any ideas it will skip. The model is only called when you press **Start writing**.
 
 Writing runs in the background. If a run is cancelled or a batch fails, cards from finished batches are kept, and **Retry the rest** makes a new estimate for the remaining ideas.
 
-![Write cards with Fact, Equation and Why selected, followed by the review and send step.](docs/images/readme/write.png)
+![Write cards with Fact and Equation selected, a cap of two cards per idea, and the slider set to Prefer cloze.](docs/images/readme/write.png)
 
 ### 3. Review and send
 
-Each draft shows its front, back and optional extra field, with maths and code rendered. Open **Idea when this card was written** to compare a card with its source. Edit, drop or approve cards one at a time, or approve all drafts once you've read them. You can also write a card by hand from the **More** menu.
+Each draft shows its front, back and optional extra field, with maths and code rendered. Open **Idea when this card was written** to compare a card with its source. Edit, drop or approve cards one at a time, or approve all drafts once you've read them. Click **Approved** to return an unsent card to Draft. You can also write a card by hand from the **More** menu.
 
 Pick a deck or type a new one, check the tags and press **Send to Anki**. The deck and tag fields suggest names from your Anki collection, and the tags start from a template you set in settings. A green panel confirms what was sent, and **Show in Anki** opens the cards in Anki's browser.
 
@@ -151,7 +153,7 @@ If you set an API key, it goes with every AnkiConnect request. By default each n
 
 ## Limitations
 
-- Use Basic front-and-back notes or single-blank Cloze notes. Choose a Cloze preference in Settings for Fact and Equation drafts. Reversed and type-in cards are not supported.
+- Use Basic front-and-back notes or single-blank Cloze notes. Choose a Cloze preference in Write for Fact and Equation drafts. Reversed and type-in cards are not supported.
 - Images and Mermaid diagrams cannot go in cards.
 - Card quality depends on your model, so check every draft. The writer was tuned on one lecture and has not been benchmarked on new subjects.
 - Tested in daily use on macOS with LearnHarness 0.6.1, a live model and Anki, including importing downloaded packages. Windows and Linux have not been tested.

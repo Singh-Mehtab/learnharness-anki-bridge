@@ -1,5 +1,6 @@
 import type { PluginFrontendContext } from "../sdk/index.d.ts";
-import type { Generation, GenerationSettings } from "./generation/types.ts";
+import { activeCloze } from "./generation/types.ts";
+import type { ClozeSetting, Generation, GenerationSettings } from "./generation/types.ts";
 import { FLAGGED_CARD_CAP, SETTINGS_KINDS, WRITE_KINDS } from "./writer/types.ts";
 import { exampleCard, KIND_HELP, KIND_NAMES } from "./kinds-ui.ts";
 import { CoveragePicker } from "./coverage-ui.ts";
@@ -7,6 +8,12 @@ import type { CoverageRow, CoverageView } from "./coverage-ui.ts";
 import { button, confirmDialog, el, plural, status } from "./ui.ts";
 import type { ButtonHandle } from "./ui.ts";
 import type { Peers } from "./settings-ui.ts";
+
+const CLOZE_STOPS: { value: ClozeSetting; label: string; help: string }[] = [
+  { value: "off", label: "Off", help: "Every card is a question and answer." },
+  { value: "auto", label: "Writer chooses", help: "Use cloze when the blank makes the question clearer." },
+  { value: "prefer", label: "Prefer cloze", help: "Prefer cloze for Fact and Equation cards." },
+];
 
 interface DraftingSnapshot { generationSettings: GenerationSettings; generations: Generation[] }
 interface Preflight {
@@ -48,6 +55,7 @@ export function mountDrafting(ctx: PluginFrontendContext, ideasHost: HTMLElement
   writeHost.append(settingsRow, kindHelp, writeBar, feedback, activity);
   let disposed = false, state: DraftingSnapshot | undefined, scope: Scope;
   let nodes: CoverageRow[] = [];
+  let modelLevels: string[] | undefined;
   let coverageRequest = 0, choiceRevision = 0;
   let widgets: Array<{ dispose(): void }> = [], activityWidgets: Array<{ dispose(): void }> = [];
   let loading = false, examplesOpen = false;
@@ -116,6 +124,14 @@ export function mountDrafting(ctx: PluginFrontendContext, ideasHost: HTMLElement
   }
   async function snapshot(name = "generationStatus", input?: unknown): Promise<void> {
     const next = await ctx.call<DraftingSnapshot>(name, input);
+    if (!alive()) return;
+    const pin = next.generationSettings?.model;
+    const previous = state?.generationSettings?.model;
+    if (!pin) modelLevels = undefined;
+    else if (name === "generationStatus" || pin.provider !== previous?.provider || pin.id !== previous?.id) {
+      try { modelLevels = await ctx.call<string[]>("writerModelLevels", { provider: pin.provider, id: pin.id }); }
+      catch { modelLevels = undefined; }
+    }
     if (alive()) state = next;
   }
   function schedule(): void {
@@ -165,7 +181,7 @@ export function mountDrafting(ctx: PluginFrontendContext, ideasHost: HTMLElement
     const sent = p.batches.reduce((n, b) => n + b.nodeIds.length, 0);
     fact("Ideas", sent === p.nodeCount ? String(sent) : `${sent} of ${p.nodeCount} selected`);
     fact("Cards", `Up to ${p.maximumCards}`);
-    fact("Model", `${p.modelName ?? p.model.id}${p.model.thinkingLevel ? `, ${p.model.thinkingLevel} thinking` : ""}${p.followsCheapSlot ? " (cheap model)" : ""}`);
+    fact("Model", `${p.modelName ?? p.model.id}${p.model.thinkingLevel ? `, ${p.model.thinkingLevel} reasoning` : ""}${p.followsCheapSlot ? " (cheap model)" : ""}`);
     fact("Model calls", `${p.batches.length}, up to ${p.batches.length * 3} with fixes`);
     fact("Cost", p.estimatedCost === null ? "No estimate" : `About $${p.estimatedCost.toFixed(4)}, first attempt`);
     // #54: the estimate counts the notes, so say they go too.
@@ -288,10 +304,12 @@ export function mountDrafting(ctx: PluginFrontendContext, ideasHost: HTMLElement
     // One optional picker (#39). Blank (null) follows the host's cheap slot, like core Flashcards.
     const modelField = el("div", undefined, "ab-field ab-field-inline ab-model-field");
     const modelBox = el("div", undefined, "ab-model"), modelRow = el("div", undefined, "ab-model-row");
+    const pin = settings.model;
     modelRow.append(modelBox);
     modelField.append(el("span", "Model to write cards", "ab-label"), modelRow);
     try {
-      widgets.push(ctx.ui.mountModelPicker(modelBox, { value: settings.model ?? undefined, onChange: value => {
+      widgets.push(ctx.ui.mountModelPicker(modelBox, { value: pin ? { provider: pin.provider, id: pin.id } : undefined, onChange: value => {
+        if (value.provider === pin?.provider && value.id === pin.id) return;
         invalidate();
         return run(async () => { await snapshot("generationSettings", { model: { provider: value.provider, id: value.id } }); });
       } }, { signal }));
@@ -303,7 +321,27 @@ export function mountDrafting(ctx: PluginFrontendContext, ideasHost: HTMLElement
       invalidate();
       return run(async () => { await snapshot("generationSettings", { model: null }); });
     } }));
-    modelField.append(el("span", "Blank uses the cheap model.", "ab-muted ab-hint"));
+    if (!pin) modelField.append(el("span", "Blank uses the cheap model and its reasoning level.", "ab-muted ab-hint"));
+    const levelField = el("label", undefined, "ab-field ab-field-inline");
+    if (pin && (modelLevels?.length || pin.thinkingLevel !== undefined)) {
+      const level = el("select", undefined, "ab-input ab-select");
+      const option = (value: string, text: string) => { const item = el("option", text); item.value = value; level.append(item); return item; };
+      option("", "Model default");
+      for (const value of modelLevels ?? []) option(value, value);
+      if (pin.thinkingLevel !== undefined && !modelLevels?.includes(pin.thinkingLevel)) option(pin.thinkingLevel, `${pin.thinkingLevel} (saved)`).disabled = true;
+      level.value = pin.thinkingLevel ?? "";
+      level.onchange = () => {
+        const value = level.value;
+        invalidate();
+        void run(async () => {
+          try { await snapshot("generationSettings", { model: { provider: pin.provider, id: pin.id, ...(value ? { thinkingLevel: value } : {}) } }); }
+          catch (error) { level.value = pin.thinkingLevel ?? ""; throw error; }
+        });
+      };
+      levelField.append(el("span", "Reasoning level", "ab-label"), level);
+    } else if (pin && modelLevels === undefined) {
+      modelField.append(el("span", "Reasoning levels unavailable.", "ab-muted ab-hint"));
+    }
 
     // Write shows the common types (#38). Apply and Contrast are switched on in Settings.
     const kindsField = el("div", undefined, "ab-field ab-field-inline ab-kinds");
@@ -340,7 +378,37 @@ export function mountDrafting(ctx: PluginFrontendContext, ideasHost: HTMLElement
     cap.onchange = () => { invalidate(); void run(async () => { await snapshot("generationSettings", { cardsPerNode: Number(cap.value) }); }); };
     capField.append(el("span", "Most cards per idea", "ab-label"), cap);
     capField.title = `Flagged ideas can get up to ${FLAGGED_CARD_CAP} cards.`;
-    settingsRow.append(modelField, kindsField, capField);
+    const clozeField = el("div", undefined, "ab-field ab-field-inline ab-write-cloze");
+    const range = el("input", undefined, "ab-range");
+    range.type = "range"; range.min = "0"; range.max = "2"; range.step = "1";
+    range.setAttribute("aria-label", "Cloze cards");
+    const stops = el("div", undefined, "ab-range-stops");
+    stops.setAttribute("aria-hidden", "true");
+    for (const stop of CLOZE_STOPS) stops.append(el("span", stop.label));
+    const clozeHelp = el("span", undefined, "ab-muted ab-hint");
+    const showStop = (index: number) => {
+      const stop = CLOZE_STOPS[index]!;
+      range.value = String(index);
+      range.setAttribute("aria-valuetext", stop.label);
+      clozeHelp.textContent = stop.help;
+      stops.querySelectorAll("span").forEach((span, i) => { span.dataset.selected = String(i === index); });
+    };
+    const savedStop = () => CLOZE_STOPS.findIndex(stop => stop.value === activeCloze(state?.generationSettings ?? settings));
+    showStop(savedStop());
+    range.oninput = () => showStop(Number(range.value));
+    range.onchange = () => {
+      const { value } = CLOZE_STOPS[Number(range.value)]!;
+      invalidate();
+      void run(async () => {
+        if (value === activeCloze(state?.generationSettings ?? settings)) return;
+        try { await snapshot("generationSettings", { cloze: value }); }
+        catch (error) { showStop(savedStop()); throw error; }
+      }, false);
+    };
+    clozeField.append(el("span", "Cloze cards", "ab-label"), range, stops, clozeHelp);
+    settingsRow.append(modelField);
+    if (levelField.childElementCount) settingsRow.append(levelField);
+    settingsRow.append(kindsField, capField, clozeField);
 
     const help = el("div", undefined, "ab-kind-lines");
     for (const kind of WRITE_KINDS) { const line = el("span"); line.append(el("strong", KIND_NAMES[kind]), ` ${KIND_HELP[kind].replace(/\.$/, "")}.`); help.append(line); }

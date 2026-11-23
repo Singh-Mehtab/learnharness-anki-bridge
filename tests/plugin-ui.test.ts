@@ -64,6 +64,7 @@ async function setup(options: { handler?: (name: string, input: any) => unknown;
       }
       if (name === "edit") Object.assign(state.cards.find(c => c.id === input.id)!, { front: input.front, back: input.back, extra: input.extra, status: "draft" });
       if (name === "approve") state.cards.filter(c => input.ids.includes(c.id)).forEach(c => { c.status = "approved"; });
+      if (name === "unapprove") state.cards.find(c => c.id === input.id)!.status = "draft";
       if (name === "drop") state.cards.filter(c => input.ids.includes(c.id)).forEach(c => { c.status = "dropped"; });
       if (name === "markImported") { state.cards.filter(c => input.ids.includes(c.id)).forEach(c => { c.status = "imported"; c.deck = input.deck; }); return structuredClone({ ...state, importMarkId: "test-mark" }); }
       if (name === "unmarkImported") state.cards.filter(c => input.ids.includes(c.id)).forEach(c => { c.status = "approved"; delete c.deck; });
@@ -90,8 +91,8 @@ async function setup(options: { handler?: (name: string, input: any) => unknown;
   const button = (label: string | RegExp, parent: any = doc) => { const found = find(label, parent); assert.ok(found, `button ${label}`); return found as unknown as HTMLButtonElement; };
   const event = (type: string) => new window.Event(type) as never;
   const type = (input: HTMLInputElement | HTMLTextAreaElement, value: string, kind = "input") => { input.value = value; input.dispatchEvent(event(kind)); };
-  const mountSettings = async () => {
-    const host = doc.createElement("div"); doc.body.append(host);
+  const mountSettings = async (section?: HTMLElement) => {
+    const host = doc.createElement("div"); (section ?? doc.body).append(host);
     const scope = new AbortController();
     const dispose = await settings(host as unknown as HTMLElement, scope.signal);
     await tick();
@@ -127,6 +128,24 @@ test("the plugin registers a sidebar action, the view and a settings page", asyn
     for (const panel of ["Connect to Anki", "Anki profile", "Tags", "More card types", "Note type"]) assert.match(s.host.textContent!, new RegExp(panel));
     assert.doesNotMatch(f.container.textContent!, /Add missing fields|AnkiConnect address/, "upkeep lives only in settings");
     s.close();
+  } finally { await f.dispose(); }
+});
+
+test("Settings puts the manifest version beside the host heading and removes it on close", async () => {
+  const f = await setup();
+  try {
+    const section = f.doc.createElement("section");
+    section.dataset.testid = "section-plugin-anki-bridge";
+    section.innerHTML = "<h2>Anki Bridge</h2>";
+    f.doc.body.append(section);
+    const heading = section.querySelector("h2");
+    for (let i = 0; i < 2; i++) {
+      const settings = await f.mountSettings(section);
+      assert.equal(heading.textContent, `Anki Bridge v${f.ctx.manifest.version}`);
+      assert.equal(settings.host.querySelector(".ab-settings").firstElementChild.tagName, "SECTION");
+      settings.close();
+      assert.equal(heading.textContent, "Anki Bridge");
+    }
   } finally { await f.dispose(); }
 });
 
@@ -543,6 +562,23 @@ test("approval does not steal focus moved outside the list while saving", async 
     assert.equal(f.review().querySelector("article")?.getAttribute("data-status"), "approved");
     assert.equal(f.doc.activeElement, deck);
   } finally { release(); await f.dispose(); }
+});
+
+test("clicking Approved returns only that card to Draft without sending", async () => {
+  const state = fixture(); state.cards = [card("a"), card("b", { status: "approved" })];
+  const f = await setup({ state });
+  try {
+    const row = f.review().querySelector('[data-card-id="a"]')!;
+    f.button("Approve", row).click(); await tick();
+    assert.ok(f.find("Send this card", row));
+    f.button("Approved", row).click(); await tick();
+    assert.deepEqual(f.calls.find(c => c.name === "unapprove")?.input, { id: "a" });
+    assert.equal(state.cards[0]!.status, "draft");
+    assert.equal(state.cards[1]!.status, "approved");
+    assert.ok(f.find("Approve", row));
+    assert.equal(f.find("Send this card", row), undefined);
+    assert.equal(f.calls.some(c => c.name === "send"), false);
+  } finally { await f.dispose(); }
 });
 
 test("approve and send use named calls with deck, tags and destination; an empty deck explains itself", async () => {
@@ -1348,15 +1384,16 @@ test("FI-8: a cloze card previews as a question with [...], and the editor switc
   } finally { await f.dispose(); }
 });
 
-test("FI-8: Settings shows the cloze slider at Writer chooses by default and saves a new stop", async () => {
+test("FI-8: Write shows the cloze slider at Writer chooses by default and saves a new stop", async () => {
   const f = await setup();
   try {
     const s = await f.mountSettings();
-    const range = s.host.querySelector('input[type="range"]') as HTMLInputElement;
+    assert.equal(s.host.querySelector('input[type="range"]'), null);
+    const range = f.container.querySelector('.ab-write-settings input[type="range"]') as unknown as HTMLInputElement;
     assert.equal(range.getAttribute("aria-label"), "Cloze cards");
     assert.equal(range.value, "1");
     assert.equal(range.getAttribute("aria-valuetext"), "Writer chooses");
-    assert.match(s.host.textContent!, /Cloze where the notation already says what is asked/);
+    assert.match(f.container.textContent!, /Use cloze when the blank makes the question clearer/);
     f.type(range, "2", "input");
     assert.equal(range.getAttribute("aria-valuetext"), "Prefer cloze");
     range.dispatchEvent(f.event("change")); await tick();
@@ -1414,7 +1451,8 @@ test("#54: Settings saves and clears Writer notes, shows an example and the 2,00
     // A refresh from another mount leaves unsaved edits in place.
     f.type(notes, "Unsaved edit");
     const other = await f.mountSettings();
-    f.type(other.host.querySelector('input[type="range"]') as HTMLInputElement, "2", "change"); await tick();
+    const apply = Array.from(other.host.querySelectorAll("label") as ArrayLike<HTMLLabelElement>).find(label => label.textContent?.startsWith("Apply:"))!.querySelector("input")!;
+    apply.click(); await tick();
     assert.equal(notes.value, "Unsaved edit");
     assert.equal((other.host.querySelector('textarea[aria-label="Writer notes"]') as HTMLTextAreaElement).value, "Name the unit system on units cards.");
     other.close();

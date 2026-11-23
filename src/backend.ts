@@ -38,7 +38,7 @@ export async function activate(ctx: PluginBackendContext): Promise<() => Promise
     await generation.activate();
     await service.activate();
     if (ctx.signal.aborted) throw new Error('Anki Bridge activation was cancelled.');
-    for (const name of ['snapshot', 'settings', 'connection', 'pair', 'draft', 'edit', 'approve', 'send', 'reconcile', 'presence', 'show', 'repairFields', 'updateStyling', 'drop', 'markImported', 'unmarkImported']) {
+    for (const name of ['snapshot', 'settings', 'connection', 'pair', 'draft', 'edit', 'approve', 'unapprove', 'send', 'reconcile', 'presence', 'show', 'repairFields', 'updateStyling', 'drop', 'markImported', 'unmarkImported']) {
       handlers.push(ctx.handle(name, async input => {
         if (name === 'settings' || name === 'pair') generation.invalidatePreflights();
         if (name !== 'pair') return service.command(name, input ?? {});
