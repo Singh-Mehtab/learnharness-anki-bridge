@@ -36,7 +36,7 @@ Anki Bridge is a community plugin for [LearnHarness](https://github.com/amosblom
 
 ### Flag replies while you learn
 
-When a teaching reply covers something you want to keep, press **Flag for Anki** in the session's top bar. This flags the latest finished reply and every idea LearnHarness extracts from it. You can add a note for the card writer, such as a mistake you made. Cmd+Shift+A, or Ctrl+Shift+A on Windows and Linux, flags the reply straight away, and the confirmation offers to add a note. **Make cards** in the same bar opens Anki Bridge with the session's flagged ideas ticked.
+When a teaching reply covers something you want to keep, press **Flag for Anki** in the session's top bar. This flags the latest finished reply and every idea LearnHarness extracts from it. You can add a note for the card writer, such as a mistake you made. Cmd+Shift+A, or Ctrl+Shift+A on Windows and Linux, flags the reply straight away, and the confirmation offers to add a note. **Make cards** in the same bar opens Anki Bridge with the session's pending flagged ideas ticked. Once the writer saves a draft for a flagged idea, it stops being ticked by default. You can still pick it by hand or use **Select flagged**.
 
 Flagging is optional. You can make cards for any idea in your graph.
 
@@ -63,6 +63,8 @@ Writing runs in the background. If a run is cancelled or a batch fails, cards fr
 ### 3. Review and send
 
 Each draft shows its front, back and optional extra field, with maths and code rendered. Open **Idea when this card was written** to compare a card with its source. Edit, drop or approve cards one at a time, or approve all drafts once you've read them. Click **Approved** to return an unsent card to Draft. You can also write a card by hand from the **More** menu.
+
+Dropping a draft leaves the idea available for future writing. When you drop the last draft for an idea without cards, Review offers **Don't make cards for this idea** as a separate action.
 
 Pick a deck or type a new one, check the tags and press **Send to Anki**. The deck and tag fields suggest names from your Anki collection, and the tags start from a template you set in settings. A green panel confirms what was sent, and **Show in Anki** opens the cards in Anki's browser.
 

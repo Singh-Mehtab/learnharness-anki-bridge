@@ -2,6 +2,7 @@ import { CORE_KINDS, DEFAULT_KINDS, FLAGGED_CARD_CAP, isCoreKind, isStoredKind, 
 import type { CoreCardKind, StoredCardKind } from '../writer/types.ts';
 import type { WriterInput, WriterResult } from '../writer/types.ts';
 import type { PluginModelSpec } from '../../sdk/index.d.ts';
+import { validFlagReferences, type FlagReference } from '../session/flow.ts';
 
 interface SettingsBase {
   cardsPerNode: number;
@@ -58,6 +59,8 @@ export interface GenerationTask {
   status: 'pending' | 'running' | 'applied' | 'failed' | 'cancelled' | 'interrupted';
   input: WriterInput;
   sources: SourceSnapshot[];
+  /** Flag revisions the user confirmed for these targets. Never sent to the model. */
+  flagRefs?: FlagReference[];
   outputAllowance: number;
   /** Preflight's input reserve for earlier drafts from this run. */
   batchContextTokens?: number;
@@ -166,6 +169,7 @@ export function validateGenerations(settings: unknown, generations: unknown): vo
       if (t.duplicatesOmitted !== undefined && (t.status !== 'applied' || !Number.isSafeInteger(t.duplicatesOmitted) || Number(t.duplicatesOmitted) < 1)) throw new Error('Invalid duplicate omission count.');
       requests.add(t.requestId);
       const input = t.input as WriterInput, sources = t.sources as SourceSnapshot[];
+      if (t.flagRefs !== undefined && !validFlagReferences(t.flagRefs, new Set(input.targets.map(n => n.nodeId)))) throw new Error('Invalid saved flag references.');
       if (carriedNotes && input.writerNotes !== runNotes) throw new Error('Invalid generation task.');
       if (sources.length !== input.targets.length || new Set(sources.map(s => s.nodeId)).size !== sources.length || input.targets.some(n => !sources.some(s => s.nodeId === n.nodeId && s.statement === n.statement))) throw new Error('Generation sources do not match accepted input.');
       // Content rules are enforced once, at apply time. Persisted results get a shape check only,

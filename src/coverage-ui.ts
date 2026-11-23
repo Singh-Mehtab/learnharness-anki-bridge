@@ -6,7 +6,7 @@ import type { ButtonHandle } from "./ui.ts";
 
 export interface CoverageRow {
   id: string; name: string; statement: string; statementHash?: string;
-  cards: CardCounts; coverage?: Coverage; flagged?: boolean; flagNotes?: string[];
+  cards: CardCounts; coverage?: Coverage; flagged?: boolean; pendingFlag?: boolean; flagNotes?: string[];
 }
 export type CoverageView = Omit<CoverageContext, "nodes" | "missing" | "pairingKey"> & { nodes: CoverageRow[]; missing?: CoverageRow[]; pairingKey?: string };
 
@@ -113,7 +113,7 @@ export class CoveragePicker {
     if (this.defaults) {
       const defaults = new Set(this.selected);
       for (const n of this.visible()) {
-        if (!this.touched.has(n.id)) { if (n.flagged && this.eligible(n)) defaults.add(n.id); else defaults.delete(n.id); }
+        if (!this.touched.has(n.id)) { if ((n.pendingFlag ?? n.flagged) && this.eligible(n)) defaults.add(n.id); else defaults.delete(n.id); }
       }
       if (this.withinLimit(defaults.size)) this.selected = defaults;
     }

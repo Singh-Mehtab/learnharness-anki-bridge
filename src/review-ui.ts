@@ -6,7 +6,7 @@ import type { PackageResult as ExportResult } from "./anki/apkg.ts";
 type PackageResult = ExportResult & { requestTags: string[] };
 import { packageRevision } from "./anki/package-revision.ts";
 import { expandTagTemplate, matchTagCase, tagSuggestions, validateTags } from "./anki/tags.ts";
-import { isWaitingCard } from "./coverage/flow.ts";
+import { isWaitingCard, type CoverageContext } from "./coverage/flow.ts";
 import { KIND_NAMES } from "./kinds-ui.ts";
 import { CLOZE_KINDS, CORE_KINDS, isStoredKind } from "./writer/types.ts";
 import { answerPreview, BLANK, questionPreview, toBasic, toCloze } from "./writer/cloze.ts";
@@ -124,6 +124,33 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
     } });
     button(ctx, actionsBox, s, { label: "Dismiss", variant: "ghost", onClick: hideSent });
     revealPanel(icon, text, actionsBox);
+  }
+  async function dropCard(card: Card): Promise<string> {
+    const next = await call("drop", { ids: [card.id] });
+    edits.delete(card.id);
+    if (!alive() || next.durabilityWarning || next.cards.some(c => c.nodeId === card.nodeId && isWaitingCard(c))) return "Card dropped.";
+    // Dropping is already saved. A failed coverage read must not report it as a failed drop.
+    let coverage: CoverageContext;
+    try { coverage = await ctx.call<CoverageContext>("coverageContext"); }
+    catch { return "Card dropped."; }
+    const node = coverage.nodes?.find(n => n.id === card.nodeId);
+    if (!alive() || !node?.coverage.canDismiss || node.cards.sent || node.statementHash !== card.statementHash) return "Card dropped.";
+    const s = sentScope.reset();
+    sentPanel.dataset.kind = "drop";
+    const text = el("div", undefined, "ab-sent-text");
+    text.append(el("p", "Card dropped", "ab-sent-title"), el("p", node.name, "ab-sent-detail"));
+    const actionsBox = el("div", undefined, "ab-actions");
+    button(ctx, actionsBox, s, { label: "Don't make cards for this idea", onClick: () => {
+      if (s.aborted) return;
+      return run(async () => {
+        await ctx.call("dismissNode", { nodeId: node.id, statementHash: node.statementHash });
+        await options.onChanged();
+        return "Idea dismissed.";
+      });
+    } });
+    button(ctx, actionsBox, s, { label: "Close", variant: "ghost", onClick: hideSent });
+    revealPanel(text, actionsBox);
+    return "";
   }
   function revealPanel(...children: HTMLElement[]): void {
     sentPanel.replaceChildren(...children);
@@ -680,7 +707,7 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
         }) });
       } else {
         button(ctx, left, s, { label: "Edit", onClick: () => { if (packageMarkInFlight) return; editing.add(card.id); feedback.show(""); render(); article.ownerDocument.querySelector<HTMLTextAreaElement>(`[data-keep="card-${card.id}-front"]`)?.focus(); } });
-        button(ctx, left, s, { label: "Drop", onClick: () => run(async () => { await call("drop", { ids: [card.id] }); edits.delete(card.id); return "Card dropped."; }) });
+        button(ctx, left, s, { label: "Drop", onClick: () => run(() => dropCard(card)) });
         footerActions = renderFooterActions(card.status);
       }
     } else if (card.status === "imported") {

@@ -58,6 +58,18 @@ test("coverage picker labels mixed coverage and warnings, and only current dismi
   } finally { await f.close(); }
 });
 
+test("handled flag targets stay visible and can be selected, but start unticked", async () => {
+  const f = setup(true);
+  try {
+    f.picker.update({ ...f.view, nodes: [row("handled", {}, { flagged: true, pendingFlag: false }), row("pending", {}, { flagged: true, pendingFlag: true })] }, true);
+    assert.deepEqual(f.picker.ids, ["pending"]);
+    assert.equal(f.box("handled").checked, false);
+    assert.equal(f.box("handled").disabled, false);
+    f.button("Select flagged").click();
+    assert.deepEqual(f.picker.ids, ["handled", "pending"]);
+  } finally { await f.close(); }
+});
+
 test("coverage picker uses shared No cards eligibility for visible bulk selection and prunes filter/search selections", async () => {
   const f = setup();
   try {

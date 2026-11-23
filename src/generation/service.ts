@@ -19,6 +19,7 @@ import { replayBatchContext, selectBatchContext } from './batch-context.ts';
 import type { Generation, GenerationSettings, GenerationTask, SourceSnapshot } from './types.ts';
 import { graphCoverage, statementHash } from '../coverage/service.ts';
 import { MAX_SELECTED_NODES } from '../coverage/flow.ts';
+import { flagRevision, matchFlag, type FlagReference } from '../session/flow.ts';
 
 const WORKER = 'manual-card-writer';
 /** Auto and prefer use the cloze definition. Off and tasks saved before cloze use WORKER. */
@@ -57,7 +58,7 @@ interface Prepared {
   model: ModelCatalogEntry;
   /** What is sent: the override, or the host's cheap slot with its thinking level. */
   spec: PluginModelSpec;
-  batches: (Batch & { batchContextTokens?: number })[];
+  batches: (Batch & { batchContextTokens?: number; flagRefs?: FlagReference[] })[];
   sources: SourceSnapshot[];
   skipped: { nodeId: string; reason: string }[];
 }
@@ -217,6 +218,19 @@ export class GenerationService {
             front: c.front, back: c.back, extra: c.extra ?? '', status: 'draft' });
         }
       }
+      // Keep the completion after a card is dropped, but never resolve a newer flag revision.
+      const drafted = new Set(result.targets.filter(t => t.cards.length).map(t => t.nodeId));
+      for (const ref of stored.flagRefs ?? []) {
+        const flag = s.flags.find(f => f.id === ref.id && flagRevision(f) === ref.revision);
+        if (!flag) continue;
+        const handled = new Map((flag.handledIdeas ?? []).map(n => [n.nodeId, n]));
+        for (const source of stored.sources) {
+          if (ref.nodeIds.includes(source.nodeId) && drafted.has(source.nodeId) && currentHashes.get(source.nodeId) === source.statementHash) {
+            handled.set(source.nodeId, { nodeId: source.nodeId, statementHash: source.statementHash });
+          }
+        }
+        if (handled.size) flag.handledIdeas = [...handled.values()].slice(-100_000);
+      }
       stored.taskId = worker.id; stored.status = 'applied'; stored.result = result; delete stored.error; delete stored.resultPending;
       if (omitted) stored.duplicatesOmitted = omitted;
     });
@@ -290,6 +304,20 @@ export class GenerationService {
         else current = { ...current, targets: [withKinds(trimmed)] };
       }
       if (current.targets.length) batches.push(batch(current));
+    }
+    // Freeze which flag revisions requested these ideas. The worker sees only its writer input.
+    const selectedGraph = { ...graph, propositions: graph.propositions.filter(n => ids.includes(n.id) && notes?.has(n.id)) };
+    const flagRefs = state.flags.flatMap(flag => {
+      const nodeIds = matchFlag(flag, selectedGraph);
+      return nodeIds.length ? [{ id: flag.id, revision: flagRevision(flag), nodeIds }] : [];
+    });
+    for (const b of batches) {
+      const targets = new Set(b.input.targets.map(t => t.nodeId));
+      const refs = flagRefs.flatMap(ref => {
+        const nodeIds = ref.nodeIds.filter(id => targets.has(id));
+        return nodeIds.length ? [{ ...ref, nodeIds }] : [];
+      });
+      if (refs.length) b.flagRefs = refs;
     }
     // Earlier drafts don't exist at preflight. Reserve space within the model limit
     // without splitting a batch or skipping a target just to fit this context.
@@ -411,7 +439,7 @@ export class GenerationService {
         const g: Generation = { id: p.id, createdAt: new Date().toISOString(), status: 'running', nodeIds: p.nodeIds, backfillNodeIds: p.backfillNodeIds,
           settings: fresh.settings, modelSpec: fresh.spec, skipped: fresh.skipped,
           tasks: fresh.batches.map(b => ({ requestId: randomUUID(), definitionId: definitionFor(b.input), status: 'pending', input: b.input, outputAllowance: b.outputAllowance,
-            ...(b.batchContextTokens ? { batchContextTokens: b.batchContextTokens } : {}), sources: fresh.sources.filter(s => b.input.targets.some(t => t.nodeId === s.nodeId)) })) };
+            ...(b.batchContextTokens ? { batchContextTokens: b.batchContextTokens } : {}), ...(b.flagRefs ? { flagRefs: b.flagRefs } : {}), sources: fresh.sources.filter(s => b.input.targets.some(t => t.nodeId === s.nodeId)) })) };
         try { await this.delivery.save(s => { s.generations.push(g); }); }
         catch (error) {
           // The snapshot can be committed even if a later fsync throws; drive it so it cannot stay stuck.

@@ -6,7 +6,7 @@ import { graphCoverage } from '../coverage/service.ts';
 import type { Coverage, CoverageNode } from '../coverage/flow.ts';
 import { extractedMessageIds } from './extraction.ts';
 import {
-  failedOutputCallIds, flagNotesByNode, matchFlag, MAX_FLAG_MESSAGES, MAX_FLAGS, normalizeNote, sessionNodeIds, teacherProse,
+  failedOutputCallIds, flagIdeaHandled, flagNotesByNode, matchFlag, MAX_FLAG_MESSAGES, MAX_FLAGS, normalizeNote, sessionNodeIds, teacherProse,
 } from './flow.ts';
 import type { CardCounts, Flag, GraphLike, MessageLike } from './flow.ts';
 
@@ -21,7 +21,7 @@ export type FlagStatus = 'matched' | 'waiting' | 'no-nodes' | 'missing';
 export interface FlagView extends Flag { status: FlagStatus; nodeIds: string[] }
 /** `created` is false when the call updated an existing flag, so Undo must not remove it. */
 export interface FlagResult extends FlagView { created: boolean }
-export interface SessionNode { id: string; name: string; statement: string; flagged: boolean; flagNotes: string[]; cards: CardCounts; statementHash: string; coverage: Coverage }
+export interface SessionNode { id: string; name: string; statement: string; flagged: boolean; pendingFlag: boolean; flagNotes: string[]; cards: CardCounts; statementHash: string; coverage: Coverage }
 export interface SessionFlow {
   session: { id: string; title: string; exists: boolean };
   nodes: SessionNode[];
@@ -126,6 +126,10 @@ export class SessionService {
           const ids = [...new Set([...overlapping.flatMap(f => f.messageIds), ...messageIds])].slice(0, MAX_FLAG_MESSAGES);
           const keptNote = note ?? [...new Set(overlapping.map(f => f.note).filter(Boolean))].join(' / ').slice(0, 300);
           result = { ...first, messageIds: ids, note: keptNote, sessionTitle: record.title || first.sessionTitle };
+          if (keptNote !== first.note || ids.length !== first.messageIds.length || ids.some((id, i) => id !== first.messageIds[i])) {
+            result.revision = randomUUID();
+            delete result.handledIdeas;
+          }
           state.flags = state.flags.filter(f => !rest.includes(f)).map(f => f === first ? result : f);
         } else {
           if (state.flags.length >= MAX_FLAGS) throw new Error(`Limit is ${MAX_FLAGS} flags. Remove some first.`);
@@ -179,7 +183,8 @@ export class SessionService {
     const coverage = graphCoverage(graph, state), byId = new Map(coverage.nodes.map(n => [n.id, n] as const));
     const nodes = ids.map(id => {
       const n = byId.get(id)!, mine = flags.filter(f => f.nodeIds.includes(id));
-      return { ...n, flagged: mine.length > 0, flagNotes: [...new Set(mine.map(f => f.note).filter(Boolean))] };
+      return { ...n, flagged: mine.length > 0, pendingFlag: mine.some(f => !flagIdeaHandled(f, id, n.statementHash)),
+        flagNotes: [...new Set(mine.map(f => f.note).filter(Boolean))] };
     });
     const title = record?.title || flags[0]?.sessionTitle || graph.sessions?.[sessionId] || '';
     return { session: { id: sessionId, title, exists: !!record }, nodes, flags, cardsPerNode: this.cardsPerNode(), paired: !!state.destination,

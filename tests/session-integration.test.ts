@@ -104,6 +104,39 @@ test('a session scope reaches writing with flagged and bulk intent, saved caps, 
   }
 });
 
+test('saved drafts handle flag targets across Drop, but not a note edited during writing', async () => {
+  const f = await setup();
+  const flag = (messageId: string, note?: string) => f.c.call('flag', { sessionId: 'c1', messageIds: [messageId], note });
+  const flow = () => f.c.call('sessionFlow', { sessionId: 'c1' });
+  try {
+    await flag('m1');
+    await flag('m2', 'Original request');
+    const p = await f.c.call('preflight', { nodeIds: ['n_a', 'n_b'] });
+    await f.c.call('generate', { preflightId: p.preflightId });
+    await until(() => f.host.workers.starts.length === 1, 'writer started');
+    await flag('m2', 'A different request');
+    await flag('m2', 'Original request'); // Reverting text still renews the revision.
+    f.host.workers.succeed('task-1', { targets: ['n_a', 'n_b'].map(nodeId => ({ nodeId, cards: [{ kind: 'fact',
+      front: nodeId === 'n_a' ? 'Which condition is required for the first result in this lecture to hold?' : 'What must the system exchange with its surroundings?',
+      back: nodeId === 'n_a' ? 'Assumption A.' : 'Nothing.' }] })) });
+    await until(async () => (await f.c.call('generationStatus')).generations[0].status !== 'running', 'generation settled');
+    const generation = (await f.c.call('generationStatus')).generations[0];
+    assert.equal(generation.status, 'completed', JSON.stringify(generation.tasks.map((task: any) => task.error)));
+    const before = await flow();
+    assert.deepEqual(before.nodes.map((n: any) => [n.id, n.flagged, n.pendingFlag]), [['n_a', true, false], ['n_b', true, true]]);
+    const snapshot = await f.c.call('snapshot');
+    const draft = snapshot.cards.find((c: any) => c.nodeId === 'n_a');
+    await f.c.call('drop', { ids: [draft.id] });
+    const after = (await flow()).nodes.find((n: any) => n.id === 'n_a');
+    assert.equal(after.coverage.state, 'no-cards');
+    assert.equal(after.flagged, true);
+    assert.equal(after.pendingFlag, false);
+    const saved = JSON.parse(await readFile(path.join(f.directory, 'state.json'), 'utf8'));
+    assert.equal(saved.flags[0].handledIdeas[0].nodeId, 'n_a');
+    assert.equal(saved.flags[1].handledIdeas, undefined);
+  } finally { await f.close(); }
+});
+
 test('schema 2 migration preserves a completed generation, applied result, and generated source snapshot', async () => {
   const f = await setup();
   try {
