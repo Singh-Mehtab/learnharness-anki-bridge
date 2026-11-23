@@ -182,6 +182,9 @@ process.stdout.write(JSON.stringify({session_id:'fake',structured_output:{target
 
   writeFileSync(join(dir, "blank.txt"), " \n");
   assert.equal(contract(bench("--print-contract", "--writer-notes", "blank.txt").stdout).writerNotes, null);
+  // Line endings count as in the Settings box: a CRLF file with 2,000 characters after normalising fits.
+  writeFileSync(join(dir, "crlf.txt"), `${"x".repeat(1000)}\r\n${"y".repeat(999)}\r\n`);
+  assert.equal(contract(bench("--print-contract", "--writer-notes", "crlf.txt").stdout).writerNotes, `${"x".repeat(1000)}\n${"y".repeat(999)}`);
   writeFileSync(join(dir, "long.txt"), "x".repeat(2001));
   const long = bench("--print-contract", "--writer-notes", "long.txt");
   assert.notEqual(long.status, 0);

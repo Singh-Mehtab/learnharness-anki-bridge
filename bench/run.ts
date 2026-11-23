@@ -76,8 +76,8 @@ if (values["max-calls"] !== undefined && (!Number.isSafeInteger(maxCalls) || max
 }
 const cloze = values.cloze as "off" | "auto" | "prefer";
 if (!["off", "auto", "prefer"].includes(cloze)) throw new Error("--cloze must be off, auto or prefer");
-// #54: the same rules as the setting. Trimmed, blank means none, at most 2,000 characters.
-const writerNotes = values["writer-notes"] === undefined ? undefined : readFileSync(values["writer-notes"], "utf8").trim() || undefined;
+// #54: the same rules as the setting. Line breaks as in a textarea, trimmed, blank means none, at most 2,000 characters.
+const writerNotes = values["writer-notes"] === undefined ? undefined : readFileSync(values["writer-notes"], "utf8").replace(/\r\n?/g, "\n").trim() || undefined;
 if (writerNotes && writerNotes.length > WRITER_NOTES_LIMIT) throw new Error(`--writer-notes: the notes can be at most ${WRITER_NOTES_LIMIT} characters (got ${writerNotes.length})`);
 let calls = 0;
 

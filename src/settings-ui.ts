@@ -278,7 +278,13 @@ export function mountSettings(ctx: PluginFrontendContext, container: HTMLElement
 
   /** Clearing always asks first, from Clear or from saving an empty box. */
   async function clearNotes(): Promise<string> {
-    if (!savedNotes()) { notes.value = ""; return ""; }
+    if (!savedNotes()) {
+      // Nothing saved, so only the draft goes; still ask, as it can be long.
+      if (notes.value && !await confirmDialog(ctx, signal, { title: "Discard these notes?", confirm: "Discard", destructive: true,
+        body: "These writer notes haven't been saved. Nothing changes for the writer." })) return "";
+      if (alive()) notes.value = "";
+      return "";
+    }
     const ok = await confirmDialog(ctx, signal, { title: "Clear writer notes?", confirm: "Clear notes", destructive: true,
       body: "The writer goes back to its built-in rules only. Cards you already have don't change." });
     if (!ok || !alive()) return "";

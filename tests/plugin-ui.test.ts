@@ -1392,6 +1392,17 @@ test("#54: Settings saves and clears Writer notes, shows an example and the 2,00
     assert.match(s.host.textContent!, /0 \/ 2,000 characters/);
     const save = f.button("Save notes", s.host), clear = f.button("Clear", s.host);
     assert.equal(save.disabled, true); assert.equal(clear.disabled, true);
+    // Clearing a draft that was never saved asks too, and saves nothing.
+    f.type(notes, "A first draft.");
+    clear.click(); await tick();
+    assert.match(f.dialog()!.textContent!, /haven't been saved/);
+    f.button("Cancel", f.dialog()!).click(); await tick();
+    assert.equal(notes.value, "A first draft.");
+    clear.click(); await tick();
+    f.button("Discard", f.dialog()!).click(); await tick();
+    assert.equal(notes.value, "");
+    assert.equal(f.calls.some(c => c.name === "generationSettings"), false);
+    assert.equal(clear.disabled, true);
     f.type(notes, "Name the unit system on units cards. ");
     assert.match(s.host.textContent!, /37 \/ 2,000 characters/);
     assert.equal(save.disabled, false);
