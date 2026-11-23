@@ -276,6 +276,17 @@ test("a flagged target may exceed the per-node cap, up to FLAGGED_CARD_CAP", () 
   assert.equal(packed.batches[0].outputAllowance, 300 * 12 + 200 + 300 * 2 + 200);
 });
 
+test("a directly selected note candidate keeps the ordinary cap unless it answers the note or has a blank flag", () => {
+  const target = buildTarget(graph, "b", { flagged: true });
+  const fi = input({ enabledKinds: ["fact"], targets: [target], flagRequests: [{ id: "r", note: "Only ask about edge cases", nodeIds: ["b"] }] });
+  const cards = Array.from({ length: 3 }, (_, i) => ({ kind: "fact", front: `Prefix question ${i}?`, back: `Answer number ${i}` }));
+  const ordinary = { nodeId: "b", cards };
+  assert.deepEqual(findProblems({ targets: [{ ...ordinary, cards: cards.slice(0, 2) }] }, fi), []);
+  assert.match(findProblems({ targets: [ordinary] }, fi).join(), /the cap is 2/);
+  assert.deepEqual(findProblems({ targets: [{ ...ordinary, flagMatches: ["r"] }] }, fi), []);
+  assert.deepEqual(findProblems({ targets: [ordinary] }, { ...fi, targets: [{ ...target, blankFlag: true }] }), []);
+});
+
 test("fact cards may name the idea; apply cards may not", () => {
   const t = buildTarget(graph, "b");
   const fi = input({ enabledKinds: ["fact", "apply"], targets: [t] });

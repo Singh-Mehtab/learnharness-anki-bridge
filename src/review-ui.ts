@@ -134,7 +134,7 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
     try { coverage = await ctx.call<CoverageContext>("coverageContext"); }
     catch { return "Card dropped."; }
     const node = coverage.nodes?.find(n => n.id === card.nodeId);
-    if (!alive() || !node?.coverage.canDismiss || node.cards.sent || node.statementHash !== card.statementHash) return "Card dropped.";
+    if (!alive() || !node?.coverage.canDismiss || node.statementHash !== card.statementHash) return "Card dropped.";
     const s = sentScope.reset();
     sentPanel.dataset.kind = "drop";
     const text = el("div", undefined, "ab-sent-text");

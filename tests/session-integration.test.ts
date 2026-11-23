@@ -177,6 +177,39 @@ test('overlapping notes share one request; only an answered note is handled, inc
   } finally { await f.close(); }
 });
 
+for (const recover of [false, true]) test(`a saved note answer handles the unchanged siblings when its source changed (recovery: ${recover})`, async t => {
+  const f = await setup();
+  const replace = StateStore.prototype.replace;
+  let fail = recover;
+  t.mock.method(StateStore.prototype, 'replace', async function (this: StateStore, next: ReturnType<StateStore['snapshot']>) {
+    if (fail && next.generations[0]?.tasks[0]?.status === 'applied') throw new Error('Synthetic result write failure');
+    await replace.call(this, next);
+  });
+  try {
+    f.host.nodes[0].provenance!.push({ chatId: 'c1', messageId: 'm2' });
+    const flag = await f.c.call('flag', { sessionId: 'c1', messageIds: ['m2'], note: 'Recall the required condition.' });
+    const nodeIds = ['n_a', 'n_b'];
+    const pending = async () => (await f.c.call('sessionFlow', { sessionId: 'c1' })).flags[0].pendingNodeIds;
+    const p = await f.c.call('preflight', { nodeIds, independentNodeIds: [], flagScopes: [{ id: flag.id, nodeIds }] });
+    await f.c.call('generate', { preflightId: p.preflightId });
+    await until(() => f.host.workers.starts.length === 1, 'worker started');
+    f.host.nodes[0].statement += ' Revised statement.';
+    f.host.workers.succeed('task-1', { targets: [
+      { nodeId: 'n_a', flagMatches: [flag.id], cards: [{ kind: 'fact', front: 'Which condition is required for the first result in this lecture to hold?', back: 'Assumption A.' }] },
+      { nodeId: 'n_b', cards: [], skipReason: 'Does not answer the note.' },
+    ] });
+    await until(async () => (await f.c.call('generationStatus')).generations[0].status === (recover ? 'interrupted' : 'completed'));
+    if (recover) {
+      assert.deepEqual(await pending(), nodeIds);
+      fail = false;
+      await f.c.call('retryGeneration', { id: p.preflightId });
+    }
+    assert.deepEqual(await pending(), ['n_a']);
+    assert.equal((await f.c.call('generationStatus')).cards.length, 1);
+    assert.equal(f.host.workers.starts.length, 1);
+  } finally { await f.close(); }
+});
+
 test('an oversized noted group is not split and does not block independent writing', async () => {
   const f = await setup();
   try {
@@ -187,7 +220,9 @@ test('an oversized noted group is not split and does not block independent writi
     const p = await f.c.call('preflight', { nodeIds: ['n_a', 'n_b'], independentNodeIds: ['n_a'], flagScopes: [{ id: note.id, nodeIds: ['n_a', 'n_b'] }] });
     assert.deepEqual(p.batches.map((batch: any) => batch.nodeIds), [['n_a']]);
     assert.equal(p.maximumCards, 2);
-    assert.ok(p.skipped.every((skip: any) => /group cannot fit/.test(skip.reason)));
+    assert.deepEqual(p.skipped.map((skip: any) => skip.nodeId), ['n_b']);
+    assert.match(p.skipped[0].reason, /group cannot fit/);
+    assert.deepEqual(p.skippedFlagRequests.map((skip: any) => skip.count), [1]);
     await f.c.call('generate', { preflightId: p.preflightId });
     await until(() => f.host.workers.starts.length === 1, 'independent writer started');
     assert.doesNotMatch(f.host.workers.starts[0].prompt, /Focus on the required condition/);

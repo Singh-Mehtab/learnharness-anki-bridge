@@ -13,11 +13,12 @@ export function packNoteBatches(options: {
   base: Omit<WriterInput, 'targets' | 'flagRequests'>;
   batch: (input: WriterInput) => Batch;
   fits: (batch: Batch) => boolean;
-}): { batches: Batch[]; skipped: SkippedTarget[]; assigned: Set<string> } {
+}): { batches: Batch[]; skipped: SkippedTarget[]; skippedFlagRequests: { count: number; reason: string }[]; assigned: Set<string> } {
   const { graph, flags, independent, extrasFor, base, batch, fits } = options;
   const blank = new Set(flags.filter(f => !f.note).flatMap(f => f.nodeIds));
   const requested = new Set(independent);
   const assigned = new Set<string>(), batches: Batch[] = [], skipped: SkippedTarget[] = [];
+  const skippedFlagRequests: { count: number; reason: string }[] = [];
   for (const component of noteComponents(flags)) {
     const ids = [...new Set(component.flatMap(f => f.nodeIds))];
     const targets: WriterInput['targets'] = [];
@@ -49,13 +50,15 @@ export function packNoteBatches(options: {
       }) });
     }
     if (!within(prepared)) {
-      for (const target of targets) skipped.push({ nodeId: target.nodeId, reason: 'The noted flag group cannot fit one request. Select fewer candidates or choose a model with larger limits.' });
+      const reason = 'The noted flag group cannot fit one request. Select fewer candidates or choose a model with larger limits.';
+      skippedFlagRequests.push({ count: flagRequests.length, reason });
+      for (const target of targets) skipped.push({ nodeId: target.nodeId, reason });
       continue;
     }
     batches.push(prepared);
     for (const id of eligible) assigned.add(id);
   }
-  return { batches, skipped, assigned };
+  return { batches, skipped, skippedFlagRequests, assigned };
 }
 
 export function refsForBatch(flags: ResolvedFlag[], input: WriterInput): FlagReference[] {

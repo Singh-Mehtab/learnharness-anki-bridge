@@ -123,6 +123,7 @@ export function findProblems(result: unknown, input: WriterInput): string[] {
   const byId = new Map(input.targets.map((t) => [t.nodeId, t]));
   const seen = new Set<string>();
   const groups = new Map(input.flagRequests?.map(r => [r.id, new Set(r.nodeIds)]));
+  const candidates = new Set(input.flagRequests?.flatMap(r => r.nodeIds));
   for (const row of rows as Array<{ nodeId?: unknown; cards?: unknown; skipReason?: unknown; flagMatches?: unknown }>) {
     const nodeId = typeof row?.nodeId === "string" ? row.nodeId : "";
     const target = byId.get(nodeId);
@@ -146,7 +147,9 @@ export function findProblems(result: unknown, input: WriterInput): string[] {
       problems.push(`Target ${nodeId}: flagMatches must list distinct note IDs that include this target and are answered by its cards.`);
     }
     if (target.noteOnly && cards.length && matches === undefined) problems.push(`Target ${nodeId}: cards on a note-only target must answer a note in flagMatches.`);
-    const cap = capFor(target, input.maxCardsPerNode);
+    const hasNoteMatch = Array.isArray(matches) && matches.some(id => groups.get(id)?.has(nodeId));
+    const cap = candidates.has(nodeId) && !target.blankFlag && !hasNoteMatch
+      ? input.maxCardsPerNode : capFor(target, input.maxCardsPerNode);
     if (cards.length > cap) {
       problems.push(`Target ${nodeId}: ${cards.length} cards, but the cap is ${cap}.`);
     }

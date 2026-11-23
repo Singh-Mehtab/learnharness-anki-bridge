@@ -63,6 +63,7 @@ interface Prepared {
   batches: (Batch & { batchContextTokens?: number; flagRefs?: FlagReference[] })[];
   sources: SourceSnapshot[];
   skipped: { nodeId: string; reason: string }[];
+  skippedFlagRequests: { count: number; reason: string }[];
 }
 interface Preflight { id: string; nodeIds: string[]; backfillNodeIds: string[]; selection: FlagSelection; prepared: Prepared }
 
@@ -221,7 +222,9 @@ export class GenerationService {
       // Keep the completion after a card is dropped, but never resolve a newer flag revision.
       const current = new Set(stored.sources.filter(n => currentHashes.get(n.nodeId) === n.statementHash).map(n => n.nodeId));
       const drafted = new Set(result.targets.filter(t => t.cards.length && current.has(t.nodeId)).map(t => t.nodeId));
-      const answered = new Set(result.targets.filter(t => drafted.has(t.nodeId)).flatMap(t => t.flagMatches ?? []));
+      // Each returned card was saved or matched to an exact duplicate above. A
+      // changed source keeps its own request pending without reopening other candidates.
+      const answered = new Set(result.targets.filter(t => t.cards.length).flatMap(t => t.flagMatches ?? []));
       const noted = new Set(stored.input.flagRequests?.map(r => r.id));
       for (const ref of stored.flagRefs ?? []) {
         const flag = s.flags.find(f => f.id === ref.id && flagRevision(f) === ref.revision);
@@ -292,9 +295,7 @@ export class GenerationService {
     // Noted groups and blank flags precede ordinary targets, so they get first claim on recall tasks.
     const orderedIds = [...ungrouped.filter(id => blank.has(id)), ...ungrouped.filter(id => !blank.has(id))];
     const packed = pack(graph, orderedIds, extrasFor, { ...base, contextWindow: model.contextWindow, maxTokens: model.maxTokens });
-    const batches: Prepared['batches'] = [], skipped = [...noted.skipped];
-    const skippedIds = new Set(skipped.map(s => s.nodeId));
-    skipped.push(...packed.skipped.filter(s => !skippedIds.has(s.nodeId)));
+    const batches: Prepared['batches'] = [], excluded = new Map([...noted.skipped, ...packed.skipped].map(s => [s.nodeId, s.reason]));
     const push = (next: Batch) => {
       const previous = batches.at(-1);
       if (previous && (previous.input.flagRequests || next.input.flagRequests)) {
@@ -319,7 +320,7 @@ export class GenerationService {
           const node = withKinds(candidate);
           return node.allowedKinds.length > 0 && fits(batch({ ...current, targets: [node] }));
         }, minimumNeighbours(target, settings.enabledKinds));
-        if (!trimmed) skipped.push({ nodeId: target.nodeId, reason: 'Model limits cannot fit this target, prompt and reserved output.' });
+        if (!trimmed) excluded.set(target.nodeId, 'Model limits cannot fit this target, prompt and reserved output.');
         else current = { ...current, targets: [withKinds(trimmed)] };
       }
       if (current.targets.length) push(batch(current));
@@ -338,7 +339,10 @@ export class GenerationService {
     // Bind the initial input, bounded reserve, model entry and skips.
     const coverageBinding = { destination: state.destination, nodes: coverage.nodes.filter(n => ids.includes(n.id)),
       dismissals: state.dismissals.filter(d => ids.includes(d.nodeId)) };
-    return { binding: digest({ batches, skipped, settings, model, spec, sources, coverageBinding, backfillNodeIds, flags, selection }), settings, model, spec, batches, skipped, sources };
+    const scheduled = new Set(batches.flatMap(b => b.input.targets.map(t => t.nodeId)));
+    const skipped = [...excluded].filter(([nodeId]) => !scheduled.has(nodeId)).map(([nodeId, reason]) => ({ nodeId, reason }));
+    const { skippedFlagRequests } = noted;
+    return { binding: digest({ batches, skipped, skippedFlagRequests, settings, model, spec, sources, coverageBinding, backfillNodeIds, flags, selection }), settings, model, spec, batches, skipped, skippedFlagRequests, sources };
   }
   private async preflight(ids: string[], backfillNodeIds: string[], selection: FlagSelection): Promise<unknown> {
     const prepared = await this.prepare(ids, backfillNodeIds, selection), id = randomUUID();
@@ -350,6 +354,7 @@ export class GenerationService {
     return { preflightId: id, nodeIds: ids, backfillNodeIds, nodeCount: ids.length, maximumCards: prepared.batches.reduce((n, b) => n + b.input.targets.reduce((sum, target) => sum + capFor(target, b.input.maxCardsPerNode), 0), 0),
       inputTokens, outputTokens, estimatedCost: prepared.model.cost ? (inputTokens * prepared.model.cost.input + outputTokens * prepared.model.cost.output) / 1_000_000 : null,
       model: prepared.spec, modelName: prepared.model.name, followsCheapSlot: !prepared.settings.model, settings: prepared.settings, skipped: prepared.skipped,
+      ...(prepared.skippedFlagRequests.length && { skippedFlagRequests: prepared.skippedFlagRequests }),
       batches: prepared.batches.map(b => ({ nodeIds: b.input.targets.map(t => t.nodeId), inputTokens: b.inputTokens, outputAllowance: b.outputAllowance })) };
   }
   async command(name: string, input: unknown = {}): Promise<unknown> {

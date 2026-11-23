@@ -668,6 +668,17 @@ test("single Drop offers a separate idea dismissal only after the last draft", a
   } finally { await f.dispose(); }
 });
 
+test("Drop offers dismissal for the current idea even when an older card was delivered", async () => {
+  const state = fixture();
+  state.cards = [card("a"), card("old", { nodeId: "node-a", statementHash: "older", status: "imported" })];
+  const f = await setup({ state, coverageNodes: () => [{ id: "node-a", name: "Idea a", statementHash: "h",
+    cards: { sent: 1 }, coverage: { canDismiss: true } }] });
+  try {
+    f.button("Drop", f.review()).click(); await tick();
+    assert.ok(f.find("Don't make cards for this idea"));
+  } finally { await f.dispose(); }
+});
+
 test("Drop all unsent from an open More menu confirms the current cards after resync", async () => {
   const state = fixture(); state.cards = [card("a")];
   const f = await setup({ state });

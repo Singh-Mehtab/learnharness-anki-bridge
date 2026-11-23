@@ -20,6 +20,7 @@ interface Preflight {
   preflightId: string; nodeCount: number; maximumCards: number; inputTokens: number; outputTokens: number;
   estimatedCost: number | null; model: { provider: string; id: string; thinkingLevel?: string }; modelName?: string; followsCheapSlot?: boolean;
   batches: Array<{ nodeIds: string[] }>; skipped: Array<{ nodeId: string; reason: string }>;
+  skippedFlagRequests?: Array<{ count: number; reason: string }>;
   settings?: { writerNotes?: string };
 }
 type SessionFlowNodes = Omit<CoverageView, "flags"> & { flags: CoverageFlag[] };
@@ -232,6 +233,9 @@ export function mountDrafting(ctx: PluginFrontendContext, ideasHost: HTMLElement
       const skipped = el("ul", undefined, "ab-skipped");
       for (const skip of p.skipped) skipped.append(el("li", `${name(skip.nodeId)}: ${skip.reason}`));
       body.append(el("p", `${plural(p.skipped.length, "idea")} skipped:`, "ab-muted"), skipped);
+    }
+    for (const skip of p.skippedFlagRequests ?? []) {
+      body.append(el("p", `${plural(skip.count, "flag request")} skipped. ${skip.reason}`, "ab-muted"));
     }
     body.append(el("p", "Safe to leave this page.", "ab-muted"));
     if (!p.batches.length) {
