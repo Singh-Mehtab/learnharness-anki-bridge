@@ -144,3 +144,58 @@ test("summary cannot pass incomplete generation, an empty run, a leak, or a kept
   writeFileSync(join(dir, "run.json"), JSON.stringify(run));
   assert.match(summarise(dir), /FAIL \(incomplete generation or no cards\)/);
 });
+
+test("#54: --writer-notes sends the notes after the quoted input, counts them and records them in the run", posixCli, (t) => {
+  const dir = scratch(t);
+  const bin = join(dir, "bin");
+  mkdirSync(bin);
+  symlinkSync(process.execPath, join(bin, "node"));
+  const prompts = join(dir, "prompts.log");
+  // The quoted input is the third block; the notes come after it.
+  writeFileSync(join(bin, "claude"), `#!/usr/bin/env node
+const fs = require('node:fs');
+const prompt = process.argv.at(-1);
+fs.appendFileSync(process.env.FAKE_PROMPTS, JSON.stringify(prompt) + '\\n');
+const input = JSON.parse(prompt.split('\\n\\n')[2]);
+process.stdout.write(JSON.stringify({session_id:'fake',structured_output:{targets:input.targets.map(t=>({nodeId:t.nodeId,cards:[{kind:'fact',front:'Which consequence follows here?',back:'Distinct result'}]}))}}));
+`, { mode: 0o755 });
+  mkdirSync(join(dir, "bench/private"), { recursive: true });
+  mkdirSync(join(dir, "bench/fixtures"));
+  const nodes = [{ id: "n0", name: "Topic 0", statement: "Supported fact." }];
+  writeFileSync(join(dir, "bench/private/fake.json"), JSON.stringify({ name: "fake", subject: "test", origin: "hand-written", graph: { propositions: nodes, chains: [] }, chats: {}, targets: ["n0"] }));
+  const notes = "Make prefix facts cloze cards.\nName the unit system on units cards.";
+  writeFileSync(join(dir, "notes.txt"), `\n${notes}\n\n`);
+  const env = { PATH: bin, FAKE_PROMPTS: prompts };
+  const bench = (...args: string[]) => spawnSync(process.execPath, [runner, "--sets", "fake", ...args], { cwd: dir, env, encoding: "utf8" });
+
+  const contract = (out: string) => JSON.parse(out.slice(out.indexOf("\n{") + 1));
+  const plain = contract(bench("--print-contract").stdout);
+  const withNotes = contract(bench("--print-contract", "--writer-notes", "notes.txt").stdout);
+  assert.equal(plain.writerNotes, null);
+  assert.equal(withNotes.writerNotes, notes, "trimmed like the setting");
+  assert.equal(withNotes.instructions, plain.instructions, "the built-in rules don't change");
+  assert.deepEqual(withNotes.schema, plain.schema);
+  assert.ok(withNotes.firstPrompt.startsWith(`${plain.firstPrompt}\n\nWriter notes from the learner.`));
+  assert.equal(JSON.parse(withNotes.firstPrompt.split("\n").at(-1)), notes);
+  const tokens = (out: string) => Number(/~(\d+) input tokens/.exec(out)![1]);
+  assert.ok(tokens(bench("--dry-run", "--writer-notes", "notes.txt").stdout) > tokens(bench("--dry-run").stdout));
+
+  writeFileSync(join(dir, "blank.txt"), " \n");
+  assert.equal(contract(bench("--print-contract", "--writer-notes", "blank.txt").stdout).writerNotes, null);
+  // Line endings count as in the Settings box: a CRLF file with 2,000 characters after normalising fits.
+  writeFileSync(join(dir, "crlf.txt"), `${"x".repeat(1000)}\r\n${"y".repeat(999)}\r\n`);
+  assert.equal(contract(bench("--print-contract", "--writer-notes", "crlf.txt").stdout).writerNotes, `${"x".repeat(1000)}\n${"y".repeat(999)}`);
+  writeFileSync(join(dir, "long.txt"), "x".repeat(2001));
+  const long = bench("--print-contract", "--writer-notes", "long.txt");
+  assert.notEqual(long.status, 0);
+  assert.match(long.stderr, /at most 2000 characters/);
+
+  const r = bench("--writer-notes", "notes.txt", "--max-calls", "1", "--retries", "0");
+  assert.equal(r.status, 0, r.stderr);
+  const sent = readFileSync(prompts, "utf8").trim().split("\n").map(line => JSON.parse(line));
+  assert.deepEqual(sent, [withNotes.firstPrompt]);
+  const run = JSON.parse(readFileSync(join(dir, "bench-output", readdirSync(join(dir, "bench-output"))[0], "run.json"), "utf8"));
+  assert.equal(run.writerNotes, notes);
+  assert.match(run.runId, /-notes$/);
+  assert.equal(run.cards.length, 1);
+});

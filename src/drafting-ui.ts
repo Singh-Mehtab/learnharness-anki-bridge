@@ -13,6 +13,7 @@ interface Preflight {
   preflightId: string; nodeCount: number; maximumCards: number; inputTokens: number; outputTokens: number;
   estimatedCost: number | null; model: { provider: string; id: string; thinkingLevel?: string }; modelName?: string; followsCheapSlot?: boolean;
   batches: Array<{ nodeIds: string[] }>; skipped: Array<{ nodeId: string; reason: string }>;
+  settings?: { writerNotes?: string };
 }
 interface SessionFlowNodes { session: { id: string; title: string; exists: boolean }; nodes: CoverageRow[]; missing?: CoverageRow[]; cardsPerNode: number; paired: boolean; pairingWarning?: boolean }
 export { KIND_NAMES } from "./kinds-ui.ts";
@@ -167,7 +168,8 @@ export function mountDrafting(ctx: PluginFrontendContext, ideasHost: HTMLElement
     fact("Model", `${p.modelName ?? p.model.id}${p.model.thinkingLevel ? `, ${p.model.thinkingLevel} thinking` : ""}${p.followsCheapSlot ? " (cheap model)" : ""}`);
     fact("Model calls", `${p.batches.length}, up to ${p.batches.length * 3} with fixes`);
     fact("Cost", p.estimatedCost === null ? "No estimate" : `About $${p.estimatedCost.toFixed(4)}, first attempt`);
-    const modelInput = "Ideas, linked ideas, excerpts from source session messages, flag notes, and existing cards for these ideas";
+    // #54: the estimate counts the notes, so say they go too.
+    const modelInput = `Ideas, linked ideas, excerpts from source session messages, flag notes, ${p.settings?.writerNotes ? "existing cards for these ideas, and your writer notes" : "and existing cards for these ideas"}`;
     fact("Sent to the model", p.batches.length > 1
       ? `${modelInput}. Later requests may also get a limited set of earlier drafts from this run, including local edits.`
       : modelInput);

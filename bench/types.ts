@@ -70,6 +70,8 @@ export interface BenchRun {
   cloze?: "off" | "auto" | "prefer";
   /** FI-8: "set:nodeId" of positive cloze fixtures in this run. */
   clozePositive?: string[];
+  /** #54: Writer notes sent with every request (--writer-notes). Absent when none. */
+  writerNotes?: string;
   instructions: string;
   /** Present on 0.1.1+ runs; older runs counted attempts, not CLI launches. */
   modelCalls?: number;

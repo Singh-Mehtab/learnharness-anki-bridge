@@ -51,7 +51,7 @@ function setup(options: { catalogUnavailable?: boolean; initialGraphFailure?: bo
         if (toggleKind) state.generationSettings.enabledKinds = ["fact", "equation", "why", "steps", "apply", "discriminate"].filter(k => k === toggleKind.kind ? toggleKind.enabled : state.generationSettings.enabledKinds.includes(k));
       }
       if (name === "retryGeneration" && recovery) return recovery();
-      if (name === "preflight" || name === "retryGeneration") { await hold; return { ...structuredClone(options.estimate ?? preflight), followsCheapSlot: !state.generationSettings.model }; }
+      if (name === "preflight" || name === "retryGeneration") { await hold; return { ...structuredClone(options.estimate ?? preflight), settings: structuredClone(state.generationSettings), followsCheapSlot: !state.generationSettings.model }; }
       if (name === "generate") state.generations.push({ id: "p1", status: "running", nodeIds: ["n_a"], skipped: [], settings: {}, createdAt: "", tasks: [
         { requestId: "r1", status: "running", input: {}, outputAllowance: 1200, sources: [{ nodeId: "n_a", name: "Alpha" }] }] });
       if (name === "cancelGeneration") { state.generations[0].status = "cancelled"; state.generations[0].tasks[0].status = "cancelled"; }
@@ -251,6 +251,44 @@ test("a rejected card-type toggle puts the checkbox back and tells Settings noth
     why().checked = true; why().dispatchEvent(f.event("change")); await tick();
     assert.equal(why().checked, true);
     assert.equal(notified, 1, "Settings hears about a saved Write change");
+  } finally { await f.close(); }
+});
+
+test("#54: the estimate says writer notes are sent, and a Settings change while it is open blocks the start", async () => {
+  const f = setup({ model: true });
+  try {
+    await f.panel.setScope(undefined); await tick();
+    f.select(true); await tick();
+    f.button("Write cards for 1 idea").click(); await tick();
+    const sent = () => [...f.dialog()!.querySelectorAll("dt")].find(term => term.textContent === "Sent to the model")?.nextElementSibling?.textContent;
+    assert.doesNotMatch(sent()!, /writer notes/);
+    f.button("Cancel").click(); await tick();
+    f.state.generationSettings.writerNotes = "Name the unit system on units cards.";
+    f.button("Write cards for 1 idea").click(); await tick();
+    assert.equal(sent(), "Ideas, linked ideas, excerpts from source session messages, flag notes, existing cards for these ideas, and your writer notes");
+    // Settings saves new notes while the estimate is open: Settings tells its peers, and Write drops the estimate.
+    f.state.generationSettings.writerNotes = "Prefer cloze for prefix facts.";
+    f.peers.forEach(peer => peer()); await tick();
+    f.button("Start writing").click(); await tick();
+    assert.equal(f.calls.some(c => c.name === "generate"), false);
+    // The next Write asks the backend for a fresh estimate.
+    f.button("Write cards for 1 idea").click(); await tick();
+    assert.equal(f.calls.filter(c => c.name === "preflight").length, 3);
+    f.button("Start writing").click(); await tick();
+    assert.equal(f.calls.filter(c => c.name === "generate").length, 1);
+  } finally { await f.close(); }
+});
+
+test("#54: a split estimate with writer notes names both the notes and the earlier drafts", async () => {
+  const f = setup({ estimate: { ...preflight, nodeIds: ["n_a", "n_b"], nodeCount: 2,
+    batches: [...preflight.batches, { ...preflight.batches[0], nodeIds: ["n_b"] }] } });
+  try {
+    f.state.generationSettings.writerNotes = "Name the unit system on units cards.";
+    await f.panel.setScope(undefined); await tick();
+    f.select(true); await tick();
+    f.button("Write cards for 1 idea").click(); await tick();
+    const sent = [...f.dialog()!.querySelectorAll("dt")].find(term => term.textContent === "Sent to the model");
+    assert.equal(sent?.nextElementSibling?.textContent, "Ideas, linked ideas, excerpts from source session messages, flag notes, existing cards for these ideas, and your writer notes. Later requests may also get a limited set of earlier drafts from this run, including local edits.");
   } finally { await f.close(); }
 });
 

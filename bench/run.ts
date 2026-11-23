@@ -7,6 +7,7 @@
 //   node bench/run.ts --mode core --kinds fact,equation,steps   # choose kinds
 //   node bench/run.ts --mode trial           # mini-problem + spot-the-mistake, first 4 targets per set
 //   node bench/run.ts --cloze auto           # FI-8: cloze writer, mode auto or prefer (default off)
+//   node bench/run.ts --writer-notes notes.txt   # #54: send these Writer notes with every request
 //   options: --model sonnet --cap 2 --sets qm,humanities,programming --dry-run
 //
 // The CLI runs in an empty temp directory with no tools, no MCP servers and no
@@ -29,6 +30,8 @@ import {
   writerInstructions,
   writerPrompt,
   duplicateIndexes,
+  estimateTokens,
+  WRITER_NOTES_LIMIT,
   type Batch,
   type CardKind,
   type WriterResult,
@@ -52,6 +55,7 @@ const { values } = parseArgs({
     "dry-run": { type: "boolean", default: false },
     cloze: { type: "string", default: "off" },
     "print-contract": { type: "boolean", default: false },
+    "writer-notes": { type: "string" },
   },
 });
 
@@ -72,6 +76,9 @@ if (values["max-calls"] !== undefined && (!Number.isSafeInteger(maxCalls) || max
 }
 const cloze = values.cloze as "off" | "auto" | "prefer";
 if (!["off", "auto", "prefer"].includes(cloze)) throw new Error("--cloze must be off, auto or prefer");
+// #54: the same rules as the setting. Line breaks as in a textarea, trimmed, blank means none, at most 2,000 characters.
+const writerNotes = values["writer-notes"] === undefined ? undefined : readFileSync(values["writer-notes"], "utf8").replace(/\r\n?/g, "\n").trim() || undefined;
+if (writerNotes && writerNotes.length > WRITER_NOTES_LIMIT) throw new Error(`--writer-notes: the notes can be at most ${WRITER_NOTES_LIMIT} characters (got ${writerNotes.length})`);
 let calls = 0;
 
 const BENCH_COMPLETION = `Return the complete result as structured output matching the schema. If you are told about validation problems, return a corrected complete result.`;
@@ -217,6 +224,12 @@ for (const set of sets) {
   }
   for (const batch of batches) {
     if (cloze !== "off") batch.input.cloze = cloze;
+    if (writerNotes) {
+      // Count the notes in the estimate, as preflight does.
+      const before = estimateTokens(writerPrompt(batch.input));
+      batch.input.writerNotes = writerNotes;
+      batch.inputTokens += estimateTokens(writerPrompt(batch.input)) - before;
+    }
     jobs.push({ set, batch });
   }
 }
@@ -227,7 +240,7 @@ console.log(
 );
 if (values["print-contract"]) {
   // No-model check of what the bench would send for this mode.
-  console.log(JSON.stringify({ cloze, instructions, schema, firstPrompt: jobs[0] ? writerPrompt(jobs[0].batch.input) : null }, null, 2));
+  console.log(JSON.stringify({ cloze, writerNotes: writerNotes ?? null, instructions, schema, firstPrompt: jobs[0] ? writerPrompt(jobs[0].batch.input) : null }, null, 2));
   process.exit(0);
 }
 if (values["dry-run"]) {
@@ -235,7 +248,7 @@ if (values["dry-run"]) {
   process.exit(0);
 }
 
-const runId = `${new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19)}-${mode}-${values.model}${cloze !== "off" ? `-cloze-${cloze}` : ""}`;
+const runId = `${new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19)}-${mode}-${values.model}${cloze !== "off" ? `-cloze-${cloze}` : ""}${writerNotes ? "-notes" : ""}`;
 const results = await pool(jobs, concurrency, async (job) => {
   const r = await runBatch(job.set, job.batch);
   const a = r.record.attempts;
@@ -295,6 +308,7 @@ const run: BenchRun = {
   maxCardsPerNode: cap,
   enabledKinds: kinds,
   cloze,
+  ...(writerNotes ? { writerNotes } : {}),
   clozePositive: sets.flatMap((s) => (s.clozePositive ?? []).map((id) => `${s.name}:${id}`)),
   instructions,
   modelCalls: calls,

@@ -106,3 +106,14 @@ test('FI-8: schema 9 migrates v8 with exact backup; cloze format needs schema 9 
   assert.ok(validGenerationSettings({ ...settings, cloze: 'off' }));
   assert.ok(!validGenerationSettings({ ...settings, cloze: 'always' }));
 });
+
+test('#54: saved Writer notes are trimmed, non-blank text of at most 2,000 characters', async () => {
+  const { validGenerationSettings } = await import('../src/generation/types.ts');
+  const settings = initialState().generationSettings;
+  assert.equal(settings.writerNotes, undefined);
+  assert.ok(validGenerationSettings({ ...settings, writerNotes: 'Name the unit system.' }));
+  assert.ok(validGenerationSettings({ ...settings, writerNotes: 'x'.repeat(2000) }));
+  for (const writerNotes of ['', ' padded ', 'x'.repeat(2001), 7, null]) assert.ok(!validGenerationSettings({ ...settings, writerNotes }), String(writerNotes));
+  validateState({ ...initialState(), generationSettings: { ...settings, writerNotes: 'Name the unit system.' } });
+  assert.throws(() => validateState({ ...initialState(), generationSettings: { ...settings, writerNotes: '' } }), /generation state/);
+});
