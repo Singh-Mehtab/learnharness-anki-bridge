@@ -478,7 +478,8 @@ test("the summary counts ideas that got cards, and lists the skipped ones", asyn
     await f.panel.setScope(undefined); await tick();
     assert.match(f.text(), /Wrote 2 cards for 1 idea\./);
     assert.match(f.text(), /2 ideas skipped/);
-    assert.match(f.text(), /when writing\. See Review/);
+    assert.match(f.text(), /The writer skipped this as a repeat\./);
+    assert.doesNotMatch(f.text(), /See Review for the comparison/);
     assert.match(f.text(), /Too long/);
     assert.doesNotMatch(f.text(), /Already covered/);
   } finally { await f.close(); }

@@ -80,7 +80,7 @@ export interface EarlierRepeatSkipRef { generationId: string; requestId: string;
 
 // Summary views don't check live comparisons. Refer to the historical decision only.
 export const skipSummary = (target: TargetResult): string | undefined => target.earlierRepeatOf
-  ? 'Skipped as a repeat when writing. See Review for the comparison.' : target.skipReason;
+  ? 'The writer skipped this as a repeat.' : target.skipReason;
 export interface Generation {
   id: string;
   createdAt: string;

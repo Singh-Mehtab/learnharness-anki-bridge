@@ -218,7 +218,7 @@ test('a stale earlier-card skip leaves the target pending for a focused retry wi
     const ideas: CoverageContext = await c.call('coverageContext');
     const skippedIdea = ideas.nodes.find(n => n.id === 'n_a');
     assert.equal(skippedIdea?.coverage.selectable, true);
-    assert.match(skippedIdea?.coverage.skipReason ?? '', /when writing\. See Review/);
+    assert.equal(skippedIdea?.coverage.skipReason, 'The writer skipped this as a repeat.');
     const retry = await c.call('preflightWriteAnyway', skips[0].ref);
     assert.deepEqual(retry.nodeIds, ['n_a']);
     await c.call('generate', { preflightId: retry.preflightId });
@@ -227,5 +227,9 @@ test('a stale earlier-card skip leaves the target pending for a focused retry wi
     assert.deepEqual(input.flagRequests?.map(request => request.id), [flag.id], 'a stale skip does not settle the flagged idea');
     assert.deepEqual(input.targets.map(t => t.nodeId), ['n_a']);
     assert.ok(!input.targets[0].earlierRepeatCandidates?.some(c => c.id === covering.id));
+    const running = await c.call('snapshot');
+    assert.deepEqual(earlierRepeatSkips(running.generations, running.cards), []);
+    const duringOverride: CoverageContext = await c.call('coverageContext');
+    assert.equal(duringOverride.nodes.find(n => n.id === 'n_a')?.coverage.skipReason, 'The writer skipped this as a repeat.');
   });
 });
