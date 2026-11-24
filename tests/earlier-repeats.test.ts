@@ -9,6 +9,7 @@ import { activate } from '../src/backend.ts';
 import { earlierRepeatSkips } from '../src/earlier-repeats-ui.ts';
 import { addEarlierRepeatCandidates, earlierRepeatSimilarity, indexEarlierRepeats, possibleEarlierRepeat } from '../src/generation/earlier-repeats.ts';
 import type { WriterInput, WriterTarget } from '../src/writer/types.ts';
+import { outputAllowance } from '../src/writer/input.ts';
 import { findProblems } from '../src/writer/validate.ts';
 import { FakeHost, until } from './fake-host.ts';
 
@@ -24,13 +25,14 @@ test('indexEarlierRepeats ranks text and normalised maths across eligible bridge
   const best = row({ ...sent, presence: 'unknown' });
   const earlierDraft = row({ status: 'approved', back: '\\(E_0 = mc^2\\)', front: 'Which formula gives rest energy for a stationary particle?' });
   const unrelated = row({ front: 'What does a mole measure?', back: 'Amount of substance.' });
+  const imported = row({ status: 'imported', deck: 'Other deck', front: 'What is the rest energy of a stationary object?', back: '\\(E_0=mc^2\\)' });
   const cards = [row({ nodeId: 'fourth', front: 'Who named the process?', back: 'A researcher.' }),
     best, earlierDraft, unrelated, row({ ...sent, presence: 'deleted' }), row({ status: 'dropped' }),
-    row({ status: 'imported' }), row({ status: 'sending' }), row({ generationId: 'now' })];
+    imported, row({ status: 'sending' }), row({ generationId: 'now' })];
   const index = indexEarlierRepeats(cards, { generationId: 'now' });
-  assert.deepEqual(index.rank(target('n_a')).map(c => c.id), [best.id, earlierDraft.id]);
+  assert.deepEqual(new Set(index.rank(target('n_a')).map(c => c.id)), new Set([best.id, earlierDraft.id, imported.id]));
   assert.equal(index.possible(equation), best.id);
-  assert.equal(indexEarlierRepeats(cards, { cardId: best.id, generationId: 'now' }).rank(target('n_a'))[0].id, earlierDraft.id);
+  assert.ok(!indexEarlierRepeats(cards, { cardId: best.id, generationId: 'now' }).rank(target('n_a')).some(c => c.id === best.id));
   assert.equal(earlierRepeatSimilarity(equation, { ...equation, front: 'State the rest energy relation.', back: '\\(E_0=mc^2\\)' }), 0.75);
   assert.ok(earlierRepeatSimilarity(equation, { ...equation, front: 'How does energy vary with velocity?' }) < 0.5);
 });
@@ -76,7 +78,7 @@ test('findProblems accepts only the exact earlier repeat card IDs attached to ea
 
 async function withEarlierCards(cards: Card[], run: (host: FakeHost, context: ReturnType<FakeHost['context']>) => Promise<void>) {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'anki-earlier-repeats-'));
-  const host = new FakeHost(); host.nodes[0] = { id: 'n_a', name: target('n_a').name, statement: target('n_a').statement };
+  const host = new FakeHost(); host.nodes[0] = { id: 'n_a', name: target('n_a').name, statement: target('n_a').statement, provenance: host.nodes[0].provenance };
   host.catalog.slots.cheap = { model: { provider: 'scratch', id: 'writer' } };
   const c = host.context(directory);
   const realFetch = globalThis.fetch;
@@ -91,7 +93,8 @@ async function withEarlierCards(cards: Card[], run: (host: FakeHost, context: Re
 test('GenerationService persists a sure skip, and Write anyway starts exactly one bounded request and still flags the draft', async () => {
   const covering = row({ ...sent }), missing = row({ ...sent, presence: 'deleted' });
   await withEarlierCards([covering, missing], async (host, c) => {
-    const p = await c.call('preflight', { nodeIds: ['n_a'] });
+    const flag = await c.call('flag', { sessionId: 'c1', messageIds: ['m1'], note: '' });
+    const p = await c.call('preflight', { nodeIds: ['n_a'], flagScopes: [{ id: flag.id, nodeIds: ['n_a'] }], independentNodeIds: [] });
     assert.equal(host.workers.starts.length, 0);
     assert.equal(p.earlierRepeatCandidateCount, 1);
     await c.call('generate', { preflightId: p.preflightId });
@@ -103,25 +106,38 @@ test('GenerationService persists a sure skip, and Write anyway starts exactly on
     await until(async () => (await c.call('generationStatus')).generations[0].status === 'completed');
     const snap = await c.call('snapshot');
     assert.equal(snap.cards.length, 2);
-    const skips = earlierRepeatSkips(snap.generations);
+    const skips = earlierRepeatSkips(snap.generations, snap.cards);
     assert.equal(skips.length, 1);
     assert.equal(skips[0].covering.id, covering.id);
     await assert.rejects(c.call('preflightWriteAnyway', { ...skips[0].ref, nodeId: 'n_b' }), /previously skipped idea/);
     const retry = await c.call('preflightWriteAnyway', skips[0].ref);
     assert.equal(retry.batches.length, 1);
     assert.deepEqual(retry.nodeIds, ['n_a']);
+    assert.equal(retry.maximumCards, 1);
+    assert.equal(retry.outputTokens, outputAllowance(1, 1));
     assert.equal(host.workers.starts.length, 1);
     await c.call('generate', { preflightId: retry.preflightId });
     await c.call('generate', { preflightId: retry.preflightId });
     await until(() => host.workers.starts.length === 2);
-    assert.equal((host.workers.starts[1].input as WriterInput).writeAnyway, true);
-    assert.equal((host.workers.starts[1].input as WriterInput).maxCardsPerNode, 1);
-    host.workers.succeed('task-2', { targets: [{ nodeId: 'n_a', cards: [equation] }] });
+    const override = host.workers.starts[1].input as WriterInput;
+    assert.equal(override.writeAnyway, true);
+    assert.equal(override.maxCardsPerNode, 1);
+    assert.equal(override.targets[0].maxCards, 1);
+    assert.equal(override.targets[0].flagged, true);
+    assert.match(findProblems({ targets: [{ nodeId: 'n_a', cards: [equation, { ...equation, front: 'What is the rest energy relation?' }] }] }, override).join(), /cap is 1/);
+    host.workers.succeed('task-2', { targets: [{ nodeId: 'n_a', cards: [], skipReason: 'No useful card fits.' }] });
     await until(async () => (await c.call('generationStatus')).generations[1]?.status === 'completed');
+    const empty = await c.call('snapshot');
+    assert.deepEqual(earlierRepeatSkips(empty.generations, empty.cards), skips);
+    const again = await c.call('preflightWriteAnyway', skips[0].ref);
+    await c.call('generate', { preflightId: again.preflightId });
+    await until(() => host.workers.starts.length === 3);
+    host.workers.succeed('task-3', { targets: [{ nodeId: 'n_a', cards: [equation] }] });
+    await until(async () => (await c.call('generationStatus')).generations[2]?.status === 'completed');
     const done = await c.call('snapshot');
     assert.equal(done.cards.length, 3);
     assert.equal(done.cards[2].possibleRepeatOf, covering.id, 'the lexical check flags but does not drop the draft');
-    assert.deepEqual(earlierRepeatSkips(done.generations), []);
+    assert.deepEqual(earlierRepeatSkips(done.generations, done.cards), []);
     await assert.rejects(c.call('preflightWriteAnyway', skips[0].ref), /already has a Write anyway result/);
   });
 });
@@ -153,6 +169,27 @@ test('GenerationService fits earlier text in the model window without reducing t
   });
 });
 
+test('an exact repeat on a different node in an earlier run stays reviewable, and its warning tracks the covering text', async () => {
+  await withEarlierCards([], async (host, c) => {
+    host.nodes[1].statement = target('n_a').statement;
+    const old = await c.call('preflight', { nodeIds: ['n_b'] });
+    await c.call('generate', { preflightId: old.preflightId });
+    await until(() => host.workers.starts.length === 1);
+    host.workers.succeed('task-1', { targets: [{ nodeId: 'n_b', cards: [equation] }] });
+    await until(async () => (await c.call('snapshot')).generations[0]?.status === 'completed');
+    const p = await c.call('preflight', { nodeIds: ['n_a'] });
+    await c.call('generate', { preflightId: p.preflightId });
+    await until(() => host.workers.starts.length === 2);
+    const prior = (await c.call('snapshot')).cards[0];
+    assert.equal(prior.sessionId, 'c1');
+    host.workers.succeed('task-2', { targets: [{ nodeId: 'n_a', cards: [{ ...equation, possibleRepeatOf: prior.id }] }] });
+    await until(async () => (await c.call('snapshot')).generations[1]?.status === 'completed');
+    assert.equal((await c.call('snapshot')).cards[1]?.possibleRepeatOf, prior.id);
+    await c.call('edit', { id: prior.id, front: 'What is the capital of Peru?', back: 'Lima.' });
+    assert.equal((await c.call('snapshot')).cards[1].possibleRepeatOf, undefined);
+  });
+});
+
 test('GenerationService binds earlier cards to preflight and rejects a sure skip after its covering card is dropped', async () => {
   const covering = row();
   await withEarlierCards([covering], async (host, c) => {
@@ -167,6 +204,6 @@ test('GenerationService binds earlier cards to preflight and rejects a sure skip
     await until(async () => (await c.call('generationStatus')).generations[0].status === 'failed');
     const snap = await c.call('snapshot');
     assert.match(snap.generations[0].tasks[0].error, /used to skip writing changed/);
-    assert.deepEqual(earlierRepeatSkips(snap.generations), []);
+    assert.deepEqual(earlierRepeatSkips(snap.generations, snap.cards), []);
   });
 });

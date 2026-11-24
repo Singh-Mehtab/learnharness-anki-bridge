@@ -13,7 +13,7 @@ import { GenerationService } from '../src/generation/service.ts';
 import { RegenerationService } from '../src/regeneration/service.ts';
 import { regenerationRevision } from '../src/regeneration/types.ts';
 import { mountReview } from '../src/review-ui.ts';
-import type { WriterInput } from '../src/writer/types.ts';
+import type { DraftCard, WriterInput } from '../src/writer/types.ts';
 import { FakeHost, until } from './fake-host.ts';
 import { fakeUi } from './fake-ui.ts';
 import { fakeAnkiConnect } from './fake-anki-connect.ts';
@@ -24,8 +24,8 @@ const makeCard = (patch: Partial<Card> = {}): Card => ({
   sourceSnapshot: { nodeId: 'n_a', name: 'Alpha', statement: 'Alpha implies beta under assumption A.', statementHash: 'hash-a',
     sessionId: 's1', sessionName: 'Synthetic', source: 'The implication needs assumption A.' }, ...patch,
 });
-const replacement = { kind: 'fact', front: 'Under which assumption does the implication hold?', back: 'A.', extra: '' };
-const result = (cards = [replacement]) => ({ targets: [{ nodeId: 'n_a', cards, ...(!cards.length && { skipReason: 'No distinct card fits the source.' }) }] });
+const replacement = { kind: 'fact' as const, front: 'Under which assumption does the implication hold?', back: 'A.', extra: '' };
+const result = (cards: DraftCard[] = [replacement]) => ({ targets: [{ nodeId: 'n_a', cards, ...(!cards.length && { skipReason: 'No distinct card fits the source.' }) }] });
 const startInput = (card: Card, instruction?: string) => ({ id: card.id, revision: regenerationRevision(card), instruction });
 
 async function fixture(run: (host: FakeHost, directory: string, state: State) => Promise<void>, cards: Card[] = []) {
@@ -112,15 +112,44 @@ test('rewrite checks earlier cards across nodes, shows a possible repeat before 
       await until(() => !!workerFor(host, job.requestId));
       const worker = workerFor(host, job.requestId);
       assert.deepEqual((worker.input as WriterInput).targets[0].earlierRepeatCandidates?.map(c => c.id), [earlier.id]);
-      host.workers.succeed(worker.id, result([{ ...replacement, possibleRepeatOf: earlier.id } as typeof replacement]));
+      host.workers.succeed(worker.id, result([{ ...replacement, possibleRepeatOf: earlier.id }]));
       assert.equal((await waitForJob(c, original.id, 'ready')).replacement?.possibleRepeatOf, earlier.id);
       return job;
     };
     const first = await queue();
     await c.call('edit', { id: earlier.id, front: 'What is the capital of Peru?', back: 'Lima.' });
+    assert.equal(byId(await c.call('snapshot'), original.id).regeneration?.replacement?.possibleRepeatOf, undefined);
     const accepted = byId(await c.call('acceptRegeneration', { id: original.id, requestId: first.requestId }), original.id);
     assert.equal(accepted.front, replacement.front);
     assert.equal(accepted.possibleRepeatOf, undefined);
+  });
+});
+
+test('rewrite keeps sure-repeat evidence and can queue one override without unprotecting the original or consulting a deleted sibling', async () => {
+  const original = makeCard();
+  const covering = makeCard({ nodeId: 'n_other', sourceSnapshot: undefined, ...replacement, back: 'Assumption A.' });
+  const deletedSibling = makeCard({ ...replacement, status: 'sent', deck: 'Scratch', noteId: 7, presence: 'deleted', destination: { url: 'http://localhost:1234/', profile: 'Scratch' } });
+  await withBackend([original, covering, deletedSibling], async (host, c) => {
+    const first = byId(await c.call('regenerateCard', startInput(original, 'Use a short question.')), original.id).regeneration!;
+    await until(() => !!workerFor(host, first.requestId));
+    const worker = workerFor(host, first.requestId), input = worker.input as WriterInput;
+    assert.deepEqual(input.targets[0].existingCards, []);
+    assert.deepEqual(input.targets[0].earlierRepeatCandidates?.map(c => c.id), [covering.id]);
+    host.workers.succeed(worker.id, { targets: [{ nodeId: 'n_a', cards: [], skipReason: 'Already covered.', earlierRepeatOf: covering.id }] });
+    const skipped = await waitForJob(c, original.id, 'repeatSkipped');
+    assert.equal(skipped.repeatSkip?.front, covering.front);
+    await assert.rejects(c.call('send', { ids: [original.id], deck: 'Scratch' }), /Accept the replacement/);
+    const retry = byId(await c.call('rewriteAnyway', { id: original.id, requestId: skipped.requestId }), original.id).regeneration!;
+    assert.notEqual(retry.requestId, skipped.requestId);
+    await assert.rejects(c.call('rewriteAnyway', { id: original.id, requestId: skipped.requestId }), /no longer current/);
+    await until(() => !!workerFor(host, retry.requestId));
+    const override = workerFor(host, retry.requestId);
+    assert.equal((override.input as WriterInput).maxCardsPerNode, 1);
+    assert.equal((override.input as WriterInput).writeAnyway, true);
+    assert.match(override.prompt, /Use a short question/);
+    host.workers.succeed(override.id, result());
+    assert.equal((await waitForJob(c, original.id, 'ready')).replacement?.front, replacement.front);
+    assert.equal(byId(await c.call('snapshot'), original.id).front, original.front);
   });
 });
 
@@ -239,21 +268,64 @@ test('activation recovers a finished result but does not silently restart queued
   }, [a, b]);
 });
 
-test('rewrite eligibility rejects sent, imported, delivery-attempted and source-free cards', async () => {
+test('rewrite eligibility rejects sent, imported and unverified delivery-attempted cards', async () => {
   const destination = { url: 'http://localhost:1234/', profile: 'Synthetic' };
   const cards = [makeCard({ status: 'sending', destination, deck: 'Scratch' }), makeCard({ status: 'sent', destination, deck: 'Scratch', noteId: 1 }),
-    makeCard({ status: 'imported', deck: 'Scratch' }), makeCard({ status: 'approved', destination }), makeCard({ sourceSnapshot: undefined })];
+    makeCard({ status: 'imported', deck: 'Scratch' }), makeCard({ status: 'approved', destination }),
+    makeCard({ status: 'failed', destination, deck: 'Scratch', lastError: 'There is an existing note of another type.' })];
   await fixture(async (host, directory) => {
     const store = await StateStore.open(directory), c = host.context(directory), delivery = new DeliveryService(store);
     const rewrite = new RegenerationService(c.ctx, store, delivery);
     try {
       for (const card of cards) {
         assert.equal(byId(delivery.snapshot(), card.id).canRegenerate, undefined);
-        await assert.rejects(rewrite.command('regenerateCard', startInput(card)), /unsent draft with saved source/);
+        await assert.rejects(rewrite.command('regenerateCard', startInput(card)), /unsent draft with no unresolved delivery/);
       }
       assert.equal(host.workers.starts.length, 0);
     } finally { await rewrite.close(); await delivery.close(); }
   }, cards);
+});
+
+test('a hand-written draft is eligible and supplies its saved text as the only source', async () => {
+  await withBackend([], async (host, c) => {
+    const draft = (await c.call('draft', { front: 'Where is the landmark?', back: 'At the west gate.' })).cards[0];
+    assert.equal(draft.canRegenerate, true);
+    const job = byId(await c.call('regenerateCard', startInput(draft)), draft.id).regeneration!;
+    await until(() => !!workerFor(host, job.requestId));
+    const worker = workerFor(host, job.requestId), target = (worker.input as WriterInput).targets[0];
+    assert.equal(target.statement, 'Where is the landmark?\nAt the west gate.');
+    assert.equal(target.source, undefined);
+    assert.match(worker.prompt, /No independent source was saved/);
+    host.workers.succeed(worker.id, { targets: [{ nodeId: draft.nodeId, cards: [{ kind: 'fact', front: 'At which gate is the landmark?', back: 'West gate.' }] }] });
+    assert.equal((await waitForJob(c, draft.id, 'ready')).replacement?.back, 'West gate.');
+  });
+});
+
+test('a verified no-note reconciliation enables rewriting without changing the delivery destination', async () => {
+  const card = makeCard({ status: 'sending', deck: 'Scratch', destination: { url: 'http://localhost:1234/', profile: 'Throwaway' } });
+  await fixture(async (host, directory, state) => {
+    const anki = await fakeAnkiConnect({ deliveryLookup: true });
+    try {
+      const s = await StateStore.open(directory), destination = { url: anki.url, profile: 'Throwaway' };
+      try { await s.replace({ ...state, cards: [{ ...card, destination }], destination, settings: { ...state.settings, url: anki.url } }); }
+      finally { await s.close(); }
+      const c = host.context(directory), close = await activate(c.ctx);
+      try {
+        const reconciled = byId(await c.call('snapshot'), card.id);
+        assert.equal(reconciled.status, 'failed');
+        assert.equal(reconciled.canRegenerate, true);
+        const job = byId(await c.call('regenerateCard', startInput(reconciled)), card.id).regeneration!;
+        await until(() => !!workerFor(host, job.requestId));
+        host.workers.succeed(workerFor(host, job.requestId).id, result());
+        await waitForJob(c, card.id, 'ready');
+        const accepted = byId(await c.call('acceptRegeneration', { id: card.id, requestId: job.requestId }), card.id);
+        assert.equal(accepted.status, 'draft');
+        assert.equal(accepted.lastError, undefined);
+        assert.deepEqual(accepted.destination, destination);
+        assert.equal(anki.state.notes.length, 0);
+      } finally { await close(); }
+    } finally { await anki.close(); }
+  }, [card]);
 });
 
 test('regenerateCard cannot queue while a send owns the writer fence', async () => {

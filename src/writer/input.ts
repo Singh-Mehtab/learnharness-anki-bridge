@@ -124,6 +124,7 @@ export interface TargetExtras {
   source?: string;
   /** The learner flagged this idea; it may exceed the per-node cap. */
   flagged?: boolean;
+  flaggedCap?: number;
   flagNote?: string;
   /** Newest first. */
   existingCards?: ExistingCard[];
@@ -162,7 +163,7 @@ export function buildTarget(graph: GraphLike, nodeId: string, extras: TargetExtr
     feeds: feedsAll.slice(0, MAX_FEEDS),
     neighbours: neighbours(graph, nodeId).map((id) => ref(get(id))),
     ...(extras.source ? { source: extras.source } : {}),
-    ...(extras.flagged || extras.flagNote ? { flagged: true, maxCards: FLAGGED_CARD_CAP } : {}),
+    ...(extras.flagged || extras.flagNote ? { flagged: true, maxCards: extras.flaggedCap ?? FLAGGED_CARD_CAP } : {}),
     ...(extras.flagNote ? { flagNote: extras.flagNote } : {}),
     existingCards: (extras.existingCards ?? []).slice(0, MAX_EXISTING_CARDS),
   };

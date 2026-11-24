@@ -2,20 +2,19 @@ import { createHash, randomUUID } from 'node:crypto';
 import type { PluginBackendContext } from '../../sdk/index.d.ts';
 import type { PluginTaskSnapshot, PluginWorkerStartOptions } from '../../sdk/src/core/plugin-workers.d.ts';
 import type { DeliveryService } from '../anki/delivery.ts';
-import type { Card, StateStore } from '../anki/state.ts';
+import type { StateStore } from '../anki/state.ts';
 import { isStoredKind, type WriterResult } from '../writer/types.ts';
 import { validateResult } from '../writer/validate.ts';
 import type { WriterInput } from '../writer/types.ts';
 import { indexEarlierRepeats, possibleEarlierRepeat } from '../generation/earlier-repeats.ts';
+import { currentRepeat, repeatReference } from '../generation/repeat-reference.ts';
 import { assertDistinctReplacement, prepareRegeneration } from './request.ts';
 import { canRegenerate, regenerationRevision, REWRITE_INSTRUCTION_LIMIT, type Regeneration, type Replacement } from './types.ts';
 
-export const REGENERATION_OPERATIONS = ['regenerateCard', 'acceptRegeneration', 'keepOriginalCard', 'retryRegenerationResult'] as const;
+export const REGENERATION_OPERATIONS = ['regenerateCard', 'acceptRegeneration', 'keepOriginalCard', 'retryRegenerationResult', 'rewriteAnyway'] as const;
 type Operation = typeof REGENERATION_OPERATIONS[number];
 const errorText = (error: unknown) => error instanceof Error ? error.message : String(error);
 const activeRequest = (r: Regeneration) => r.status === 'queued' || r.status === 'running';
-const repeatFingerprint = (card: Card | undefined) => card && createHash('sha256')
-  .update(JSON.stringify([card.front, card.back, card.format])).digest('hex');
 const binding = (id: string, { input, prompt }: PluginWorkerStartOptions) =>
   createHash('sha256').update(JSON.stringify([id, input, prompt])).digest('hex');
 
@@ -76,7 +75,7 @@ export class RegenerationService {
       const current = state.regenerations?.find(r => r.cardId === card.id);
       if (name === 'regenerateCard') {
         if (current) throw new Error('This card already has a rewrite request.');
-        if (!canRegenerate(card)) throw new Error('Only an unsent draft with saved source and no unresolved delivery can be rewritten.');
+        if (!canRegenerate(card)) throw new Error('Only an unsent draft with no unresolved delivery can be rewritten.');
         const revision = regenerationRevision(card);
         if (value.revision !== revision) throw new Error('This card changed. Refresh Review and start a new rewrite.');
         const instruction = value.instruction === undefined ? '' : typeof value.instruction === 'string' ? value.instruction.trim() : undefined;
@@ -86,7 +85,12 @@ export class RegenerationService {
         finally { if (this.find(request.requestId)) this.kick(); }
       } else {
         if (!current || current.requestId !== value.requestId) throw new Error('This rewrite is no longer current. Refresh Review.');
-        if (name === 'retryRegenerationResult') {
+        if (name === 'rewriteAnyway') {
+          if (current.status !== 'repeatSkipped' || !canRegenerate(card) || regenerationRevision(card) !== current.revision) throw new Error('This rewrite cannot be retried. Refresh Review.');
+          const retry: Regeneration = { cardId: card.id, requestId: randomUUID(), revision: current.revision, instruction: current.instruction, status: 'queued', writeAnyway: true };
+          try { await this.delivery.save(s => { s.regenerations = [...s.regenerations!.filter(r => r.requestId !== current.requestId), retry]; }); }
+          finally { if (this.find(retry.requestId)) this.kick(); }
+        } else if (name === 'retryRegenerationResult') {
           if (current.status !== 'resultPending') throw new Error('This rewrite has no result waiting to be saved.');
           const worker = this.worker(current);
           if (worker?.status !== 'succeeded') throw new Error('The saved rewrite is unavailable. Keep the original to continue.');
@@ -97,15 +101,15 @@ export class RegenerationService {
           assertDistinctReplacement(state, card, current.replacement);
           const replacement = current.replacement;
           const earlier = indexEarlierRepeats(state.cards, { cardId: card.id });
-          const matched = state.cards.find(c => c.id === replacement.possibleRepeatOf);
-          const possibleRepeatOf = matched && earlier.current(matched) && repeatFingerprint(matched) === current.repeatFingerprint
-            ? matched.id : earlier.possible(replacement);
+          const possibleRepeatOf = currentRepeat(replacement, new Map(state.cards.map(c => [c.id, c]))) ?? earlier.possible(replacement);
           await this.delivery.save(s => {
             const stored = s.cards.find(c => c.id === card.id)!;
             delete stored.format;
             delete stored.possibleRepeatOf;
-            const { possibleRepeatOf: _previous, ...fields } = replacement;
-            Object.assign(stored, fields, { status: 'draft' }, possibleRepeatOf ? { possibleRepeatOf } : {});
+            delete stored.possibleRepeatFingerprint;
+            delete stored.lastError;
+            const { possibleRepeatOf: _previous, possibleRepeatFingerprint: _fingerprint, ...fields } = replacement;
+            Object.assign(stored, fields, { status: 'draft' }, repeatReference(possibleRepeatOf, s.cards));
             s.regenerations = s.regenerations!.filter(r => r.requestId !== current.requestId);
           });
         } else {
@@ -181,16 +185,22 @@ export class RegenerationService {
       if (!canRegenerate(card) || regenerationRevision(card) !== r.revision) throw new Error('The original changed. Keep the original to continue.');
       validateResult(worker.result, { input: worker.input });
       const target = (worker.result as WriterResult).targets[0]!;
-      const output = target.cards[0];
-      if (target.earlierRepeatOf) throw new Error('The writer found that this rewrite would repeat an earlier card. The original is unchanged.');
-      if (!output) throw new Error(target.skipReason || 'The writer did not return a replacement.');
-      const { kind, front, back, extra, format } = output;
-      if (!isStoredKind(kind) || extra !== undefined && typeof extra !== 'string') throw new Error('The writer returned invalid card fields.');
       const earlier = indexEarlierRepeats(state.cards, { cardId: card.id });
-      const possibleRepeatOf = possibleEarlierRepeat(output, (worker.input as WriterInput).targets[0]?.earlierRepeatCandidates, earlier);
-      const replacement: Replacement = { kind, front, back, extra: extra ?? '', ...(format === 'cloze' ? { format } : {}), ...(possibleRepeatOf ? { possibleRepeatOf } : {}) };
-      assertDistinctReplacement(state, card, replacement);
-      update = { status: 'ready', replacement, repeatFingerprint: repeatFingerprint(state.cards.find(c => c.id === possibleRepeatOf)), error: undefined };
+      const candidates = (worker.input as WriterInput).targets[0]?.earlierRepeatCandidates;
+      if (target.earlierRepeatOf) {
+        const repeatSkip = candidates?.find(c => c.id === target.earlierRepeatOf);
+        if (!repeatSkip || !earlier.current(repeatSkip)) throw new Error('The earlier card used to skip this rewrite changed or is unavailable.');
+        update = { status: 'repeatSkipped', repeatSkip, error: target.skipReason };
+      } else {
+        const output = target.cards[0];
+        if (!output) throw new Error(target.skipReason || 'The writer did not return a replacement.');
+        const { kind, front, back, extra, format } = output;
+        if (!isStoredKind(kind) || extra !== undefined && typeof extra !== 'string') throw new Error('The writer returned invalid card fields.');
+        const possibleRepeatOf = possibleEarlierRepeat(output, candidates, earlier);
+        const replacement: Replacement = { kind, front, back, extra: extra ?? '', ...(format === 'cloze' ? { format } : {}), ...repeatReference(possibleRepeatOf, state.cards) };
+        assertDistinctReplacement(state, card, replacement);
+        update = { status: 'ready', replacement, error: undefined };
+      }
     } catch (error) {
       update = { status: 'failed', error: errorText(error) };
     }
@@ -198,7 +208,7 @@ export class RegenerationService {
     catch (error) {
       // A rename may have committed the comparison even if durability was not confirmed.
       const stored = this.find(r.requestId);
-      if (stored?.status === 'ready' || stored?.status === 'failed') {
+      if (stored?.status === 'ready' || stored?.status === 'failed' || stored?.status === 'repeatSkipped') {
         this.delivery.reportGenerationRecoveryError(error);
         return;
       }

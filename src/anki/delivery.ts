@@ -11,6 +11,7 @@ import { isStoredKind } from '../writer/types.ts';
 import type { Generation, GenerationSettings } from '../generation/types.ts';
 import { assertNotRegenerating, canRegenerate, type RegenerationReview } from '../regeneration/types.ts';
 import { indexEarlierRepeats } from '../generation/earlier-repeats.ts';
+import { currentRepeat, repeatReference } from '../generation/repeat-reference.ts';
 
 export interface PublicSnapshot {
   settings: { url: string; lastDeck: string; hasApiKey: boolean; tagTemplate: string; systemTags: boolean };
@@ -110,10 +111,16 @@ export class DeliveryService {
       try { current = this.sourceStatements?.(); } catch { sourceUnavailable = true; }
     }
     const rewrites = new Map(regenerations?.map(r => [r.cardId, r]));
+    const byId = new Map(cards.map(card => [card.id, card]));
+    const liveRepeat = <T extends Pick<Card, 'possibleRepeatOf' | 'possibleRepeatFingerprint'>>(ref: T) => {
+      const { possibleRepeatOf: _id, possibleRepeatFingerprint: _fingerprint, ...fields } = ref;
+      const id = currentRepeat(ref, byId);
+      return { ...fields, ...(id && { possibleRepeatOf: id }) };
+    };
     const publicCards: PublicSnapshot['cards'] = cards.map(card => {
       const r = rewrites.get(card.id);
-      return { ...card, ...(canRegenerate(card) ? { canRegenerate: true } : {}),
-        ...(r ? { regeneration: { requestId: r.requestId, status: r.status, replacement: r.replacement, error: r.error && this.message(r.error) } } : {}),
+      return { ...liveRepeat(card), ...(canRegenerate(card) ? { canRegenerate: true } : {}),
+        ...(r ? { regeneration: { requestId: r.requestId, status: r.status, replacement: r.replacement && liveRepeat(r.replacement), repeatSkip: r.repeatSkip, error: r.error && this.message(r.error) } } : {}),
         ...(card.sourceSnapshot ? { sourceStatement: card.sourceSnapshot.statement,
           ...(sourceUnavailable ? { sourceUnavailable } : {
             sourceMissing: current ? !current.has(card.nodeId) : false,
@@ -178,7 +185,7 @@ export class DeliveryService {
     return found;
   }
   private async recordFound(id: string, found: number[], destination: Destination): Promise<void> {
-    await this.patchCard(id, { status: 'sent', noteId: found[0], destination, existingNote: true, presence: 'present', lastError: found.length > 1 ? 'More than one Anki note has this delivery ID. No new note was added.' : undefined });
+    await this.patchCard(id, { status: 'sent', noteId: found[0], destination, existingNote: true, presence: 'present', deliveryAbsent: undefined, lastError: found.length > 1 ? 'More than one Anki note has this delivery ID. No new note was added.' : undefined });
   }
   /** FI-8 (S22): a note found by LH_ID must be the card's kind of note. A basic
    *  package imported without Mark as imported leaves the card editable, so it can
@@ -205,7 +212,7 @@ export class DeliveryService {
     if (names.every(name => nativeTypeMatches(types.get(name), noteTypeFor(card)))) return false;
     const other = card.format === 'cloze' ? 'basic' : 'cloze';
     const message = `This card is already in Anki as a ${other} note. Delete that note in Anki or switch the card back to ${other}.`;
-    await this.patchCard(card.id, { status: 'failed', destination, lastError: message });
+    await this.patchCard(card.id, { status: 'failed', destination, lastError: message, deliveryAbsent: undefined });
     return true;
   }
   private async recover(client: AnkiClient, destination: Destination): Promise<string[]> {
@@ -215,7 +222,7 @@ export class DeliveryService {
       // Recovery adopts through the same note type check as a send (S1, round 1).
       if (found.length && await this.formatConflict(client, card, found)) continue;
       if (found.length) { await this.recordFound(card.id, found, destination); matched.push(card.id); }
-      else await this.patchCard(card.id, { status: 'failed', lastError: 'No note found for the interrupted send. You can retry this card.' });
+      else await this.patchCard(card.id, { status: 'failed', deliveryAbsent: true, lastError: 'No note found for the interrupted send. You can retry this card.' });
     }
     this.recoveryError = undefined;
     return matched;
@@ -311,9 +318,9 @@ export class DeliveryService {
           if (cards.some(c => !['approved', 'failed'].includes(c.status) || c.noteId !== undefined)) throw new Error('Only approved or failed unsent cards can be marked as imported.');
           if (!Array.isArray(value.fingerprints) || value.fingerprints.length !== cards.length || cards.some((c, i) => packageFingerprint(c) !== (value.fingerprints as unknown[])[i])) throw new Error('Cards changed since this package was downloaded. Download a new package.');
           await packageSave(s => { for (const card of s.cards) if (ids.includes(card.id)) {
-            card.importPrevious = { status: card.status as 'approved' | 'failed', deck: card.deck, destination: card.destination, presence: card.presence, lastError: card.lastError };
+            card.importPrevious = { status: card.status as 'approved' | 'failed', deck: card.deck, destination: card.destination, presence: card.presence, lastError: card.lastError, deliveryAbsent: card.deliveryAbsent };
             card.status = 'imported'; card.deck = deck; card.importMarkId = markId;
-            delete card.noteId; delete card.destination; delete card.existingNote; delete card.presence; delete card.lastError;
+            delete card.noteId; delete card.destination; delete card.existingNote; delete card.presence; delete card.lastError; delete card.deliveryAbsent;
           } });
         } else {
           if (cards.some(c => c.status !== 'imported')) throw new Error('Only imported cards can be unmarked.');
@@ -326,6 +333,7 @@ export class DeliveryService {
             if (previous.destination !== undefined) card.destination = previous.destination;
             if (previous.presence !== undefined) card.presence = previous.presence;
             if (previous.lastError !== undefined) card.lastError = previous.lastError;
+            if (previous.deliveryAbsent) card.deliveryAbsent = true;
           } });
         }
         return { ...this.snapshot(), ...(name === 'markImported' ? { importMarkId: markId } : {}), ...(durabilityWarning ? { durabilityWarning } : {}) };
@@ -348,8 +356,8 @@ export class DeliveryService {
           if (format) next.format = format;
           if (card.front !== front || card.back !== back || card.format !== format) {
             delete next.possibleRepeatOf;
-            const possibleRepeatOf = indexEarlierRepeats(state.cards, { cardId: card.id, generationId: card.generationId }).possible(next);
-            if (possibleRepeatOf) next.possibleRepeatOf = possibleRepeatOf;
+            delete next.possibleRepeatFingerprint;
+            Object.assign(next, repeatReference(indexEarlierRepeats(state.cards, { cardId: card.id, generationId: card.generationId }).possible(next), state.cards));
           }
           state.cards[index] = next;
         });
@@ -411,7 +419,7 @@ export class DeliveryService {
           }
           const noteTags = [...new Set([...chosenTags, ...(settings.systemTags === false ? [] : systemTags(card.kind, card.format))])];
           const fields = noteFields(card);
-          await this.patchCard(card.id, { status: 'sending', deck, destination, lastError: undefined });
+          await this.patchCard(card.id, { status: 'sending', deck, destination, lastError: undefined, deliveryAbsent: undefined });
           let result: unknown;
           try {
             await this.destination(client);
@@ -424,7 +432,7 @@ export class DeliveryService {
               const existing = await this.find(client, this.card(card.id), destination);
               if (existing.length && await this.formatConflict(client, this.card(card.id), existing)) failed.push(card.id);
               else if (existing.length) { await this.recordFound(card.id, existing, destination); found.push(card.id); }
-              else { await this.patchCard(card.id, { status: 'failed', lastError: this.message(error) }); failed.push(card.id); }
+              else { await this.patchCard(card.id, { status: 'failed', lastError: this.message(error), deliveryAbsent: true }); failed.push(card.id); }
               continue;
             }
             await this.patchCard(card.id, { lastError: `Send unconfirmed: ${this.message(error)}. Use Check unconfirmed sends before retrying.` });

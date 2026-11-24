@@ -24,6 +24,7 @@ import { flagRevision, type FlagReference } from '../session/flow.ts';
 import { readFlagSelection, resolveFlags, type FlagScope, type FlagSelection } from './flag-selection.ts';
 import { packNoteBatches, refsForBatch } from './note-batches.ts';
 import { resolveWriterModel } from './writer-model.ts';
+import { repeatReference } from './repeat-reference.ts';
 
 const WORKER = 'manual-card-writer';
 /** Auto and prefer use the cloze definition. Off and tasks saved before cloze use WORKER. */
@@ -222,7 +223,7 @@ export class GenerationService {
           if (!isStoredKind(c.kind)) throw new Error('Invalid card kind.');
           if (currentHashes.get(source.nodeId) === source.statementHash && matching.get(contentKey(c))?.some(other =>
             other.sessionId === source.sessionId && (other.nodeId === source.nodeId ||
-              (allowCrossNode && (!stored.input.writeAnyway || other.generationId === id))))) {
+              (allowCrossNode && other.generationId === id)))) {
             omitted++;
             continue;
           }
@@ -230,7 +231,7 @@ export class GenerationService {
           s.cards.push({ id: randomUUID(), nodeId: source.nodeId, nodeName: source.name,
             sessionId: source.sessionId, sessionName: source.sessionName, statementHash: source.statementHash,
             sourceSnapshot: source, generationId: id, requestId, kind: c.kind, ...(c.format === 'cloze' ? { format: 'cloze' as const } : {}),
-            front: c.front, back: c.back, extra: c.extra ?? '', status: 'draft', ...(possibleRepeatOf && { possibleRepeatOf }) });
+            front: c.front, back: c.back, extra: c.extra ?? '', status: 'draft', ...repeatReference(possibleRepeatOf, s.cards) });
         }
       }
       // Keep the completion after a card is dropped, but never resolve a newer flag revision.
@@ -285,6 +286,7 @@ export class GenerationService {
     const flags = resolveFlags(selection.scopes, state.flags, graph);
     const blank = new Set(flags.filter(f => !f.note).flatMap(f => f.nodeIds));
     const extrasFor = (id: string) => ({ source: sources.find(s => s.nodeId === id)?.source, flagged: blank.has(id),
+      ...(writeAnyway && { flaggedCap: 1 }),
       existingCards: cards.filter(c => c.nodeId === id).reverse().slice(0, 6).map(c => c.format !== 'cloze' ? { kind: c.kind, front: c.front, back: c.back }
         // Off mode's writer doesn't know the placeholder, so it sees the blank as [...].
         : mode === 'off' ? { kind: c.kind, front: c.front.replace('{{blank}}', '[...]'), back: c.back } : { kind: c.kind, front: c.front, back: c.back, format: 'cloze' as const }) });
@@ -376,11 +378,11 @@ export class GenerationService {
       batches: prepared.batches.map(b => ({ nodeIds: b.input.targets.map(t => t.nodeId), inputTokens: b.inputTokens, outputAllowance: b.outputAllowance })) };
   }
   private checkRepeatOverride(ref: EarlierRepeatSkipRef): void {
-    const generations = this.store.snapshot().generations;
+    const { generations, cards } = this.store.snapshot();
     const original = generations.find(g => g.id === ref.generationId);
     const task = original?.tasks.find(t => t.requestId === ref.requestId && t.status === 'applied');
     if (original?.status === 'running' || !task?.result?.targets.some(t => t.nodeId === ref.nodeId && t.earlierRepeatOf)) throw new Error('Choose a previously skipped idea after its write finishes.');
-    if (generations.some(g => g.repeatOverride?.generationId === ref.generationId && g.repeatOverride.requestId === ref.requestId && g.repeatOverride.nodeId === ref.nodeId && g.tasks.some(t => t.status === 'applied' || t.resultPending))) {
+    if (generations.some(g => g.repeatOverride?.generationId === ref.generationId && g.repeatOverride.requestId === ref.requestId && g.repeatOverride.nodeId === ref.nodeId && (g.tasks.some(t => t.resultPending) || cards.some(c => c.generationId === g.id && c.nodeId === ref.nodeId)))) {
       throw new Error('This idea already has a Write anyway result.');
     }
   }

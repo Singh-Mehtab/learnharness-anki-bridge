@@ -1,4 +1,5 @@
 import type { PluginFrontendContext } from '../../sdk/index.d.ts';
+import { repeatCardPreview } from '../earlier-repeats-ui.ts';
 import { KIND_NAMES } from '../kinds-ui.ts';
 import { button, el, field, textarea } from '../ui.ts';
 import { REWRITE_INSTRUCTION_LIMIT, type RegenerationReview, type Replacement } from './types.ts';
@@ -9,7 +10,7 @@ export function rewriteForm(ctx: PluginFrontendContext, signal: AbortSignal, que
   const instruction = textarea('', 2);
   instruction.maxLength = REWRITE_INSTRUCTION_LIMIT;
   form.append(field('Rewrite instruction (optional)', instruction),
-    el('p', 'The writer receives this draft, its saved source, your instruction and relevant earlier bridge cards.', 'ab-muted'));
+    el('p', 'The writer receives this draft, any saved source, your instruction and relevant earlier bridge cards.', 'ab-muted'));
   button(ctx, form, signal, { label: 'Queue rewrite', onClick: () => queue(instruction.value) });
   return form;
 }
@@ -34,14 +35,16 @@ export function replacementComparison(ctx: PluginFrontendContext, signal: AbortS
 }
 
 export function rewriteDecision(ctx: PluginFrontendContext, signal: AbortSignal, job: RegenerationReview,
-  decide: (name: 'acceptRegeneration' | 'keepOriginalCard' | 'retryRegenerationResult') => Promise<void>): HTMLElement {
+  decide: (name: 'acceptRegeneration' | 'keepOriginalCard' | 'retryRegenerationResult' | 'rewriteAnyway') => Promise<void>): HTMLElement {
   const panel = el('div', undefined, 'ab-rewrite-decision');
   if (job.status !== 'ready') {
     const text = job.status === 'queued' ? 'Rewrite queued. The original is unchanged.' : job.status === 'running'
       ? 'Rewriting this card. The original is unchanged.' : job.error ?? 'No replacement is available. The original is unchanged.';
     const progress = el('p', text, 'ab-muted'); progress.setAttribute('role', 'status'); panel.append(progress);
   }
+  if (job.repeatSkip) panel.append(repeatCardPreview(ctx, 'Covering card at rewrite time', job.repeatSkip, signal));
   const actions = el('div', undefined, 'ab-actions');
+  if (job.status === 'repeatSkipped') button(ctx, actions, signal, { label: 'Write anyway', onClick: () => decide('rewriteAnyway') });
   if (job.status === 'ready') button(ctx, actions, signal, { label: 'Accept', variant: 'default', onClick: () => decide('acceptRegeneration') });
   if (job.status === 'resultPending') button(ctx, actions, signal, { label: 'Retry saving', onClick: () => decide('retryRegenerationResult') });
   button(ctx, actions, signal, { label: 'Keep original', onClick: () => decide('keepOriginalCard') });

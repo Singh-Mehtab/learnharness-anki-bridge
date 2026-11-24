@@ -135,13 +135,13 @@ const storedKinds = (v: unknown): v is StoredCardKind[] => distinctKinds(v) && v
 const nodeRef = (v: unknown): boolean => object(v) && ['id', 'name', 'statement'].every(k => typeof v[k] === 'string');
 function validWriterInput(v: unknown): v is WriterInput {
   if (!object(v) || v.version !== 1 || !Number.isInteger(v.maxCardsPerNode) || Number(v.maxCardsPerNode) < 1 || Number(v.maxCardsPerNode) > 4 || !storedKinds(v.enabledKinds) || (v.constantValues !== undefined && typeof v.constantValues !== 'boolean') || (v.cloze !== undefined && v.cloze !== 'auto' && v.cloze !== 'prefer') || !validWriterNotes(v.writerNotes) || !Array.isArray(v.targets) || !v.targets.length) return false;
-  if (v.writeAnyway !== undefined && (v.writeAnyway !== true || v.targets.length !== 1)) return false;
+  if (v.writeAnyway !== undefined && (v.writeAnyway !== true || v.targets.length !== 1 || v.maxCardsPerNode !== 1)) return false;
   const ids = new Set<string>();
   if (!v.targets.every(t => {
     if (!object(t) || typeof t.nodeId !== 'string' || !t.nodeId || ids.has(t.nodeId) || !['name', 'statement'].every(k => typeof t[k] === 'string') || !strings(t.aliases) || !Array.isArray(t.existingCards) || t.existingCards.some(c => !object(c) || !isStoredKind(c.kind) || typeof c.front !== 'string' || typeof c.back !== 'string' || (c.format !== undefined && c.format !== 'basic' && c.format !== 'cloze')) || !Array.isArray(t.neighbours) || !t.neighbours.every(nodeRef) || !Array.isArray(t.concludedBy) || t.concludedBy.some(c => !object(c) || typeof c.chainId !== 'string' || !Array.isArray(c.premises) || !c.premises.every(nodeRef)) || !Array.isArray(t.feeds) || t.feeds.some(c => !object(c) || typeof c.chainId !== 'string' || !nodeRef(c.conclusion) || !Array.isArray(c.withPremises) || !c.withPremises.every(nodeRef)) || !storedKinds(t.allowedKinds) || t.allowedKinds.some(k => !(v.enabledKinds as string[]).includes(k)) || (t.source !== undefined && typeof t.source !== 'string')) return false;
     if ((t.flagged !== undefined && typeof t.flagged !== 'boolean') || (t.flagNote !== undefined && typeof t.flagNote !== 'string')
       || (t.noteOnly !== undefined && t.noteOnly !== true) || (t.blankFlag !== undefined && t.blankFlag !== true)
-      || (t.noteOnly && t.blankFlag) || (t.flagged === true ? t.maxCards !== FLAGGED_CARD_CAP : t.maxCards !== undefined)) return false;
+      || (t.noteOnly && t.blankFlag) || (t.flagged === true ? t.maxCards !== (v.writeAnyway ? 1 : FLAGGED_CARD_CAP) : t.maxCards !== undefined)) return false;
     if (t.earlierRepeatCandidates !== undefined) {
       const seen = new Set<string>();
       if (!Array.isArray(t.earlierRepeatCandidates) || t.earlierRepeatCandidates.length > MAX_EARLIER_REPEAT_CANDIDATES || !t.earlierRepeatCandidates.every(c => {

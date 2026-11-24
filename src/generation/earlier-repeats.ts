@@ -62,8 +62,8 @@ export function earlierRepeatSimilarity(a: RecallText, b: RecallText): number {
 }
 
 export function isEarlierRepeatCard(card: Pick<Card, 'status' | 'presence' | 'noteId'>): boolean {
-  return card.status === 'sent' ? card.presence !== 'deleted'
-    : card.noteId === undefined && (card.status === 'draft' || card.status === 'approved' || card.status === 'failed');
+  return card.status === 'imported' || (card.status === 'sent' ? card.presence !== 'deleted'
+    : card.noteId === undefined && (card.status === 'draft' || card.status === 'approved' || card.status === 'failed'));
 }
 
 /** A local, cross-deck index. Exclude the current run or the original being replaced. */

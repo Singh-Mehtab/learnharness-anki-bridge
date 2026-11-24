@@ -612,8 +612,12 @@ test("Review shows a sure historical skip and only starts Write anyway after con
   const generations = [{ id: ref.generationId, status: "completed", tasks: [{ requestId: ref.requestId, status: "applied",
     input: { targets: [{ nodeId: ref.nodeId, name: "Skipped idea", earlierRepeatCandidates: [covering] }] },
     result: { targets: [{ nodeId: ref.nodeId, cards: [], skipReason: "Same recall task.", earlierRepeatOf: covering.id }] } }] }];
+  let started = false;
+  const activeOverride = { id: "override", status: "running", repeatOverride: ref, tasks: [] };
   const f = await setup({ state, handler: (name) => {
-    if (name === "snapshot" || name === "generate") return { ...state, generations };
+    if (name === "snapshot") return started ? { ...state, cards: [...state.cards, card("new-repeat", { nodeId: ref.nodeId, generationId: "override", front: "New question from Write anyway" })],
+      generations: [...generations, { ...activeOverride, status: "completed" }] } : { ...state, generations };
+    if (name === "generate") { started = true; return { ...state, generations: [...generations, activeOverride] }; }
     if (name === "preflightWriteAnyway") return { preflightId: "override", batches: [{ nodeIds: [ref.nodeId] }], modelName: "Fake writer", estimatedCost: null };
   } });
   try {
@@ -622,10 +626,13 @@ test("Review shows a sure historical skip and only starts Write anyway after con
     assert.match(skip.textContent!, /Earlier question/);
     f.button("Write anyway", skip).click(); await tick();
     assert.deepEqual(f.calls.find(c => c.name === "preflightWriteAnyway")?.input, ref);
-    assert.match(f.dialog().textContent!, /one request using Fake writer/);
+    assert.match(f.dialog().textContent!, /one card for this idea using Fake writer/);
     assert.equal(f.calls.some(c => c.name === "generate"), false);
     f.button("Write anyway", f.dialog()).click(); await tick();
     assert.deepEqual(f.calls.find(c => c.name === "generate")?.input, { preflightId: "override" });
+    assert.doesNotMatch(f.review().textContent!, /New question from Write anyway/);
+    for (let i = 0; i < 45 && !f.review().textContent?.includes("New question from Write anyway"); i++) await new Promise(resolve => setTimeout(resolve, 50));
+    assert.match(f.review().textContent!, /New question from Write anyway/);
   } finally { await f.dispose(); }
 });
 

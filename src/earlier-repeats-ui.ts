@@ -1,13 +1,15 @@
 import type { PluginFrontendContext } from '../sdk/index.d.ts';
+import type { Card } from './anki/state.ts';
 import type { EarlierRepeatSkipRef, Generation } from './generation/types.ts';
 import { BLANK, answerPreview, questionPreview } from './writer/cloze.ts';
 import type { EarlierRepeatCandidate } from './writer/types.ts';
 import { el } from './ui.ts';
 
 const skipKey = ({ generationId, requestId, nodeId }: EarlierRepeatSkipRef) => JSON.stringify([generationId, requestId, nodeId]);
-export function earlierRepeatSkips(generations: readonly Generation[]) {
-  const handled = new Set(generations.filter(g => g.repeatOverride && (g.status === 'running' || g.tasks.some(t => t.status === 'applied' || t.resultPending)))
-    .map(g => skipKey(g.repeatOverride!)));
+export function earlierRepeatSkips(generations: readonly Generation[], cards: readonly Pick<Card, 'generationId' | 'nodeId'>[]) {
+  const written = new Set(cards.map(c => JSON.stringify([c.generationId, c.nodeId])));
+  const handled = new Set(generations.filter(g => g.repeatOverride && (g.status === 'running' || g.tasks.some(t => t.resultPending) ||
+    written.has(JSON.stringify([g.id, g.repeatOverride.nodeId])))).map(g => skipKey(g.repeatOverride!)));
   return [...generations].reverse().flatMap(g => g.tasks.flatMap(t => t.result?.targets.flatMap(result => {
     if (!result.earlierRepeatOf || t.status !== 'applied') return [];
     const ref = { generationId: g.id, requestId: t.requestId, nodeId: result.nodeId };

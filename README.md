@@ -68,7 +68,7 @@ Each draft shows its front, back and optional extra field, with maths and code r
 
 Use **Regenerate** to ask for a different version of one unsent draft. Add an instruction if you know what needs to change. You can queue another rewrite while the first runs. The original stays put and can't be sent until you accept the replacement or keep the original.
 
-Review flags possible repeats so you can compare the two cards. If the writer skips an idea because an earlier bridge card already covers it, use **Write anyway** to draft it. Repeat warnings don't block sending.
+Review flags possible repeats so you can compare the two cards. If the writer skips an idea or a rewrite because an earlier bridge card already covers it, use **Write anyway** to ask for one draft. Repeat warnings don't block sending.
 
 Dropping a draft leaves the idea available for future writing. When you drop the last draft for an idea without cards, Review offers **Don't make cards for this idea** as a separate action.
 

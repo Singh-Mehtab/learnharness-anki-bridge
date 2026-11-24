@@ -254,7 +254,7 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
       if (alive()) { state = next; await options.onChanged(); }
       return next;
     } catch (error) {
-      if ((name === "send" || name === "regenerateCard" || name === "acceptRegeneration" || name === "keepOriginalCard" || name === "retryRegenerationResult") && alive()) {
+      if ((name === "send" || name === "regenerateCard" || name === "acceptRegeneration" || name === "keepOriginalCard" || name === "retryRegenerationResult" || name === "rewriteAnyway") && alive()) {
         // A failed or stale action can still leave a different saved snapshot.
         try { const fresh = await ctx.call<Snapshot>("snapshot"); if (alive()) { state = fresh; await options.onChanged(); } } catch { /* Keep the send error. */ }
       }
@@ -300,7 +300,8 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
   let decksFor = "", lookups = 0;
   let visible = options.visible ?? true, lookupDeferred = false;
   function syncRegenerationPoll(): void {
-    const polling = visible && alive() && state?.cards.some(c => c.regeneration?.status === "queued" || c.regeneration?.status === "running");
+    const polling = visible && alive() && (state?.generations?.some(g => g.status === "running") ||
+      state?.cards.some(c => c.regeneration?.status === "queued" || c.regeneration?.status === "running"));
     if (!polling) { clearTimeout(regenerationTimer); regenerationTimer = undefined; }
     else if (!regenerationTimer) regenerationTimer = setTimeout(() => {
       regenerationTimer = undefined;
@@ -864,15 +865,15 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
     if (p.batches.length !== 1) throw new Error(p.skipped[0]?.reason ?? "This idea cannot fit one writer call.");
     const cost = p.estimatedCost === null ? "No cost estimate available." : `Estimated first-attempt cost: $${p.estimatedCost.toFixed(4)}.`;
     const ok = await confirmDialog(ctx, signal, { title: "Write anyway", confirm: "Write anyway",
-      body: `Write cards for this idea in one request using ${p.modelName}. ${cost} The model gets the idea, its writing context, and any earlier card candidates that fit. It can still flag repeats and apply the other writing rules.` });
+      body: `Try writing one card for this idea using ${p.modelName}. ${cost} The model gets the idea, its writing context, and any earlier card candidates that fit. It can still flag repeats and apply the other writing rules.` });
     if (!ok || !alive()) return "";
     await call("generate", { preflightId: p.preflightId });
-    return "Writing cards for this idea…";
+    return "Writing one card for this idea…";
   }
   function renderRepeatSkips(): void {
     const generations = state?.generations ?? [];
     const running = generations.some(g => g.status === "running");
-    const entries = earlierRepeatSkips(generations).map(skip => ({ ...skip, live: earlierCard(skip.covering.id) }));
+    const entries = earlierRepeatSkips(generations, state?.cards ?? []).map(skip => ({ ...skip, live: earlierCard(skip.covering.id) }));
     const key = JSON.stringify([entries, running]);
     if (key === repeatSkipsKey) return;
     repeatSkipsKey = key;
