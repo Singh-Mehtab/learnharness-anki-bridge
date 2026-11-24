@@ -17,7 +17,8 @@ test('backend activation registers public operations without graph, model or net
   const directory = await mkdtemp(path.join(os.tmpdir(), 'anki-backend-'));
   const c = context(directory); const close = await activate(c.ctx);
   try {
-    assert.equal(c.handlers.size, 39);
+    assert.equal(c.handlers.size, 45);
+    for (const name of ['regenerateCard', 'acceptRegeneration', 'keepOriginalCard', 'retryRegenerationResult', 'rewriteAnyway', 'preflightWriteAnyway']) assert.ok(c.handlers.has(name));
     assert.ok(c.handlers.has('unapprove'));
     assert.ok(c.handlers.has('writerModelLevels'));
     assert.ok(c.handlers.has('practiceNodes'));

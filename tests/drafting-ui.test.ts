@@ -474,10 +474,14 @@ test("the summary counts ideas that got cards, and lists the skipped ones", asyn
   const f = setup();
   try {
     f.state.generations.push({ id: "g", status: "completed", nodeIds: ["n_a", "n_b", "n_c"], skipped: [{ nodeId: "n_c", reason: "Too long" }], settings: {}, createdAt: "", tasks: [
-      { requestId: "r", status: "applied", input: {}, outputAllowance: 1, sources: [], result: { targets: [{ nodeId: "n_a", cards: [{}, {}] }, { nodeId: "n_b", cards: [], skipReason: "Couldn't check it" }] } }] });
+      { requestId: "r", status: "applied", input: {}, outputAllowance: 1, sources: [], result: { targets: [{ nodeId: "n_a", cards: [{}, {}] }, { nodeId: "n_b", cards: [], skipReason: "Already covered.", earlierRepeatOf: "older" }] } }] });
     await f.panel.setScope(undefined); await tick();
     assert.match(f.text(), /Wrote 2 cards for 1 idea\./);
     assert.match(f.text(), /2 ideas skipped/);
+    assert.match(f.text(), /The writer skipped this as a repeat\./);
+    assert.doesNotMatch(f.text(), /See Review for the comparison/);
+    assert.match(f.text(), /Too long/);
+    assert.doesNotMatch(f.text(), /Already covered/);
   } finally { await f.close(); }
 });
 

@@ -9,7 +9,7 @@ export interface FakeReview { id: number; ease: number; type: number }
 export interface FakeCard { cardId: number; lapses?: number; reps?: number; queue?: number; deckName?: string; reviews?: FakeReview[]; note?: number }
 export interface FakeNote { noteId: number; lhId: string; modelName?: string; tags?: string[]; cards: FakeCard[]; profile?: string }
 
-export async function fakeAnkiConnect(options: { profile?: string | null; notes?: FakeNote[]; strictReviews?: boolean } = {}) {
+export async function fakeAnkiConnect(options: { profile?: string | null; notes?: FakeNote[]; strictReviews?: boolean; deliveryLookup?: boolean } = {}) {
   const state = {
     profile: (options.profile === undefined ? 'Throwaway' : options.profile) as string | null,
     notes: options.notes ?? [],
@@ -34,7 +34,9 @@ export async function fakeAnkiConnect(options: { profile?: string | null; notes?
     state.requests.push({ action, params });
     if (state.delay) await new Promise(r => setTimeout(r, state.delay));
     let result: unknown = null, error: string | null = null;
-    if (!REVIEW_READ_ACTIONS.has(action)) { state.forbidden.push(action); error = 'unsupported action'; }
+    if (action === 'findNotes' && options.deliveryLookup) {
+      result = state.notes.filter(n => (!n.profile || n.profile === state.profile) && params.query === `"LH_ID:${n.lhId}"`).map(n => n.noteId);
+    } else if (!REVIEW_READ_ACTIONS.has(action)) { state.forbidden.push(action); error = 'unsupported action'; }
     else if (action === 'version') result = 6;
     else if (action === 'getActiveProfile') result = state.profile;
     else if (action === 'notesInfo') {

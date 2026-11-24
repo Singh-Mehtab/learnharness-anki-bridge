@@ -581,6 +581,71 @@ test("clicking Approved returns only that card to Draft without sending", async 
   } finally { await f.dispose(); }
 });
 
+test("Review compares possible repeats side by side and counts them in a non-blocking send confirmation", async () => {
+  const state = fixture(); state.cards = [card("earlier", { status: "sent", deck: "Another deck", front: "Earlier question" }),
+    card("repeat", { status: "approved", front: "Current question", possibleRepeatOf: "earlier" }), card("ordinary", { status: "approved" })];
+  const f = await setup({ state });
+  try {
+    const row = f.review().querySelector('[data-card-id="repeat"]')!;
+    assert.match(row.textContent!, /Possible repeat/);
+    const compare = Array.from(row.querySelectorAll("details")).find(d => d.textContent?.includes("Compare with earlier card"))!;
+    const columns = compare.querySelectorAll(".ab-card-field");
+    assert.equal(columns.length, 2);
+    assert.match(columns[0].textContent!, /Current question/);
+    assert.match(columns[1].textContent!, /Earlier question/);
+    f.button("Send 2 cards to Anki").click(); await tick();
+    assert.match(f.dialog().textContent!, /1 of 2 cards to send is a possible repeat/);
+    assert.equal(f.calls.some(c => c.name === "send"), false);
+    f.button("Cancel", f.dialog()).click(); await tick();
+    assert.equal(f.calls.some(c => c.name === "send"), false);
+    f.button("Send 2 cards to Anki").click(); await tick();
+    f.button("Send", f.dialog()).click(); await tick();
+    assert.deepEqual(f.calls.find(c => c.name === "send")?.input.ids, ["repeat", "ordinary"]);
+  } finally { await f.dispose(); }
+});
+
+for (const saveWarn of [false, true]) test(`Review runs a confirmed Write anyway and picks up the result${saveWarn ? " after a save reports an error" : ""}`, async () => {
+  const state = fixture();
+  const ref = { generationId: "g", requestId: "r", nodeId: "n" };
+  const covering = { id: "earlier", front: "Earlier question", back: "Earlier answer" };
+  state.cards = [card(covering.id, { ...covering, status: "sent", ...(saveWarn && { front: "Changed question" }) })];
+  const generations = [{ id: ref.generationId, status: "completed", tasks: [{ requestId: ref.requestId, status: "applied",
+    input: { targets: [{ nodeId: ref.nodeId, name: "Skipped idea", earlierRepeatCandidates: [covering] }] },
+    result: { targets: [{ nodeId: ref.nodeId, cards: [], skipReason: "Same recall task.", earlierRepeatOf: covering.id }] } }] }];
+  let started = false, readsAfterStart = 0;
+  const activeOverride = { id: "override", status: "running", repeatOverride: ref, tasks: [] };
+  const f = await setup({ state, handler: (name) => {
+    if (name === "snapshot") {
+      if (!started) return { ...state, generations };
+      if (saveWarn && readsAfterStart++ === 0) return { ...state, generations: [...generations, activeOverride] };
+      return { ...state, cards: [...state.cards, card("new-repeat", { nodeId: ref.nodeId, generationId: "override", front: "New question from Write anyway" })],
+        generations: [...generations, { ...activeOverride, status: "completed" }] };
+    }
+    if (name === "generate") {
+      started = true;
+      if (saveWarn) throw new Error("Could not confirm the save.");
+      return { ...state, generations: [...generations, activeOverride] };
+    }
+    if (name === "preflightWriteAnyway") return { preflightId: "override", batches: [{ nodeIds: [ref.nodeId] }], modelName: "Fake writer", estimatedCost: null };
+  } });
+  try {
+    const skip = f.container.querySelector(".ab-repeat-skips")!;
+    assert.match(skip.textContent!, /Skipped ideaNot drafted/);
+    assert.match(skip.textContent!, /Earlier question/);
+    if (saveWarn) assert.match(skip.textContent!, /the earlier card changed or is no longer available/);
+    f.button("Write anyway", skip).click(); await tick();
+    assert.deepEqual(f.calls.find(c => c.name === "preflightWriteAnyway")?.input, ref);
+    assert.match(f.dialog().textContent!, /one card for this idea using Fake writer/);
+    assert.equal(f.calls.some(c => c.name === "generate"), false);
+    f.button("Write anyway", f.dialog()).click(); await tick();
+    assert.deepEqual(f.calls.find(c => c.name === "generate")?.input, { preflightId: "override" });
+    assert.doesNotMatch(f.review().textContent!, /New question from Write anyway/);
+    if (saveWarn) assert.match(f.container.textContent!, /Could not confirm the save/);
+    for (let i = 0; i < 45 && !f.review().textContent?.includes("New question from Write anyway"); i++) await new Promise(resolve => setTimeout(resolve, 50));
+    assert.match(f.review().textContent!, /New question from Write anyway/);
+  } finally { await f.dispose(); }
+});
+
 test("approve and send use named calls with deck, tags and destination; an empty deck explains itself", async () => {
   const state = fixture(); state.cards = [card("a"), card("b")];
   const f = await setup({ state });

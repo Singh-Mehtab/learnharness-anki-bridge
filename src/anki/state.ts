@@ -9,10 +9,13 @@ import { validateFlags } from '../session/flow.ts';
 import type { Flag } from '../session/flow.ts';
 import { validateDismissals } from '../coverage/flow.ts';
 import type { Dismissal } from '../coverage/flow.ts';
+import { validateRegenerations, type Regeneration } from '../regeneration/types.ts';
 
 export interface Destination { url: string; profile: string }
 export type CardStatus = 'draft' | 'approved' | 'sending' | 'sent' | 'imported' | 'failed' | 'dropped';
 export type CardKind = StoredCardKind;
+// Keep the original text: old records used this outcome in place of deliveryAbsent.
+export const NO_NOTE_AFTER_INTERRUPTED_SEND = 'No note found for the interrupted send. You can retry this card.';
 export interface Card {
   id: string;
   nodeId: string;
@@ -34,13 +37,17 @@ export interface Card {
   existingNote?: true;
   destination?: Destination;
   lastError?: string;
+  /** A failed add or reconciliation checked this UUID and found no note. */
+  deliveryAbsent?: true;
   presence?: 'present' | 'deleted' | 'unknown';
   /** Previous unsent state, retained solely for undoing an imported mark. */
-  importPrevious?: { status: 'approved' | 'failed'; deck?: string; destination?: Destination; lastError?: string; presence?: 'present' | 'deleted' | 'unknown' };
+  importPrevious?: { status: 'approved' | 'failed'; deck?: string; destination?: Destination; lastError?: string; deliveryAbsent?: true; presence?: 'present' | 'deleted' | 'unknown' };
   importMarkId?: string;
   sourceSnapshot?: SourceSnapshot;
   generationId?: string;
   requestId?: string;
+  possibleRepeatOf?: string;
+  possibleRepeatFingerprint?: string;
 }
 export interface State {
   schemaVersion: 9;
@@ -52,6 +59,7 @@ export interface State {
   settings: { url: string; apiKey: string; lastDeck: string; tagTemplate?: string; systemTags?: boolean };
   destination: Destination | null;
   cards: Card[];
+  regenerations?: Regeneration[];
 }
 export const initialState = (): State => ({
   schemaVersion: 9,
@@ -83,6 +91,9 @@ function validateStateFormat(value: unknown, version: 6 | 7 | 8 | 9): void {
   for (const card of value.cards) {
     if (!object(card) || !['id', 'nodeId', 'statementHash', 'sessionId', 'nodeName', 'sessionName', 'front', 'back', 'extra'].every(k => text(card[k])) || !/^[\da-f]{8}-(?:[\da-f]{4}-){3}[\da-f]{12}$/i.test(card.id as string) || ids.has(card.id as string) || !isStoredKind(card.kind) || !(version >= 8 ? ['draft', 'approved', 'sending', 'sent', 'imported', 'failed', 'dropped'] : ['draft', 'approved', 'sending', 'sent', 'failed', 'dropped']).includes(card.status as string)) throw new Error('Invalid card state.');
     ids.add(card.id as string);
+    if (card.possibleRepeatOf !== undefined && (version < 9 || !text(card.possibleRepeatOf) || !card.possibleRepeatOf || card.possibleRepeatOf === card.id)) throw new Error('Invalid possible repeat reference.');
+    if (card.possibleRepeatFingerprint !== undefined && (!card.possibleRepeatOf || !text(card.possibleRepeatFingerprint) || !/^[\da-f]{64}$/.test(card.possibleRepeatFingerprint))) throw new Error('Invalid repeat fingerprint.');
+    if (card.deliveryAbsent !== undefined && (version < 9 || card.deliveryAbsent !== true || card.noteId !== undefined || !card.destination || !['draft', 'approved', 'failed', 'dropped'].includes(card.status as string))) throw new Error('Invalid delivery absence.');
     if (card.sourceSnapshot !== undefined && !validSource(card.sourceSnapshot) || card.generationId !== undefined && !text(card.generationId) || card.requestId !== undefined && !text(card.requestId)) throw new Error('Invalid generation card metadata.');
     if (card.destination !== undefined && !destination(card.destination)) throw new Error('Invalid card destination.');
     if (card.noteId !== undefined && (!Number.isSafeInteger(card.noteId) || (card.noteId as number) <= 0)) throw new Error('Invalid Anki note ID.');
@@ -93,12 +104,13 @@ function validateStateFormat(value: unknown, version: 6 | 7 | 8 | 9): void {
     if (card.importMarkId !== undefined && (version < 8 || card.status !== 'imported' || !text(card.importMarkId) || !/^[\da-f]{8}-(?:[\da-f]{4}-){3}[\da-f]{12}$/i.test(card.importMarkId))) throw new Error('Invalid import mark ID.');
     if (card.importPrevious !== undefined) {
       const previous = card.importPrevious;
-      if (version < 8 || card.status !== 'imported' || !object(previous) || !['approved', 'failed'].includes(previous.status as string) || previous.deck !== undefined && !text(previous.deck) || previous.destination !== undefined && !destination(previous.destination) || previous.lastError !== undefined && !text(previous.lastError) || previous.presence !== undefined && !['present', 'deleted', 'unknown'].includes(previous.presence as string)) throw new Error('Invalid import undo metadata.');
+      if (version < 8 || card.status !== 'imported' || !object(previous) || !['approved', 'failed'].includes(previous.status as string) || previous.deck !== undefined && !text(previous.deck) || previous.destination !== undefined && !destination(previous.destination) || previous.lastError !== undefined && !text(previous.lastError) || previous.deliveryAbsent !== undefined && (version < 9 || previous.deliveryAbsent !== true || !previous.destination) || previous.presence !== undefined && !['present', 'deleted', 'unknown'].includes(previous.presence as string)) throw new Error('Invalid import undo metadata.');
     }
     if (card.status === 'sent' && card.noteId === undefined) throw new Error('Sent card has no Anki note ID.');
     if (card.format !== undefined && (version < 9 || card.format !== 'cloze' || !(CLOZE_KINDS as readonly string[]).includes(card.kind as string))) throw new Error('Invalid card format.');
     if (card.deck !== undefined && !text(card.deck) || card.lastError !== undefined && !text(card.lastError) || card.presence !== undefined && !['present', 'deleted', 'unknown'].includes(card.presence as string)) throw new Error('Invalid delivery metadata.');
   }
+  if (version === 9) validateRegenerations(value.regenerations, ids);
 }
 
 /** Upgrade older snapshots one step per version, then validate the result.
@@ -143,6 +155,14 @@ export function migrateState(raw: unknown): State {
     value = { ...value, schemaVersion: 9 };
   }
   validateState(value);
+  const restoreAbsence = (entry: Pick<Card, 'status' | 'destination' | 'presence' | 'lastError' | 'deliveryAbsent'>) => {
+    // Approval and unapproval used to preserve this message and the destination.
+    if (['failed', 'approved', 'draft'].includes(entry.status) && entry.destination && entry.presence === undefined && entry.lastError === NO_NOTE_AFTER_INTERRUPTED_SEND) entry.deliveryAbsent = true;
+  };
+  for (const card of value.cards) {
+    if (card.noteId === undefined && !card.existingNote) restoreAbsence(card);
+    if (card.importPrevious) restoreAbsence(card.importPrevious);
+  }
   return value;
 }
 

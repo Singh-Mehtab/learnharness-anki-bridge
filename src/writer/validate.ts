@@ -124,7 +124,7 @@ export function findProblems(result: unknown, input: WriterInput): string[] {
   const seen = new Set<string>();
   const groups = new Map(input.flagRequests?.map(r => [r.id, new Set(r.nodeIds)]));
   const candidates = new Set(input.flagRequests?.flatMap(r => r.nodeIds));
-  for (const row of rows as Array<{ nodeId?: unknown; cards?: unknown; skipReason?: unknown; flagMatches?: unknown }>) {
+  for (const row of rows as Array<{ nodeId?: unknown; cards?: unknown; skipReason?: unknown; flagMatches?: unknown; earlierRepeatOf?: unknown }>) {
     const nodeId = typeof row?.nodeId === "string" ? row.nodeId : "";
     const target = byId.get(nodeId);
     if (!target) {
@@ -141,6 +141,10 @@ export function findProblems(result: unknown, input: WriterInput): string[] {
       continue;
     }
     const cards = row.cards as DraftCard[];
+    const candidateIds = new Set(target.earlierRepeatCandidates?.map(c => c.id));
+    if (row.earlierRepeatOf !== undefined && (input.writeAnyway || cards.length || typeof row.earlierRepeatOf !== 'string' || !candidateIds.has(row.earlierRepeatOf))) {
+      problems.push(`Target ${nodeId}: earlierRepeatOf requires a zero-card result, no Write anyway override, and a listed earlier card ID for this target.`);
+    }
     const matches = row.flagMatches;
     if (matches !== undefined && (!Array.isArray(matches) || !cards.length || !matches.length || new Set(matches).size !== matches.length ||
       matches.some(id => typeof id !== 'string' || !groups.get(id)?.has(nodeId)))) {
@@ -158,6 +162,7 @@ export function findProblems(result: unknown, input: WriterInput): string[] {
     }
     const seenCards = new Set<string>();
     for (const card of cards) {
+      if (card.possibleRepeatOf !== undefined && !candidateIds.has(card.possibleRepeatOf)) problems.push(`Target ${nodeId}: possibleRepeatOf must be a listed earlier card ID for this target.`);
       for (const p of cardProblems(card, target, input)) problems.push(`Target ${nodeId}: ${p}.`);
       if (typeof card.front === "string" && card.front.trim()) {
         // Same front or answer alone is not proof of a duplicate. Earlier

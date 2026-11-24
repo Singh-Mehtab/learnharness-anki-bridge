@@ -1,8 +1,9 @@
 import { CORE_KINDS, DEFAULT_KINDS, FLAGGED_CARD_CAP, isCoreKind, isStoredKind, WRITER_NOTES_LIMIT } from '../writer/types.ts';
 import type { CoreCardKind, StoredCardKind } from '../writer/types.ts';
-import type { WriterInput, WriterResult } from '../writer/types.ts';
+import type { TargetResult, WriterInput, WriterResult } from '../writer/types.ts';
 import type { PluginModelSpec } from '../../sdk/index.d.ts';
 import { MAX_FLAGS, validFlagReferences, type FlagReference } from '../session/flow.ts';
+import { MAX_EARLIER_REPEAT_CANDIDATES } from './earlier-repeats.ts';
 
 interface SettingsBase {
   cardsPerNode: number;
@@ -75,6 +76,11 @@ export interface GenerationTask {
   duplicatesOmitted?: number;
   error?: string;
 }
+export interface EarlierRepeatSkipRef { generationId: string; requestId: string; nodeId: string }
+
+// Summary views don't check live comparisons. Refer to the historical decision only.
+export const skipSummary = (target: TargetResult): string | undefined => target.earlierRepeatOf
+  ? 'The writer skipped this as a repeat.' : target.skipReason;
 export interface Generation {
   id: string;
   createdAt: string;
@@ -89,6 +95,8 @@ export interface Generation {
   modelSpec?: { provider: string; id: string; thinkingLevel?: string };
   tasks: GenerationTask[];
   skipped: { nodeId: string; reason: string }[];
+  /** The zero-card result explicitly retried with Write anyway. */
+  repeatOverride?: EarlierRepeatSkipRef;
   /** Dismissed from the page by the learner (0.7.0). */
   hidden?: boolean;
 }
@@ -131,12 +139,20 @@ const storedKinds = (v: unknown): v is StoredCardKind[] => distinctKinds(v) && v
 const nodeRef = (v: unknown): boolean => object(v) && ['id', 'name', 'statement'].every(k => typeof v[k] === 'string');
 function validWriterInput(v: unknown): v is WriterInput {
   if (!object(v) || v.version !== 1 || !Number.isInteger(v.maxCardsPerNode) || Number(v.maxCardsPerNode) < 1 || Number(v.maxCardsPerNode) > 4 || !storedKinds(v.enabledKinds) || (v.constantValues !== undefined && typeof v.constantValues !== 'boolean') || (v.cloze !== undefined && v.cloze !== 'auto' && v.cloze !== 'prefer') || !validWriterNotes(v.writerNotes) || !Array.isArray(v.targets) || !v.targets.length) return false;
+  if (v.writeAnyway !== undefined && (v.writeAnyway !== true || v.targets.length !== 1 || v.maxCardsPerNode !== 1)) return false;
   const ids = new Set<string>();
   if (!v.targets.every(t => {
     if (!object(t) || typeof t.nodeId !== 'string' || !t.nodeId || ids.has(t.nodeId) || !['name', 'statement'].every(k => typeof t[k] === 'string') || !strings(t.aliases) || !Array.isArray(t.existingCards) || t.existingCards.some(c => !object(c) || !isStoredKind(c.kind) || typeof c.front !== 'string' || typeof c.back !== 'string' || (c.format !== undefined && c.format !== 'basic' && c.format !== 'cloze')) || !Array.isArray(t.neighbours) || !t.neighbours.every(nodeRef) || !Array.isArray(t.concludedBy) || t.concludedBy.some(c => !object(c) || typeof c.chainId !== 'string' || !Array.isArray(c.premises) || !c.premises.every(nodeRef)) || !Array.isArray(t.feeds) || t.feeds.some(c => !object(c) || typeof c.chainId !== 'string' || !nodeRef(c.conclusion) || !Array.isArray(c.withPremises) || !c.withPremises.every(nodeRef)) || !storedKinds(t.allowedKinds) || t.allowedKinds.some(k => !(v.enabledKinds as string[]).includes(k)) || (t.source !== undefined && typeof t.source !== 'string')) return false;
     if ((t.flagged !== undefined && typeof t.flagged !== 'boolean') || (t.flagNote !== undefined && typeof t.flagNote !== 'string')
       || (t.noteOnly !== undefined && t.noteOnly !== true) || (t.blankFlag !== undefined && t.blankFlag !== true)
-      || (t.noteOnly && t.blankFlag) || (t.flagged === true ? t.maxCards !== FLAGGED_CARD_CAP : t.maxCards !== undefined)) return false;
+      || (t.noteOnly && t.blankFlag) || (t.flagged === true ? t.maxCards !== (v.writeAnyway ? 1 : FLAGGED_CARD_CAP) : t.maxCards !== undefined)) return false;
+    if (t.earlierRepeatCandidates !== undefined) {
+      const seen = new Set<string>();
+      if (!Array.isArray(t.earlierRepeatCandidates) || t.earlierRepeatCandidates.length > MAX_EARLIER_REPEAT_CANDIDATES || !t.earlierRepeatCandidates.every(c => {
+        if (!object(c) || typeof c.id !== 'string' || !c.id || seen.has(c.id) || typeof c.front !== 'string' || typeof c.back !== 'string' || (c.format !== undefined && c.format !== 'cloze')) return false;
+        seen.add(c.id); return true;
+      })) return false;
+    }
     ids.add(t.nodeId); return true;
   })) return false;
   const requestIds = new Set<string>(), candidates = new Set<string>();
@@ -151,12 +167,17 @@ function validWriterInput(v: unknown): v is WriterInput {
 }
 function validResultShape(result: unknown, input: WriterInput): boolean {
   if (!object(result) || !Array.isArray(result.targets)) return false;
-  const ids = new Set(input.targets.map(t => t.nodeId));
-  return result.targets.every(t => object(t) && typeof t.nodeId === 'string' && ids.has(t.nodeId) && Array.isArray(t.cards)
-    && (t.skipReason === undefined || typeof t.skipReason === 'string')
-    && (t.flagMatches === undefined || strings(t.flagMatches))
-    && t.cards.every(c => object(c) && isStoredKind(c.kind) && typeof c.front === 'string' && typeof c.back === 'string' && (c.extra === undefined || typeof c.extra === 'string')
-      && (c.format === undefined || c.format === 'basic' || c.format === 'cloze')));
+  const byId = new Map(input.targets.map(t => [t.nodeId, t]));
+  return result.targets.every(t => {
+    if (!object(t) || typeof t.nodeId !== 'string' || !byId.has(t.nodeId) || !Array.isArray(t.cards)) return false;
+    const candidates = byId.get(t.nodeId)?.earlierRepeatCandidates;
+    const namesCandidate = (id: unknown) => candidates?.some(c => c.id === id);
+    return (t.skipReason === undefined || typeof t.skipReason === 'string')
+      && (t.flagMatches === undefined || strings(t.flagMatches))
+      && (t.earlierRepeatOf === undefined || (!input.writeAnyway && !t.cards.length && namesCandidate(t.earlierRepeatOf)))
+      && t.cards.every(c => object(c) && isStoredKind(c.kind) && typeof c.front === 'string' && typeof c.back === 'string' && (c.extra === undefined || typeof c.extra === 'string')
+        && (c.format === undefined || c.format === 'basic' || c.format === 'cloze') && (c.possibleRepeatOf === undefined || namesCandidate(c.possibleRepeatOf)));
+  });
 }
 export function validateGenerations(settings: unknown, generations: unknown): void {
   if (!validGenerationSettings(settings) || !Array.isArray(generations)) throw new Error('Invalid generation state. The file has not been reset.');
@@ -165,6 +186,8 @@ export function validateGenerations(settings: unknown, generations: unknown): vo
     if (!object(g) || typeof g.id !== 'string' || !g.id || ids.has(g.id) || typeof g.createdAt !== 'string' || !strings(g.nodeIds) || !(validGenerationSettings(g.settings) || validV072GenerationSettings(g.settings) || validLegacyGenerationSettings(g.settings)) || !validWriterNotes((g.settings as { writerNotes?: unknown }).writerNotes) || !['running', 'completed', 'cancelled', 'interrupted', 'failed'].includes(String(g.status)) || !Array.isArray(g.tasks) || !Array.isArray(g.skipped) || g.skipped.some(s => !object(s) || typeof s.nodeId !== 'string' || typeof s.reason !== 'string')) throw new Error('Invalid generation batch.');
     if (g.backfillNodeIds !== undefined && (!strings(g.backfillNodeIds) || new Set(g.backfillNodeIds).size !== g.backfillNodeIds.length || g.backfillNodeIds.some(id => !(g.nodeIds as string[]).includes(id)))) throw new Error('Invalid generation backfill targets.');
     if (g.independentNodeIds !== undefined && (!strings(g.independentNodeIds) || new Set(g.independentNodeIds).size !== g.independentNodeIds.length || g.independentNodeIds.some(id => !(g.nodeIds as string[]).includes(id)))) throw new Error('Invalid independent generation targets.');
+    if (g.repeatOverride !== undefined && (!object(g.repeatOverride) || typeof g.repeatOverride.generationId !== 'string' || !g.repeatOverride.generationId
+      || typeof g.repeatOverride.requestId !== 'string' || !g.repeatOverride.requestId || g.nodeIds.length !== 1 || g.repeatOverride.nodeId !== g.nodeIds[0])) throw new Error('Invalid Write anyway reference.');
     if (g.hidden !== undefined && typeof g.hidden !== 'boolean') throw new Error('Invalid generation visibility.');
     if (g.modelSpec !== undefined && !(object(g.modelSpec) && typeof g.modelSpec.provider === 'string' && !!g.modelSpec.provider && typeof g.modelSpec.id === 'string' && !!g.modelSpec.id && (g.modelSpec.thinkingLevel === undefined || typeof g.modelSpec.thinkingLevel === 'string'))) throw new Error('Invalid generation model.');
     if (g.modelSpec === undefined && g.status === 'running' && !g.settings.model) throw new Error('Invalid generation model.');

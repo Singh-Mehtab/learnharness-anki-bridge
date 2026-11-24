@@ -66,6 +66,10 @@ Writing runs in the background. If a run is cancelled or a batch fails, cards fr
 
 Each draft shows its front, back and optional extra field, with maths and code rendered. Open **Idea when this card was written** to compare a card with its source. Edit, drop or approve cards one at a time, or approve all drafts once you've read them. Click **Approved** to return an unsent card to Draft. You can also write a card by hand from the **More** menu.
 
+Use **Regenerate** to ask for a different version of one unsent draft. Add an instruction if you know what needs to change. You can queue another rewrite while the first runs. The original stays put and can't be sent until you accept the replacement or keep the original.
+
+Review flags possible repeats so you can compare the two cards. If the writer skips an idea or a rewrite because an earlier bridge card already covers it, use **Write anyway** to ask for one draft. Repeat warnings don't block sending.
+
 Dropping a draft leaves the idea available for future writing. When you drop the last draft for an idea without cards, Review offers **Don't make cards for this idea** as a separate action.
 
 Pick a deck or type a new one, check the tags and press **Send to Anki**. The deck and tag fields suggest names from your Anki collection, and the tags start from a template you set in settings. A green panel confirms what was sent, and **Show in Anki** opens the cards in Anki's browser.
@@ -147,7 +151,7 @@ From then on, the plugin checks the profile before every send and review check, 
 
 | | What | When |
 | --- | --- | --- |
-| To your model | The chosen ideas, nearby linked ideas, an excerpt of the reply each idea came from when there is one, your flag notes, any Writer notes saved in Settings, and up to six recent cards Anki Bridge made for each idea. Later requests may also get a limited set of earlier drafts from the same run, including edits made in Anki Bridge. | When you press **Start writing** and while the run is in progress |
+| To your model | The chosen ideas, linked ideas, source excerpts, flag notes, Writer notes, and up to six recent cards per idea. The writer can also see up to three similar cards made by Anki Bridge across all decks, plus a limited set of drafts from earlier requests in the same run. For a rewrite it also sees the draft and your optional instruction. | When you start writing, regenerate a draft, or ask the writer to write anyway |
 | Written to Anki | Approved cards as new `LearnHarness Basic` or `LearnHarness Cloze` notes, with source labels and delivery IDs. A send creates the deck and note types it needs if they are missing. | When you press **Send to Anki** |
 | Changed in Anki on request | Missing fields, styling and templates for the selected LearnHarness note type | Only when you confirm a repair or reset in Settings |
 | Read from Anki | The open profile, deck names and tags, the note type, and the notes Anki Bridge sent, to check they still exist | Profile, decks and tags when **Make cards** is first shown. The rest when you send, when you run a check from the **More** menu, and when LearnHarness starts with an unconfirmed send. |
