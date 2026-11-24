@@ -2,6 +2,7 @@ import { CORE_KINDS, DEFAULT_KINDS, FLAGGED_CARD_CAP, isCoreKind, isStoredKind, 
 import type { CoreCardKind, StoredCardKind } from '../writer/types.ts';
 import type { WriterInput, WriterResult } from '../writer/types.ts';
 import type { PluginModelSpec } from '../../sdk/index.d.ts';
+import { MAX_FLAGS, validFlagReferences, type FlagReference } from '../session/flow.ts';
 
 interface SettingsBase {
   cardsPerNode: number;
@@ -58,6 +59,8 @@ export interface GenerationTask {
   status: 'pending' | 'running' | 'applied' | 'failed' | 'cancelled' | 'interrupted';
   input: WriterInput;
   sources: SourceSnapshot[];
+  /** Flag revisions the user confirmed for these targets. Never sent to the model. */
+  flagRefs?: FlagReference[];
   outputAllowance: number;
   /** Preflight's input reserve for earlier drafts from this run. */
   batchContextTokens?: number;
@@ -76,6 +79,8 @@ export interface Generation {
   id: string;
   createdAt: string;
   nodeIds: string[];
+  /** Absent on legacy generations. Keeps independent intent when retrying a noted group. */
+  independentNodeIds?: string[];
   /** Absent on legacy generations, whose targets were all explicit requests. */
   backfillNodeIds?: string[];
   status: 'running' | 'completed' | 'cancelled' | 'interrupted' | 'failed';
@@ -127,18 +132,29 @@ const nodeRef = (v: unknown): boolean => object(v) && ['id', 'name', 'statement'
 function validWriterInput(v: unknown): v is WriterInput {
   if (!object(v) || v.version !== 1 || !Number.isInteger(v.maxCardsPerNode) || Number(v.maxCardsPerNode) < 1 || Number(v.maxCardsPerNode) > 4 || !storedKinds(v.enabledKinds) || (v.constantValues !== undefined && typeof v.constantValues !== 'boolean') || (v.cloze !== undefined && v.cloze !== 'auto' && v.cloze !== 'prefer') || !validWriterNotes(v.writerNotes) || !Array.isArray(v.targets) || !v.targets.length) return false;
   const ids = new Set<string>();
-  return v.targets.every(t => {
+  if (!v.targets.every(t => {
     if (!object(t) || typeof t.nodeId !== 'string' || !t.nodeId || ids.has(t.nodeId) || !['name', 'statement'].every(k => typeof t[k] === 'string') || !strings(t.aliases) || !Array.isArray(t.existingCards) || t.existingCards.some(c => !object(c) || !isStoredKind(c.kind) || typeof c.front !== 'string' || typeof c.back !== 'string' || (c.format !== undefined && c.format !== 'basic' && c.format !== 'cloze')) || !Array.isArray(t.neighbours) || !t.neighbours.every(nodeRef) || !Array.isArray(t.concludedBy) || t.concludedBy.some(c => !object(c) || typeof c.chainId !== 'string' || !Array.isArray(c.premises) || !c.premises.every(nodeRef)) || !Array.isArray(t.feeds) || t.feeds.some(c => !object(c) || typeof c.chainId !== 'string' || !nodeRef(c.conclusion) || !Array.isArray(c.withPremises) || !c.withPremises.every(nodeRef)) || !storedKinds(t.allowedKinds) || t.allowedKinds.some(k => !(v.enabledKinds as string[]).includes(k)) || (t.source !== undefined && typeof t.source !== 'string')) return false;
     if ((t.flagged !== undefined && typeof t.flagged !== 'boolean') || (t.flagNote !== undefined && typeof t.flagNote !== 'string')
-      || (t.flagged === true ? t.maxCards !== FLAGGED_CARD_CAP : t.maxCards !== undefined)) return false;
+      || (t.noteOnly !== undefined && t.noteOnly !== true) || (t.blankFlag !== undefined && t.blankFlag !== true)
+      || (t.noteOnly && t.blankFlag) || (t.flagged === true ? t.maxCards !== FLAGGED_CARD_CAP : t.maxCards !== undefined)) return false;
     ids.add(t.nodeId); return true;
-  });
+  })) return false;
+  const requestIds = new Set<string>(), candidates = new Set<string>();
+  if (v.flagRequests !== undefined && (!Array.isArray(v.flagRequests) || !v.flagRequests.length || v.flagRequests.length > MAX_FLAGS || !v.flagRequests.every(r => {
+    if (!object(r) || typeof r.id !== 'string' || !r.id || requestIds.has(r.id) || typeof r.note !== 'string' || !r.note.trim() || r.note.length > 300
+      || !strings(r.nodeIds) || !r.nodeIds.length || new Set(r.nodeIds).size !== r.nodeIds.length || r.nodeIds.some(id => !ids.has(id))) return false;
+    requestIds.add(r.id);
+    for (const id of r.nodeIds) candidates.add(id);
+    return true;
+  }))) return false;
+  return v.targets.every(t => !(t.noteOnly || t.blankFlag || candidates.has(t.nodeId)) || (candidates.has(t.nodeId) && t.flagged === true && t.flagNote === undefined));
 }
 function validResultShape(result: unknown, input: WriterInput): boolean {
   if (!object(result) || !Array.isArray(result.targets)) return false;
   const ids = new Set(input.targets.map(t => t.nodeId));
   return result.targets.every(t => object(t) && typeof t.nodeId === 'string' && ids.has(t.nodeId) && Array.isArray(t.cards)
     && (t.skipReason === undefined || typeof t.skipReason === 'string')
+    && (t.flagMatches === undefined || strings(t.flagMatches))
     && t.cards.every(c => object(c) && isStoredKind(c.kind) && typeof c.front === 'string' && typeof c.back === 'string' && (c.extra === undefined || typeof c.extra === 'string')
       && (c.format === undefined || c.format === 'basic' || c.format === 'cloze')));
 }
@@ -148,6 +164,7 @@ export function validateGenerations(settings: unknown, generations: unknown): vo
   for (const g of generations) {
     if (!object(g) || typeof g.id !== 'string' || !g.id || ids.has(g.id) || typeof g.createdAt !== 'string' || !strings(g.nodeIds) || !(validGenerationSettings(g.settings) || validV072GenerationSettings(g.settings) || validLegacyGenerationSettings(g.settings)) || !validWriterNotes((g.settings as { writerNotes?: unknown }).writerNotes) || !['running', 'completed', 'cancelled', 'interrupted', 'failed'].includes(String(g.status)) || !Array.isArray(g.tasks) || !Array.isArray(g.skipped) || g.skipped.some(s => !object(s) || typeof s.nodeId !== 'string' || typeof s.reason !== 'string')) throw new Error('Invalid generation batch.');
     if (g.backfillNodeIds !== undefined && (!strings(g.backfillNodeIds) || new Set(g.backfillNodeIds).size !== g.backfillNodeIds.length || g.backfillNodeIds.some(id => !(g.nodeIds as string[]).includes(id)))) throw new Error('Invalid generation backfill targets.');
+    if (g.independentNodeIds !== undefined && (!strings(g.independentNodeIds) || new Set(g.independentNodeIds).size !== g.independentNodeIds.length || g.independentNodeIds.some(id => !(g.nodeIds as string[]).includes(id)))) throw new Error('Invalid independent generation targets.');
     if (g.hidden !== undefined && typeof g.hidden !== 'boolean') throw new Error('Invalid generation visibility.');
     if (g.modelSpec !== undefined && !(object(g.modelSpec) && typeof g.modelSpec.provider === 'string' && !!g.modelSpec.provider && typeof g.modelSpec.id === 'string' && !!g.modelSpec.id && (g.modelSpec.thinkingLevel === undefined || typeof g.modelSpec.thinkingLevel === 'string'))) throw new Error('Invalid generation model.');
     if (g.modelSpec === undefined && g.status === 'running' && !g.settings.model) throw new Error('Invalid generation model.');
@@ -166,6 +183,8 @@ export function validateGenerations(settings: unknown, generations: unknown): vo
       if (t.duplicatesOmitted !== undefined && (t.status !== 'applied' || !Number.isSafeInteger(t.duplicatesOmitted) || Number(t.duplicatesOmitted) < 1)) throw new Error('Invalid duplicate omission count.');
       requests.add(t.requestId);
       const input = t.input as WriterInput, sources = t.sources as SourceSnapshot[];
+      if (t.flagRefs !== undefined && !validFlagReferences(t.flagRefs, new Set(input.targets.map(n => n.nodeId)))) throw new Error('Invalid saved flag references.');
+      if (input.flagRequests?.some(r => !(t.flagRefs as FlagReference[] | undefined)?.some(ref => ref.id === r.id && ref.nodeIds.length === r.nodeIds.length && r.nodeIds.every(id => ref.nodeIds.includes(id))))) throw new Error('Saved flag requests do not match their references.');
       if (carriedNotes && input.writerNotes !== runNotes) throw new Error('Invalid generation task.');
       if (sources.length !== input.targets.length || new Set(sources.map(s => s.nodeId)).size !== sources.length || input.targets.some(n => !sources.some(s => s.nodeId === n.nodeId && s.statement === n.statement))) throw new Error('Generation sources do not match accepted input.');
       // Content rules are enforced once, at apply time. Persisted results get a shape check only,

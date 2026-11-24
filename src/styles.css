@@ -77,6 +77,13 @@
 .anki-bridge .ab-ideas-quick { display: flex; flex-wrap: wrap; gap: 4px; padding: 0 8px 8px; }
 .anki-bridge .ab-ideas > .ab-note { padding: 0 12px 8px; }
 .anki-bridge .ab-idea-list { list-style: none; margin: 0; padding: 0; max-height: 420px; overflow-y: auto; border-top: 1px solid var(--ab-border); }
+.anki-bridge .ab-flag-group-help { padding: 0 12px 8px; }
+.anki-bridge .ab-flag-group-row { padding: 8px 12px; border-bottom: 1px solid var(--ab-border); }
+.anki-bridge .ab-flag-group { min-width: 0; margin: 0; padding: 0; border: 1px solid var(--ab-border); border-radius: 8px; }
+.anki-bridge .ab-flag-group legend { margin-left: 8px; padding: 0 4px; font-size: 13px; font-weight: 600; }
+.anki-bridge .ab-flag-group-note { margin: 4px 12px; font-size: 13px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.anki-bridge .ab-flag-group-toggle { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; padding: 4px 12px 8px; font-size: 13px; }
+.anki-bridge .ab-flag-group-ideas { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--ab-border); }
 .anki-bridge .ab-idea { display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px; border-bottom: 1px solid color-mix(in srgb, var(--ab-border) 60%, transparent); }
 .anki-bridge .ab-idea:last-child { border-bottom: 0; }
 .anki-bridge .ab-idea:hover { background: color-mix(in srgb, var(--muted, #8882) 50%, transparent); }

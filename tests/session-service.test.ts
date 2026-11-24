@@ -159,7 +159,7 @@ test('a flag waits for extraction, then reports no nodes or matched nodes, and s
   } finally { await close(); }
 }));
 
-test('re-flagging a turn updates its note instead of duplicating; notes reach the writer map', async () => withDir(async dir => {
+test('re-flagging a turn updates its note instead of duplicating and exposes pending candidates', async () => withDir(async dir => {
   const h = host(), store = await StateStore.open(dir), delivery = new DeliveryService(store);
   const session = new SessionService(h.learning as never, store, delivery);
   try {
@@ -173,9 +173,10 @@ test('re-flagging a turn updates its note instead of duplicating; notes reach th
     assert.equal(third.note, 'sign wrong'); // omitted note keeps the existing one
     await session.command('flag', { sessionId: 's1', messageIds: ['a3'], note: '' });
     assert.equal(store.snapshot().flags[0].note, '');
-    await session.command('flag', { sessionId: 's1', messageIds: ['a3'], note: 'units' });
+    const noted = await session.command('flag', { sessionId: 's1', messageIds: ['a3'], note: 'units' }) as FlagView;
     assert.equal(store.snapshot().flags.length, 1);
-    assert.deepEqual(Object.fromEntries(session.flagNotes()), { 'n-pauli': 'units' });
+    assert.equal(noted.note, 'units');
+    assert.deepEqual(noted.pendingNodeIds, ['n-pauli']);
     // Overlapping turns merge into one flag rather than claiming a message twice.
     await session.command('flag', { sessionId: 's1', messageIds: ['a1'] });
     const merged = await session.command('flag', { sessionId: 's1', messageIds: ['a1', 'a3'] }) as FlagView;

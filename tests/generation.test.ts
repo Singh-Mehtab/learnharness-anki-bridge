@@ -151,21 +151,20 @@ test('a blank flag increases the real preflight and worker cap; new kinds are op
   const c = host.context(directory), close = await activate(c.ctx);
   try {
     await c.call('generationSettings', { model: { provider: 'scratch', id: 'writer' } });
-    const stale = await c.call('preflight', { nodeIds: ['n_a', 'n_b'] });
-    await c.call('flag', { sessionId: 'c1', messageIds: ['m1'], note: '' });
-    await assert.rejects(c.call('generate', { preflightId: stale.preflightId }), /stale|expired/);
+    const blank = await c.call('flag', { sessionId: 'c1', messageIds: ['m1'], note: '' });
+    const selection = { nodeIds: ['n_a', 'n_b'], flagScopes: [{ id: blank.id, nodeIds: ['n_a'] }], independentNodeIds: ['n_b'] };
     await assert.rejects(c.call('generationSettings', { constantValues: true }), /Unsupported generation input/);
     await assert.rejects(c.call('generationSettings', { enabledKinds: ['recall'] }), /available card types/);
     await assert.rejects(c.call('generationSettings', { enabledKinds: ['fact', 'compose'] }), /available card types/);
-    const beforeOptIn = await c.call('preflight', { nodeIds: ['n_a', 'n_b'] });
+    const beforeOptIn = await c.call('preflight', selection);
     await c.call('generationSettings', { enabledKinds: ['fact', 'steps', 'apply'] });
-    await assert.rejects(c.call('generate', { preflightId: beforeOptIn.preflightId }), /stale/);
-    const p = await c.call('preflight', { nodeIds: ['n_a', 'n_b'] });
+    await assert.rejects(c.call('generate', { preflightId: beforeOptIn.preflightId }), /stale|expired/);
+    const p = await c.call('preflight', selection);
     assert.equal(p.maximumCards, 14);
     assert.equal(p.outputTokens, outputAllowance(1, 12) + outputAllowance(1, 2));
     // If the model cannot fit the flag, its 12 cards are not counted as planned output.
     host.catalog.models[0].maxTokens = outputAllowance(1, 2);
-    const limited = await c.call('preflight', { nodeIds: ['n_a', 'n_b'] });
+    const limited = await c.call('preflight', selection);
     assert.deepEqual(limited.skipped.map((s: { nodeId: string }) => s.nodeId), ['n_a']);
     assert.equal(limited.maximumCards, 2);
     assert.equal(limited.outputTokens, outputAllowance(1, 2));
@@ -203,19 +202,19 @@ test('split runs prioritise flagged targets and pass only this run’s earlier d
     host.workers.succeed('task-1', { targets: [{ nodeId: 'n_b', cards: [{ kind: 'fact', front: 'What did the previous demonstration illustrate?', back: 'Old example.' }] }] });
     await until(async () => (await c.call('generationStatus')).generations[0].status === 'completed');
 
-    await c.call('flag', { sessionId: 'c1', messageIds: ['m1'], note: 'Recall this equation.' });
+    const note = await c.call('flag', { sessionId: 'c1', messageIds: ['m1'], note: 'Recall this equation.' });
     host.catalog.models[0].maxTokens = outputAllowance(1, 12);
-    const spacious = await c.call('preflight', { nodeIds: ['n_b', 'n_a'] });
+    const spacious = await c.call('preflight', { nodeIds: ['n_b', 'n_a'], flagScopes: [{ id: note.id, nodeIds: ['n_a'] }], independentNodeIds: ['n_b'] });
     assert.deepEqual(spacious.batches.map((b: { nodeIds: string[] }) => b.nodeIds), [['n_a'], ['n_b']]);
     const second = spacious.batches[1];
     const baseSecond = second.inputTokens - MAX_BATCH_CONTEXT_TOKENS;
     await c.call('generate', { preflightId: spacious.preflightId });
     await until(() => host.workers.starts.length === 2);
     const flagStart = host.workers.starts[1], flagInput = flagStart.input as WriterInput;
-    assert.equal(flagInput.targets[0].flagNote, 'Recall this equation.');
+    assert.deepEqual(flagInput.flagRequests, [{ id: note.id, note: 'Recall this equation.', nodeIds: ['n_a'] }]);
     assert.equal(flagStart.prompt, writerPrompt(flagInput));
     const card = { kind: 'equation', format: 'cloze', front: 'In SI units, \\([\\hbar] = {{blank}}\\)', back: '\\mathrm{J\\,s}' };
-    host.workers.succeed('task-2', { targets: [{ nodeId: 'n_a', cards: [card] }] });
+    host.workers.succeed('task-2', { targets: [{ nodeId: 'n_a', cards: [card], flagMatches: [note.id] }] });
     await until(() => host.workers.starts.length === 3);
     const ordinary = host.workers.starts[2], ordinaryInput = ordinary.input as WriterInput;
     const earlier = ordinary.prompt.slice(writerPrompt(ordinaryInput).length);
@@ -616,26 +615,20 @@ test('an unexpected driver failure interrupts the batch instead of leaving it ru
   } finally { await close(); }
 }));
 
-test('flag notes (0.4.0 seam) reach the writer input and are bound into the preflight', () => withHost(async (host, directory) => {
-  const { ctx } = host.context(directory);
-  const store = await StateStore.open(directory);
-  const delivery = new DeliveryService(store, { signal: ctx.signal });
-  const generation = new GenerationService(ctx, store, delivery);
-  await generation.activate();
+test('working on an idea independently does not forward its unselected flag note', () => withHost(async (host, directory) => {
+  const c = host.context(directory), close = await activate(c.ctx);
   try {
-    let notes = new Map([['n_a', 'I got the direction of the implication wrong']]);
-    generation.flagNotes = () => notes;
-    await generation.command('generationSettings', { model: { provider: 'scratch', id: 'writer' }, cardsPerNode: 1 });
-    const p = await generation.command('preflight', { nodeIds: ['n_a', 'n_b'] }) as { preflightId: string };
-    notes = new Map([['n_a', 'A different note']]);
-    await assert.rejects(generation.command('generate', { preflightId: p.preflightId }), /stale/);
-    const q = await generation.command('preflight', { nodeIds: ['n_a', 'n_b'] }) as { preflightId: string };
-    await generation.command('generate', { preflightId: q.preflightId });
+    await c.call('generationSettings', { model: { provider: 'scratch', id: 'writer' }, cardsPerNode: 1 });
+    await c.call('flag', { sessionId: 'c1', messageIds: ['m1'], note: 'A note for another run' });
+    const p = await c.call('preflight', { nodeIds: ['n_a', 'n_b'] });
+    assert.equal(p.maximumCards, 2);
+    await c.call('generate', { preflightId: p.preflightId });
     await until(() => host.workers.starts.length === 1);
-    const input = host.workers.starts[0].input as { targets: { nodeId: string; flagNote?: string }[] };
-    assert.equal(input.targets.find(t => t.nodeId === 'n_a')!.flagNote, 'A different note');
-    assert.equal(input.targets.find(t => t.nodeId === 'n_b')!.flagNote, undefined);
-  } finally { await generation.close(); await delivery.close(); }
+    const input = host.workers.starts[0].input as WriterInput;
+    assert.equal(input.flagRequests, undefined);
+    assert.ok(input.targets.every(t => !t.flagged));
+    assert.doesNotMatch(host.workers.starts[0].prompt, /A note for another run/);
+  } finally { await close(); }
 }));
 
 test('v5 (0.7.2) state drops the constants toggle and compose from settings only; history, frozen inputs and compose cards stay readable', () => withHost(async (host, directory) => {
@@ -771,8 +764,8 @@ test('cross-request omissions use exact live content and preserve distinct cards
     assert.deepEqual(snap.generations[0].tasks[1].result, fullResult);
     assert.equal(snap.generations[0].tasks[1].duplicatesOmitted, 1);
 
-    const again = async (nodeId: string) => {
-      const preflight = await c.call('preflight', { nodeIds: [nodeId] });
+    const again = async (nodeId: string, flagId?: string) => {
+      const preflight = await c.call('preflight', { nodeIds: [nodeId], ...(flagId ? { flagScopes: [{ id: flagId, nodeIds: [nodeId] }], independentNodeIds: [] } : {}) });
       const next = host.workers.starts.length + 1;
       await c.call('generate', { preflightId: preflight.preflightId });
       await until(() => host.workers.starts.length === next);
@@ -782,8 +775,8 @@ test('cross-request omissions use exact live content and preserve distinct cards
     };
     // A flag isn't satisfied by a duplicate attached to a different node.
     host.catalog.models[0].maxTokens = 32_000;
-    await c.call('flag', { sessionId: 'c1', messageIds: ['m2'], note: '' });
-    snap = await again('n_b');
+    const blank = await c.call('flag', { sessionId: 'c1', messageIds: ['m2'], note: '' });
+    snap = await again('n_b', blank.id);
     assert.equal(snap.cards.length, 5);
     assert.equal(snap.cards.at(-1).nodeId, 'n_b');
     await c.call('drop', { ids: [snap.cards.at(-1).id] });
@@ -854,10 +847,12 @@ for (const mode of ['retry', 'retry with post-commit warning', 'reactivate', 'po
     let close = await activate(first.ctx);
     try {
       await first.call('generationSettings', { model: { provider: 'scratch', id: 'writer' } });
-      const p = await first.call('preflight', { nodeIds: ['n_a'] });
+      const flag = await first.call('flag', { sessionId: 'c1', messageIds: ['m1'], note: 'Remember the required condition.' });
+      const p = await first.call('preflight', { nodeIds: ['n_a'], flagScopes: [{ id: flag.id, nodeIds: ['n_a'] }], independentNodeIds: [] });
       await first.call('generate', { preflightId: p.preflightId });
       await until(() => host.workers.starts.length === 1);
-      host.workers.succeed('task-1', result(['n_a']));
+      const output = result(['n_a']);
+      host.workers.succeed('task-1', { targets: output.targets.map(row => ({ ...row, flagMatches: [flag.id] })) });
       if (mode === 'post-commit') {
         await until(async () => (await first.call('generationStatus')).generations[0].status === 'completed');
         const snap = await first.call('generationStatus');
@@ -872,6 +867,7 @@ for (const mode of ['retry', 'retry with post-commit warning', 'reactivate', 'po
         await until(async () => (await first.call('generationStatus')).generations[0].status === 'interrupted');
         const pending = JSON.parse(await readFile(statePath(directory), 'utf8'));
         assert.equal(pending.cards.length, 0);
+        assert.equal(pending.flags[0].handledIdeas, undefined);
         assert.equal(pending.generations[0].tasks[0].resultPending, true);
         await assert.rejects(first.call('preflight', { nodeIds: ['n_a'] }), /generating/);
         if (mode === 'retry' || mode === 'retry with post-commit warning') {
@@ -950,6 +946,8 @@ for (const mode of ['retry', 'retry with post-commit warning', 'reactivate', 'po
       }
       assert.equal(final.cards.length, 1);
       assert.equal(final.cards[0].requestId, host.workers.starts[0].requestId);
+      const disk = JSON.parse(await readFile(statePath(directory), 'utf8'));
+      assert.deepEqual(disk.flags[0].handledIdeas, [{ nodeId: 'n_a', statementHash: statementHash(host.nodes[0].statement) }]);
       assert.equal(final.generations[0].status, 'completed');
       assert.equal(final.generations[0].tasks[0].status, 'applied');
       assert.equal(final.generations[0].tasks[0].resultPending, undefined);
@@ -1102,12 +1100,13 @@ test('#54: split requests share the notes frozen at preflight, alongside earlier
   let c = host.context(directory), close = await activate(c.ctx);
   try {
     await c.call('generationSettings', { model: { provider: 'scratch', id: 'writer' }, cardsPerNode: 1 });
-    await c.call('flag', { sessionId: 'c1', messageIds: ['m1'], note: 'Recall this equation.' });
+    const note = await c.call('flag', { sessionId: 'c1', messageIds: ['m1'], note: 'Recall this equation.' });
     host.catalog.models[0].maxTokens = outputAllowance(1, 12);
+    const selection = { nodeIds: ['n_b', 'n_a'], flagScopes: [{ id: note.id, nodeIds: ['n_a'] }], independentNodeIds: ['n_b'] };
     const notes = 'On units cards, name the unit system, e.g. "In natural units with energy in eV".';
-    const plain = await c.call('preflight', { nodeIds: ['n_b', 'n_a'] });
+    const plain = await c.call('preflight', selection);
     await c.call('generationSettings', { writerNotes: notes });
-    const p = await c.call('preflight', { nodeIds: ['n_b', 'n_a'] });
+    const p = await c.call('preflight', selection);
     assert.deepEqual(p.batches.map((b: { nodeIds: string[] }) => b.nodeIds), [['n_a'], ['n_b']]);
     // Each request counts the notes once; the second still reserves the full earlier-drafts budget.
     const extra = estimateTokens(`\n\n${writerNotesSection(notes)}`);
@@ -1120,7 +1119,7 @@ test('#54: split requests share the notes frozen at preflight, alongside earlier
     assert.equal((first.input as WriterInput).writerNotes, notes);
     assert.equal(first.prompt, writerPrompt(first.input as WriterInput));
     const card = { kind: 'equation', format: 'cloze', front: 'In SI units, \\([\\hbar] = {{blank}}\\)', back: '\\mathrm{J\\,s}' };
-    host.workers.succeed('task-1', { targets: [{ nodeId: 'n_a', cards: [card] }] });
+    host.workers.succeed('task-1', { targets: [{ nodeId: 'n_a', cards: [card], flagMatches: [note.id] }] });
     await until(() => host.workers.starts.length === 2);
     const second = host.workers.starts[1], secondInput = second.input as WriterInput;
     assert.equal(secondInput.writerNotes, notes);

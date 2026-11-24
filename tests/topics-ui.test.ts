@@ -98,7 +98,7 @@ async function setup(options: { paired?: boolean; deferSessionButtons?: boolean;
         sessionReads.push(input.sessionId);
         return { session: { id: input.sessionId, title: "Nuclear lecture", exists: true }, nodes: [
           { id: "node-r", name: "Nuclear radius", statement: "Nuclear radius varies with mass number.", flagged: true, cards: { waiting: 0, sent: 0, sentElsewhere: 0 } },
-        ], flags: [{ status: "matched", note: "Review the scaling law", flaggedAt: "2026-11-20T08:00:00Z", nodeIds: ["node-r"] }], cardsPerNode: 2, paired: true };
+        ], flags: [{ id: "f1", status: "matched", note: "Review the scaling law", flaggedAt: "2026-11-20T08:00:00Z", nodeIds: ["node-r"], pendingNodeIds: ["node-r"] }], cardsPerNode: 2, paired: true };
       }
       if (name === "connection") {
         const profile = store.snapshot().destination?.profile ?? null;
@@ -456,7 +456,7 @@ test("a session Make cards action selects the cards tab, transfers focus if need
     const panel = t.panel("Make cards");
     assert.equal(panel.querySelector<HTMLSelectElement>('select[aria-label="Ideas from"]')!.value, "chat-1");
     assert.match(panel.textContent!, /Review the scaling law/);
-    const selected = () => panel.querySelector<HTMLInputElement>('input[aria-label="Select Nuclear radius"]')!.checked;
+    const selected = () => panel.querySelector<HTMLInputElement>('input[aria-label="Include flag 1 request"]')!.checked;
     const flagTitle = () => panel.querySelector(".ab-flags-title")!.textContent;
     assert.equal(selected(), true, "the eligible flagged idea is preselected");
     assert.equal(flagTitle(), "1 flagged reply");
