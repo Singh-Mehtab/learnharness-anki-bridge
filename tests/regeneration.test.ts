@@ -103,6 +103,27 @@ test('regenerateCard queues one normal worker per card, passes saved edits and s
   });
 });
 
+test('rewrite checks earlier cards across nodes, shows a possible repeat before Accept, and drops a stale match', async () => {
+  const original = makeCard();
+  const earlier = makeCard({ nodeId: 'n_other', sourceSnapshot: undefined, front: 'Which assumption supports alpha?', back: 'Assumption A.' });
+  await withBackend([original, earlier], async (host, c) => {
+    const queue = async () => {
+      const job = byId(await c.call('regenerateCard', startInput(original)), original.id).regeneration!;
+      await until(() => !!workerFor(host, job.requestId));
+      const worker = workerFor(host, job.requestId);
+      assert.deepEqual((worker.input as WriterInput).targets[0].earlierRepeatCandidates?.map(c => c.id), [earlier.id]);
+      host.workers.succeed(worker.id, result([{ ...replacement, possibleRepeatOf: earlier.id } as typeof replacement]));
+      assert.equal((await waitForJob(c, original.id, 'ready')).replacement?.possibleRepeatOf, earlier.id);
+      return job;
+    };
+    const first = await queue();
+    await c.call('edit', { id: earlier.id, front: 'What is the capital of Peru?', back: 'Lima.' });
+    const accepted = byId(await c.call('acceptRegeneration', { id: original.id, requestId: first.requestId }), original.id);
+    assert.equal(accepted.front, replacement.front);
+    assert.equal(accepted.possibleRepeatOf, undefined);
+  });
+});
+
 test('stale Keep and Accept cannot clear a later rewrite, even when the first worker returns late', async () => {
   const card = makeCard({ status: 'approved' });
   await withBackend([card], async (host, c) => {

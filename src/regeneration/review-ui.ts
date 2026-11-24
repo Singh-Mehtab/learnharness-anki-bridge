@@ -8,7 +8,8 @@ export function rewriteForm(ctx: PluginFrontendContext, signal: AbortSignal, que
   form.append(el('summary', 'Regenerate this card'));
   const instruction = textarea('', 2);
   instruction.maxLength = REWRITE_INSTRUCTION_LIMIT;
-  form.append(field('Rewrite instruction (optional)', instruction));
+  form.append(field('Rewrite instruction (optional)', instruction),
+    el('p', 'The writer receives this draft, its saved source, your instruction and relevant earlier bridge cards.', 'ab-muted'));
   button(ctx, form, signal, { label: 'Queue rewrite', onClick: () => queue(instruction.value) });
   return form;
 }

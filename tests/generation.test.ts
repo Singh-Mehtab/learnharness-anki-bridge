@@ -421,8 +421,8 @@ test('stale preflights are refused after settings, graph or card changes', () =>
     host.nodes[0].statement = 'Changed statement.';
     await assert.rejects(c.call('generate', { preflightId: p.preflightId }), /stale/);
     p = await c.call('preflight', { nodeIds: ['n_a'] });
-    await c.call('draft', { front: 'Hand', back: 'Written' });
-    // A live hand-written draft can now be ranked across nodes, changing the prompt.
+    await c.call('draft', { front: 'Name the changed statement.', back: 'Changed statement.' });
+    // A similar hand-written draft can change the cross-node candidates in the prompt.
     await assert.rejects(c.call('generate', { preflightId: p.preflightId }), /stale/);
     p = await c.call('preflight', { nodeIds: ['n_a'] });
     await c.call('generate', { preflightId: p.preflightId });

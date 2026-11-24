@@ -10,6 +10,7 @@ import type { Card, CardKind, Destination, State } from './state.ts';
 import { isStoredKind } from '../writer/types.ts';
 import type { Generation, GenerationSettings } from '../generation/types.ts';
 import { assertNotRegenerating, canRegenerate, type RegenerationReview } from '../regeneration/types.ts';
+import { indexEarlierRepeats } from '../generation/earlier-repeats.ts';
 
 export interface PublicSnapshot {
   settings: { url: string; lastDeck: string; hasApiKey: boolean; tagTemplate: string; systemTags: boolean };
@@ -345,6 +346,11 @@ export class DeliveryService {
           const next: Card = { ...state.cards[index], front, back, extra, status: 'draft' };
           delete next.lastError; delete next.format;
           if (format) next.format = format;
+          if (card.front !== front || card.back !== back || card.format !== format) {
+            delete next.possibleRepeatOf;
+            const possibleRepeatOf = indexEarlierRepeats(state.cards, { cardId: card.id, generationId: card.generationId }).possible(next);
+            if (possibleRepeatOf) next.possibleRepeatOf = possibleRepeatOf;
+          }
           state.cards[index] = next;
         });
       } else if (name === 'drop') {

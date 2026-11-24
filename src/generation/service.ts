@@ -221,7 +221,8 @@ export class GenerationService {
         for (const c of target.cards) {
           if (!isStoredKind(c.kind)) throw new Error('Invalid card kind.');
           if (currentHashes.get(source.nodeId) === source.statementHash && matching.get(contentKey(c))?.some(other =>
-            other.sessionId === source.sessionId && (other.nodeId === source.nodeId || allowCrossNode))) {
+            other.sessionId === source.sessionId && (other.nodeId === source.nodeId ||
+              (allowCrossNode && (!stored.input.writeAnyway || other.generationId === id))))) {
             omitted++;
             continue;
           }

@@ -4,7 +4,7 @@ import { packageRevision } from '../anki/package-revision.ts';
 import { CLOZE_KINDS, isStoredKind, type StoredCardKind } from '../writer/types.ts';
 
 export const REWRITE_INSTRUCTION_LIMIT = 300;
-export type Replacement = Pick<Card, 'front' | 'back' | 'extra' | 'format'> & { kind: StoredCardKind };
+export type Replacement = Pick<Card, 'front' | 'back' | 'extra' | 'format' | 'possibleRepeatOf'> & { kind: StoredCardKind };
 export interface RegenerationReview {
   requestId: string;
   status: 'queued' | 'running' | 'ready' | 'resultPending' | 'failed';
@@ -16,6 +16,7 @@ export interface Regeneration extends RegenerationReview {
   revision: string;
   instruction: string;
   workerBinding?: string;
+  repeatFingerprint?: string;
 }
 
 export function canRegenerate(card: Card): card is Card & { sourceSnapshot: SourceSnapshot } {
@@ -45,11 +46,13 @@ export function validateRegenerations(value: unknown, cardIds: ReadonlySet<strin
       || !['queued', 'running', 'ready', 'resultPending', 'failed'].includes(r.status)
       || r.workerBinding !== undefined && (typeof r.workerBinding !== 'string' || !/^[\da-f]{64}$/.test(r.workerBinding))
       || (['running', 'ready', 'resultPending'].includes(r.status) && !r.workerBinding)
+      || r.repeatFingerprint !== undefined && (typeof r.repeatFingerprint !== 'string' || !/^[\da-f]{64}$/.test(r.repeatFingerprint))
       || ((r.status === 'ready') !== (r.replacement !== undefined))) return false;
     if (r.replacement !== undefined) {
       const c = r.replacement;
       if (!c || typeof c !== 'object' || !isStoredKind(c.kind) || typeof c.front !== 'string' || !c.front.trim()
         || typeof c.back !== 'string' || !c.back.trim() || typeof c.extra !== 'string'
+        || c.possibleRepeatOf !== undefined && (typeof c.possibleRepeatOf !== 'string' || !c.possibleRepeatOf || c.possibleRepeatOf === r.cardId)
         || (c.format !== undefined && (c.format !== 'cloze' || !(CLOZE_KINDS as readonly string[]).includes(c.kind)))) return false;
     }
     cards.add(r.cardId); requests.add(r.requestId);

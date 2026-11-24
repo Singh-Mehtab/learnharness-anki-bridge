@@ -671,11 +671,14 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
     }
     const rewrite = card.regeneration;
     article.append(rewrite?.replacement && !rewriteConflict ? replacementComparison(ctx, s, grid, kindName, rewrite.replacement, previewText) : grid);
-    if (covering && !isEditing) {
+    const replacement = rewrite?.replacement;
+    const repeatMatch = replacement ? earlierCard(replacement.possibleRepeatOf) : covering;
+    if (repeatMatch && !isEditing) {
       const compare = el("details", undefined, "ab-card-source");
       const sides = el("div", undefined, "ab-card-fields");
-      sides.append(repeatCardPreview(ctx, "This draft", values, s), repeatCardPreview(ctx, covering.nodeName || "Earlier card", covering, s));
-      compare.append(el("summary", "Compare with earlier card"), sides);
+      sides.append(repeatCardPreview(ctx, replacement ? "Replacement" : "This draft", replacement ?? values, s),
+        repeatCardPreview(ctx, repeatMatch.nodeName || "Earlier card", repeatMatch, s));
+      compare.append(el("summary", replacement ? "Possible repeat: compare replacement with earlier card" : "Compare with earlier card"), sides);
       article.append(compare);
     }
     showLength();
@@ -833,7 +836,8 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
     const next = cards.map(card => {
       const { status, ...rest } = card;
       const key = JSON.stringify([rest, ["draft", "approved", "failed"].includes(status) && card.noteId === undefined ? "editable" : status,
-        editing.has(card.id), saving.has(card.id), switches.get(card.id) ?? 0, earlierCard(card.possibleRepeatOf)]);
+        editing.has(card.id), saving.has(card.id), switches.get(card.id) ?? 0, earlierCard(card.possibleRepeatOf),
+        earlierCard(card.regeneration?.replacement?.possibleRepeatOf)]);
       return { card, key };
     });
     const keys = new Map(next.map(({ card, key }) => [card.id, key]));

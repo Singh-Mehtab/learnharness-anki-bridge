@@ -2,12 +2,15 @@ import type { Card } from '../anki/state.ts';
 import type { DraftCard, EarlierRepeatCandidate, WriterInput } from '../writer/types.ts';
 
 export const MAX_EARLIER_REPEAT_CANDIDATES = 3;
-/** Both the question and the answer must overlap. Calibrate on real cards before release. */
+/** Both the question and the answer must overlap. This only raises an advisory flag. */
 export const EARLIER_REPEAT_THRESHOLD = 0.72;
 
 const math = /\\\[[\s\S]+?\\\]|\\\([^\n]+?\\\)|\$\$[\s\S]+?\$\$|(?<!\\)\$[^$\n]+?\$/g;
 const stopWords = new Set('a an and are as at by for from in is it of on or that the to was what which with'.split(' '));
-const normaliseMath = (s: string) => (s.startsWith('\\') ? s.slice(2, -2) : s.replace(/^\$+|\$+$/g, ''))
+const unwrapMath = (s: string) => s.replace(math, span => span.startsWith('\\') ? span.slice(2, -2) : span.replace(/^\$+|\$+$/g, ''));
+const superscripts = '⁰¹²³⁴⁵⁶⁷⁸⁹';
+const normaliseMath = (s: string) => unwrapMath(s)
+  .replace(/[⁰¹²³⁴⁵⁶⁷⁸⁹]+/g, run => `^${[...run].map(c => superscripts.indexOf(c)).join('')}`)
   .replace(/\\(?:left|right|displaystyle)\b|\\[,;! ]|\s+/g, '')
   .replace(/([_^])\{([\p{L}\p{N}])\}/gu, '$1$2');
 function terms(text: string): Set<string> {
@@ -29,11 +32,29 @@ function similarity(a: Set<string>, b: Set<string>): number {
 }
 
 type RecallText = Pick<Card, 'front' | 'back' | 'format'> | Pick<DraftCard, 'front' | 'back' | 'format'>;
+const clozeMath = (c: RecallText) => c.format === 'cloze' ? c.front.match(math)?.find(span => span.includes('{{blank}}')) : undefined;
 function recallTerms(c: RecallText) {
-  return { front: terms(c.front), back: terms(c.back) };
+  const span = clozeMath(c);
+  const equation = span ? normaliseMath(unwrapMath(span).replace('{{blank}}', unwrapMath(c.back))) : normaliseMath(c.back);
+  return { front: terms(c.front), back: terms(c.back), prose: terms(c.front.replace(math, ' ')),
+    equation: equation.includes('=') ? equation : undefined, cloze: c.format === 'cloze' };
 }
-const recallSimilarity = (a: ReturnType<typeof recallTerms>, b: ReturnType<typeof recallTerms>): number =>
-  Math.min(similarity(a.front, b.front), similarity(a.back, b.back));
+function recallSimilarity(a: ReturnType<typeof recallTerms>, b: ReturnType<typeof recallTerms>): number {
+  const literal = Math.min(similarity(a.front, b.front), similarity(a.back, b.back));
+  // A cloze may hide only the right-hand side. Compare the reconstructed equation
+  // to a Basic answer, and still require similar cues to distinguish recall tasks.
+  return a.cloze !== b.cloze && a.equation && a.equation === b.equation ? Math.max(literal, similarity(a.prose, b.prose)) : literal;
+}
+
+function rankTerms(text: string): Set<string> {
+  const tokens = terms(text);
+  // Some graph statements use bare maths or Unicode exponents. An exact symbolic
+  // right-hand side helps find the card even when the graph used a different cue.
+  for (const [, rhs] of unwrapMath(text).matchAll(/=\s*([\p{L}][\p{L}\p{N}⁰¹²³⁴⁵⁶⁷⁸⁹^_{}]*)/gu)) {
+    if (/[\p{N}^_]/u.test(rhs)) tokens.add(`math:rhs=${normaliseMath(rhs)}`);
+  }
+  return tokens;
+}
 
 /** Lexical evidence only. An identical answer by itself is not the same recall task. */
 export function earlierRepeatSimilarity(a: RecallText, b: RecallText): number {
@@ -49,16 +70,18 @@ export function isEarlierRepeatCard(card: Pick<Card, 'status' | 'presence' | 'no
 export function indexEarlierRepeats(cards: readonly Card[], exclude: { generationId?: string; cardId?: string } = {}) {
   const eligible = cards.filter(c => c.id !== exclude.cardId && (!exclude.generationId || c.generationId !== exclude.generationId) && isEarlierRepeatCard(c));
   const records = eligible.map(card => {
-    const { front, back } = recallTerms(card);
-    return { card, front, back, text: new Set([...front, ...back]) };
+    const recall = recallTerms(card);
+    const text = rankTerms(`${card.front}\n${card.back}\n${recall.equation ?? ''}`);
+    return { card, recall, text };
   });
   const byId = new Map(eligible.map(card => [card.id, card]));
   return {
     rank(target: { name: string; statement: string }): EarlierRepeatCandidate[] {
-      const text = terms(`${target.name}\n${target.statement}`);
+      const text = rankTerms(`${target.name}\n${target.statement}`);
       const ranked: { card: Card; score: number }[] = [];
       for (const record of records) {
         const score = similarity(text, record.text);
+        if (score === 0) continue;
         const position = ranked.findIndex(r => score >= r.score);
         if (position !== -1) ranked.splice(position, 0, { card: record.card, score });
         else if (ranked.length < MAX_EARLIER_REPEAT_CANDIDATES) ranked.push({ card: record.card, score });
@@ -75,7 +98,7 @@ export function indexEarlierRepeats(cards: readonly Card[], exclude: { generatio
       const query = recallTerms(card);
       let best = EARLIER_REPEAT_THRESHOLD, id: string | undefined;
       for (const r of records) {
-        const score = recallSimilarity(query, r);
+        const score = recallSimilarity(query, r.recall);
         if (score >= best) { best = score; id = r.card.id; }
       }
       return id;

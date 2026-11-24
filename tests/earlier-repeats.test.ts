@@ -28,11 +28,21 @@ test('indexEarlierRepeats ranks text and normalised maths across eligible bridge
     best, earlierDraft, unrelated, row({ ...sent, presence: 'deleted' }), row({ status: 'dropped' }),
     row({ status: 'imported' }), row({ status: 'sending' }), row({ generationId: 'now' })];
   const index = indexEarlierRepeats(cards, { generationId: 'now' });
-  assert.deepEqual(index.rank(target('n_a')).map(c => c.id), [best.id, earlierDraft.id, unrelated.id]);
+  assert.deepEqual(index.rank(target('n_a')).map(c => c.id), [best.id, earlierDraft.id]);
   assert.equal(index.possible(equation), best.id);
   assert.equal(indexEarlierRepeats(cards, { cardId: best.id, generationId: 'now' }).rank(target('n_a'))[0].id, earlierDraft.id);
   assert.equal(earlierRepeatSimilarity(equation, { ...equation, front: 'State the rest energy relation.', back: '\\(E_0=mc^2\\)' }), 0.75);
   assert.ok(earlierRepeatSimilarity(equation, { ...equation, front: 'How does energy vary with velocity?' }) < 0.5);
+});
+
+test('rank and backstop link a Basic equation to a cloze answer fragment', () => {
+  const plain = row({ front: 'State the surface area of a sphere of radius \\(r\\).', back: '\\[A = 4\\pi r^2\\]' });
+  const cloze = row({ format: 'cloze', front: 'Surface area of a sphere of radius \\(r\\): \\(A = {{blank}}\\)', back: '4\\pi r^2' });
+  const differentCue = row({ ...cloze, front: 'Differentiate the enclosed volume with respect to radius: \\(A = {{blank}}\\)' });
+  assert.equal(indexEarlierRepeats([differentCue, cloze]).possible(plain), cloze.id);
+  assert.equal(indexEarlierRepeats([differentCue]).possible(plain), undefined);
+  const earlier = row({ front: 'What is the kinetic energy?', back: '\\[T = mv^2/2\\]' });
+  assert.equal(indexEarlierRepeats([earlier]).rank({ name: 'Motion', statement: 'Using T = mv²/2 gives the result.' })[0]?.id, earlier.id);
 });
 
 test('addEarlierRepeatCandidates respects the caller budget without changing groups, and the local backstop sees cards not sent', () => {

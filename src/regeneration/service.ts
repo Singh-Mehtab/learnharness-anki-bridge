@@ -2,9 +2,11 @@ import { createHash, randomUUID } from 'node:crypto';
 import type { PluginBackendContext } from '../../sdk/index.d.ts';
 import type { PluginTaskSnapshot, PluginWorkerStartOptions } from '../../sdk/src/core/plugin-workers.d.ts';
 import type { DeliveryService } from '../anki/delivery.ts';
-import type { StateStore } from '../anki/state.ts';
+import type { Card, StateStore } from '../anki/state.ts';
 import { isStoredKind, type WriterResult } from '../writer/types.ts';
 import { validateResult } from '../writer/validate.ts';
+import type { WriterInput } from '../writer/types.ts';
+import { indexEarlierRepeats, possibleEarlierRepeat } from '../generation/earlier-repeats.ts';
 import { assertDistinctReplacement, prepareRegeneration } from './request.ts';
 import { canRegenerate, regenerationRevision, REWRITE_INSTRUCTION_LIMIT, type Regeneration, type Replacement } from './types.ts';
 
@@ -12,6 +14,8 @@ export const REGENERATION_OPERATIONS = ['regenerateCard', 'acceptRegeneration', 
 type Operation = typeof REGENERATION_OPERATIONS[number];
 const errorText = (error: unknown) => error instanceof Error ? error.message : String(error);
 const activeRequest = (r: Regeneration) => r.status === 'queued' || r.status === 'running';
+const repeatFingerprint = (card: Card | undefined) => card && createHash('sha256')
+  .update(JSON.stringify([card.front, card.back, card.format])).digest('hex');
 const binding = (id: string, { input, prompt }: PluginWorkerStartOptions) =>
   createHash('sha256').update(JSON.stringify([id, input, prompt])).digest('hex');
 
@@ -92,10 +96,16 @@ export class RegenerationService {
           if (!canRegenerate(card) || regenerationRevision(card) !== current.revision) throw new Error('The original changed. Keep the original to continue.');
           assertDistinctReplacement(state, card, current.replacement);
           const replacement = current.replacement;
+          const earlier = indexEarlierRepeats(state.cards, { cardId: card.id });
+          const matched = state.cards.find(c => c.id === replacement.possibleRepeatOf);
+          const possibleRepeatOf = matched && earlier.current(matched) && repeatFingerprint(matched) === current.repeatFingerprint
+            ? matched.id : earlier.possible(replacement);
           await this.delivery.save(s => {
             const stored = s.cards.find(c => c.id === card.id)!;
             delete stored.format;
-            Object.assign(stored, replacement, { status: 'draft' });
+            delete stored.possibleRepeatOf;
+            const { possibleRepeatOf: _previous, ...fields } = replacement;
+            Object.assign(stored, fields, { status: 'draft' }, possibleRepeatOf ? { possibleRepeatOf } : {});
             s.regenerations = s.regenerations!.filter(r => r.requestId !== current.requestId);
           });
         } else {
@@ -172,12 +182,15 @@ export class RegenerationService {
       validateResult(worker.result, { input: worker.input });
       const target = (worker.result as WriterResult).targets[0]!;
       const output = target.cards[0];
+      if (target.earlierRepeatOf) throw new Error('The writer found that this rewrite would repeat an earlier card. The original is unchanged.');
       if (!output) throw new Error(target.skipReason || 'The writer did not return a replacement.');
       const { kind, front, back, extra, format } = output;
       if (!isStoredKind(kind) || extra !== undefined && typeof extra !== 'string') throw new Error('The writer returned invalid card fields.');
-      const replacement: Replacement = { kind, front, back, extra: extra ?? '', ...(format === 'cloze' ? { format } : {}) };
+      const earlier = indexEarlierRepeats(state.cards, { cardId: card.id });
+      const possibleRepeatOf = possibleEarlierRepeat(output, (worker.input as WriterInput).targets[0]?.earlierRepeatCandidates, earlier);
+      const replacement: Replacement = { kind, front, back, extra: extra ?? '', ...(format === 'cloze' ? { format } : {}), ...(possibleRepeatOf ? { possibleRepeatOf } : {}) };
       assertDistinctReplacement(state, card, replacement);
-      update = { status: 'ready', replacement, error: undefined };
+      update = { status: 'ready', replacement, repeatFingerprint: repeatFingerprint(state.cards.find(c => c.id === possibleRepeatOf)), error: undefined };
     } catch (error) {
       update = { status: 'failed', error: errorText(error) };
     }
