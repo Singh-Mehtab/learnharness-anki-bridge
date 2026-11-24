@@ -153,7 +153,7 @@
 .anki-bridge .ab-send-actions:not(:has(> .ab-bulk-send button)) { min-height: var(--ab-send-actions-height, 0px); }
 @media (max-width: 760px) { .anki-bridge .ab-send-bar { grid-template-columns: 1fr; } .anki-bridge .ab-send-actions { justify-content: flex-start; } }
 .anki-bridge .ab-send-bar + .ab-status { margin: 0 0 8px; }
-.anki-bridge .ab-cards { display: grid; gap: 12px; margin-top: 12px; }
+.anki-bridge :is(.ab-cards, .ab-repeat-skips:not([hidden])) { display: grid; gap: 12px; margin-top: 12px; }
 .anki-bridge .ab-card { border: 1px solid var(--ab-border); border-radius: 10px; background: var(--card, transparent); overflow: hidden; }
 .anki-bridge .ab-card:focus { outline: 2px solid var(--ring, #888); outline-offset: 2px; }
 .anki-bridge .ab-card[data-status="approved"] { border-color: color-mix(in srgb, var(--ab-good) 40%, var(--ab-border)); }

@@ -85,6 +85,13 @@ export interface ExistingCard {
   format?: CardFormat;
 }
 
+export interface EarlierRepeatCandidate {
+  id: string;
+  front: string;
+  back: string;
+  format?: 'cloze';
+}
+
 export interface WriterTarget {
   nodeId: string;
   name: string;
@@ -107,6 +114,7 @@ export interface WriterTarget {
   maxCards?: number;
   /** Newest first, at most 6. */
   existingCards: ExistingCard[];
+  earlierRepeatCandidates?: EarlierRepeatCandidate[];
   /** Enabled kinds this target's chains and neighbours support. Set by pack. */
   allowedKinds?: CardKind[];
 }
@@ -129,6 +137,8 @@ export interface WriterInput {
   writerNotes?: string;
   /** Each reply note is sent once, alongside its candidate IDs. */
   flagRequests?: { id: string; note: string; nodeIds: string[] }[];
+  /** One-target override of historical skips only. */
+  writeAnyway?: true;
   targets: WriterTarget[];
 }
 
@@ -139,6 +149,7 @@ export interface DraftCard {
   front: string;
   back: string;
   extra?: string;
+  possibleRepeatOf?: string;
 }
 
 export interface TargetResult {
@@ -147,6 +158,8 @@ export interface TargetResult {
   /** IDs of note requests that at least one card on this row directly answers. */
   flagMatches?: string[];
   skipReason?: string;
+  /** A zero-card result covered by a sure earlier repeat. */
+  earlierRepeatOf?: string;
 }
 
 export interface WriterResult {

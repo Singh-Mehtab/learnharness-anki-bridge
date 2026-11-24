@@ -7,6 +7,9 @@ type PackageResult = ExportResult & { requestTags: string[] };
 import { packageRevision } from "./anki/package-revision.ts";
 import { expandTagTemplate, matchTagCase, tagSuggestions, validateTags } from "./anki/tags.ts";
 import { isWaitingCard, type CoverageContext } from "./coverage/flow.ts";
+import { earlierRepeatSkips, repeatCardPreview } from "./earlier-repeats-ui.ts";
+import { isEarlierRepeatCard } from "./generation/earlier-repeats.ts";
+import type { EarlierRepeatSkipRef, Generation } from "./generation/types.ts";
 import { KIND_NAMES } from "./kinds-ui.ts";
 import { CLOZE_KINDS, CORE_KINDS, isStoredKind } from "./writer/types.ts";
 import { answerPreview, BLANK, questionPreview, toBasic, toCloze } from "./writer/cloze.ts";
@@ -24,10 +27,11 @@ interface Card {
   status: "draft" | "approved" | "sending" | "sent" | "imported" | "failed" | "dropped";
   deck?: string; noteId?: number; existingNote?: true; destination?: Destination; lastError?: string;
   presence?: "present" | "deleted" | "unknown";
+  possibleRepeatOf?: string;
   sourceStatement?: string; sourceChanged?: boolean; sourceMissing?: boolean; sourceUnavailable?: boolean;
   canRegenerate?: true; regeneration?: RegenerationReview;
 }
-export interface Snapshot { settings: Settings; destination: Destination | null; cards: Card[]; recoveryError?: string; generationRecoveryError?: string; durabilityWarning?: string; importMarkId?: string }
+export interface Snapshot { settings: Settings; destination: Destination | null; cards: Card[]; generations?: Generation[]; recoveryError?: string; generationRecoveryError?: string; durabilityWarning?: string; importMarkId?: string }
 /** Editor values. format is part of an edit (FI-8), so a switch with no text change still saves. */
 type Fields = { front: string; back: string; extra: string; format?: "cloze" };
 const isClozeKind = (kind: string) => (CLOZE_KINDS as readonly string[]).includes(kind);
@@ -79,8 +83,9 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
   const importedPanel = el("div", undefined, "ab-sent");
   importedPanel.setAttribute("role", "status"); importedPanel.hidden = true;
   const list = el("div", undefined, "ab-cards");
+  const repeatSkips = el("section", undefined, "ab-repeat-skips"); repeatSkips.hidden = true;
   const history = el("details", undefined, "ab-history");
-  host.append(banner, sendBar, feedback, sentPanel, downloadPanel, importedPanel, list, history);
+  host.append(banner, sendBar, feedback, sentPanel, downloadPanel, importedPanel, repeatSkips, list, history);
 
   const menuSlot = options.headerAside;
   let state: Snapshot | undefined, connection: Connection | undefined, connectionError = "";
@@ -99,7 +104,8 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
   const alive = () => !disposed && !signal.aborted && !ctx.signal.aborted;
   const historyScope = new RenderScope(signal), barScope = new RenderScope(signal), bannerScope = new RenderScope(signal);
   const rows = new Map<string, { key: string; scope: RenderScope; view: ReturnType<typeof renderCard> }>();
-  let bannerKey = "", historyKey = "";
+  const repeatScope = new RenderScope(signal);
+  let bannerKey = "", historyKey = "", repeatSkipsKey = "";
   let approveAll: ButtonHandle | undefined, sendAll: ButtonHandle | undefined, downloadAll: ButtonHandle | undefined;
   let bulkTargetKey: string | undefined;
   const sentScope = new RenderScope(signal), downloadScope = new RenderScope(signal), importedScope = new RenderScope(signal);
@@ -440,15 +446,24 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
     showDownloaded(result, bytes);
     return "";
   }
+  const earlierCard = (id: string | undefined) => id ? state?.cards.find(c => c.id === id && isEarlierRepeatCard(c)) : undefined;
   async function send(ids: string[]): Promise<string> {
     const blocked = sendBlocker();
     if (blocked) throw new Error(blocked);
     const name = deckName(), sentTags = tags.value, sentTagList = validateTags(tagList());
+    const expectedDestination = state?.destination;
+    const repeatCount = state?.cards.filter(c => ids.includes(c.id) && earlierCard(c.possibleRepeatOf)).length ?? 0;
     // The send uses these values, so they can't change underneath it.
     deck.readOnly = true; tags.readOnly = true;
     let result: SendResult;
-    try { result = await call<SendResult>("send", { ids, deck: name, tags: sentTagList, expectedDestination: state?.destination }); }
-    finally { deck.readOnly = false; tags.readOnly = false; }
+    try {
+      if (repeatCount) {
+        const ok = await confirmDialog(ctx, signal, { title: "Send to Anki", confirm: "Send",
+          body: `${repeatCount} of ${plural(ids.length, "card")} to send ${repeatCount === 1 ? "is a possible repeat" : "are possible repeats"}. You can send them as they are or go back to review them.` });
+        if (!ok || !alive()) return "";
+      }
+      result = await call<SendResult>("send", { ids, deck: name, tags: sentTagList, expectedDestination });
+    } finally { deck.readOnly = false; tags.readOnly = false; }
     if (!alive()) return "";
     if (deckName() === name && result.delivery.added.length) deckTouched = false;
     // Tags typed for this send apply to this send only.
@@ -599,6 +614,8 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
     const kindName = isStoredKind(card.kind) ? KIND_NAMES[card.kind] : card.kind;
     title.append(pill(kindName, "info"));
     if (values.format === "cloze") title.append(pill("Cloze", "neutral"));
+    const covering = editable ? earlierCard(card.possibleRepeatOf) : undefined;
+    if (covering) title.append(pill("Possible repeat", "warn"));
     title.append(el("span", card.nodeName || "Card", "ab-card-idea"));
     if (card.sessionName && card.sessionName !== "Manual") title.append(el("span", card.sessionName, "ab-muted ab-card-session"));
     const badge = pill(STATUS[card.status].text, STATUS[card.status].tone);
@@ -654,6 +671,13 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
     }
     const rewrite = card.regeneration;
     article.append(rewrite?.replacement && !rewriteConflict ? replacementComparison(ctx, s, grid, kindName, rewrite.replacement, previewText) : grid);
+    if (covering && !isEditing) {
+      const compare = el("details", undefined, "ab-card-source");
+      const sides = el("div", undefined, "ab-card-fields");
+      sides.append(repeatCardPreview(ctx, "This draft", values, s), repeatCardPreview(ctx, covering.nodeName || "Earlier card", covering, s));
+      compare.append(el("summary", "Compare with earlier card"), sides);
+      article.append(compare);
+    }
     showLength();
     if (isEditing || (editable && length.textContent)) article.append(length);
 
@@ -809,7 +833,7 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
     const next = cards.map(card => {
       const { status, ...rest } = card;
       const key = JSON.stringify([rest, ["draft", "approved", "failed"].includes(status) && card.noteId === undefined ? "editable" : status,
-        editing.has(card.id), saving.has(card.id), switches.get(card.id) ?? 0]);
+        editing.has(card.id), saving.has(card.id), switches.get(card.id) ?? 0, earlierCard(card.possibleRepeatOf)]);
       return { card, key };
     });
     const keys = new Map(next.map(({ card, key }) => [card.id, key]));
@@ -830,6 +854,38 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
       cursor = row.view.article.nextElementSibling;
     }
   }
+  async function writeAnyway(ref: EarlierRepeatSkipRef): Promise<string> {
+    const p = await ctx.call<{ preflightId: string; modelName: string; estimatedCost: number | null; batches: unknown[]; skipped: { reason: string }[] }>("preflightWriteAnyway", ref);
+    if (!alive()) return "";
+    if (p.batches.length !== 1) throw new Error(p.skipped[0]?.reason ?? "This idea cannot fit one writer call.");
+    const cost = p.estimatedCost === null ? "No cost estimate available." : `Estimated first-attempt cost: $${p.estimatedCost.toFixed(4)}.`;
+    const ok = await confirmDialog(ctx, signal, { title: "Write anyway", confirm: "Write anyway",
+      body: `Write cards for this idea in one request using ${p.modelName}. ${cost} The model gets the idea, its writing context, and any earlier card candidates that fit. It can still flag repeats and apply the other writing rules.` });
+    if (!ok || !alive()) return "";
+    await call("generate", { preflightId: p.preflightId });
+    return "Writing cards for this idea…";
+  }
+  function renderRepeatSkips(): void {
+    const generations = state?.generations ?? [];
+    const running = generations.some(g => g.status === "running");
+    const entries = earlierRepeatSkips(generations).map(skip => ({ ...skip, live: earlierCard(skip.covering.id) }));
+    const key = JSON.stringify([entries, running]);
+    if (key === repeatSkipsKey) return;
+    repeatSkipsKey = key;
+    const s = repeatScope.reset();
+    repeatSkips.replaceChildren(); repeatSkips.hidden = !entries.length;
+    for (const { ref, name, reason, covering, live } of entries) {
+      const row = el("article", undefined, "ab-card");
+      const title = el("header", undefined, "ab-card-head");
+      title.append(el("strong", name), pill("Not drafted", "neutral"));
+      const current = live && live.front === covering.front && live.back === covering.back && live.format === covering.format;
+      row.append(title, el("p", reason || "An earlier card covers this recall task."),
+        repeatCardPreview(ctx, current ? live.nodeName || "Covering card" : "Earlier card at write time (since changed or unavailable)", covering, s));
+      const actions = el("div", undefined, "ab-card-foot");
+      button(ctx, actions, s, { label: "Write anyway", disabled: running, onClick: () => run(() => writeAnyway(ref)) });
+      row.append(actions); repeatSkips.append(row);
+    }
+  }
   function draw(): void {
     renderBanner();
     if (!state) {
@@ -841,6 +897,7 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
     if (!deckTouched) deck.value = state.settings.lastDeck;
     renderBar();
     syncDeck();
+    renderRepeatSkips();
     const waiting = state.cards.filter(c => c.status !== "sent" && (c.status !== "imported" || editing.has(c.id)) && c.status !== "dropped");
     reconcileWaiting(waiting);
     if (!waiting.length) {
@@ -885,6 +942,6 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
       await backgroundRefresh();
       if (alive() && !focus()) feedback.show("No cards waiting for this idea.");
     },
-    dispose: () => { disposed = true; clearTimeout(regenerationTimer); options.peers.delete(refreshFromPeer); unsubscribe(); for (const row of rows.values()) row.scope.dispose(); historyScope.dispose(); barScope.dispose(); bannerScope.dispose(); sentScope.dispose(); },
+    dispose: () => { disposed = true; clearTimeout(regenerationTimer); options.peers.delete(refreshFromPeer); unsubscribe(); for (const row of rows.values()) row.scope.dispose(); historyScope.dispose(); barScope.dispose(); bannerScope.dispose(); sentScope.dispose(); repeatScope.dispose(); },
   };
 }

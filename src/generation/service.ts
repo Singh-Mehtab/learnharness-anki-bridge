@@ -16,7 +16,8 @@ import type { Batch } from '../writer/input.ts';
 import type { WriterInput, WriterResult } from '../writer/types.ts';
 import { activeCloze, MAX_BATCH_CONTEXT_TOKENS, normaliseWriterNotes, validGenerationSettings, WRITER_NOTES_LIMIT } from './types.ts';
 import { replayBatchContext, selectBatchContext } from './batch-context.ts';
-import type { Generation, GenerationSettings, GenerationTask, SourceSnapshot } from './types.ts';
+import type { EarlierRepeatSkipRef, Generation, GenerationSettings, GenerationTask, SourceSnapshot } from './types.ts';
+import { addEarlierRepeatCandidates, indexEarlierRepeats, possibleEarlierRepeat } from './earlier-repeats.ts';
 import { graphCoverage, statementHash } from '../coverage/service.ts';
 import { MAX_SELECTED_NODES } from '../coverage/flow.ts';
 import { flagRevision, type FlagReference } from '../session/flow.ts';
@@ -31,8 +32,8 @@ type Definition = typeof WORKER | typeof CLOZE_WORKER;
 export const definitionFor = (input: WriterInput): Definition => input.cloze ? CLOZE_WORKER : WORKER;
 /** Instructions and schema per definition, built once. */
 export const definitions = (): Record<Definition, { instructions: string; resultSchema: unknown }> => ({
-  [WORKER]: { instructions: writerInstructions({ checkBatchDuplicates: true }), resultSchema: resultSchemaFor() },
-  [CLOZE_WORKER]: { instructions: writerInstructions({ cloze: true, checkBatchDuplicates: true }), resultSchema: resultSchemaFor(undefined, { cloze: true }) },
+  [WORKER]: { instructions: writerInstructions({ checkBatchDuplicates: true, earlierRepeats: true }), resultSchema: resultSchemaFor(undefined, { earlierRepeats: true }) },
+  [CLOZE_WORKER]: { instructions: writerInstructions({ cloze: true, checkBatchDuplicates: true, earlierRepeats: true }), resultSchema: resultSchemaFor(undefined, { cloze: true, earlierRepeats: true }) },
 });
 /** A task saved by 0.9.0 or earlier has no definitionId: it ran on WORKER. */
 const taskDefinition = (t: GenerationTask): string => t.definitionId ?? WORKER;
@@ -66,7 +67,7 @@ interface Prepared {
   skipped: { nodeId: string; reason: string }[];
   skippedFlagRequests: { count: number; reason: string }[];
 }
-interface Preflight { id: string; nodeIds: string[]; backfillNodeIds: string[]; selection: FlagSelection; prepared: Prepared }
+interface Preflight { id: string; nodeIds: string[]; backfillNodeIds: string[]; selection: FlagSelection; prepared: Prepared; repeatOverride?: EarlierRepeatSkipRef }
 
 function settledStatus(g: Generation): Generation['status'] {
   if (g.status === 'cancelled' || g.tasks.some(t => t.status === 'pending' || t.status === 'running')) return g.status;
@@ -194,6 +195,16 @@ export class GenerationService {
         stored.error = 'An earlier draft used to check for repeats changed while writing. Retry requires a new estimate.';
         return;
       }
+      const earlier = indexEarlierRepeats(s.cards, { generationId: id });
+      for (const target of result.targets) {
+        if (target.earlierRepeatOf === undefined) continue;
+        const candidate = stored.input.targets.find(t => t.nodeId === target.nodeId)?.earlierRepeatCandidates?.find(c => c.id === target.earlierRepeatOf);
+        if (!candidate || !earlier.current(candidate)) {
+          stored.taskId = worker.id; stored.status = 'failed'; delete stored.resultPending;
+          stored.error = 'An earlier card used to skip writing changed or is no longer available. Retry requires a new estimate.';
+          return;
+        }
+      }
       const matching = new Map<string, typeof s.cards>();
       for (const card of s.cards) {
         if (!card.requestId || card.requestId === requestId || currentHashes.get(card.nodeId) !== card.statementHash
@@ -214,10 +225,11 @@ export class GenerationService {
             omitted++;
             continue;
           }
+          const possibleRepeatOf = possibleEarlierRepeat(c, input.earlierRepeatCandidates, earlier);
           s.cards.push({ id: randomUUID(), nodeId: source.nodeId, nodeName: source.name,
             sessionId: source.sessionId, sessionName: source.sessionName, statementHash: source.statementHash,
             sourceSnapshot: source, generationId: id, requestId, kind: c.kind, ...(c.format === 'cloze' ? { format: 'cloze' as const } : {}),
-            front: c.front, back: c.back, extra: c.extra ?? '', status: 'draft' });
+            front: c.front, back: c.back, extra: c.extra ?? '', status: 'draft', ...(possibleRepeatOf && { possibleRepeatOf }) });
         }
       }
       // Keep the completion after a card is dropped, but never resolve a newer flag revision.
@@ -243,7 +255,7 @@ export class GenerationService {
     });
   }
 
-  private async prepare(ids: string[], backfillNodeIds: string[], selection: FlagSelection): Promise<Prepared> {
+  private async prepare(ids: string[], backfillNodeIds: string[], selection: FlagSelection, writeAnyway?: true): Promise<Prepared> {
     this.active();
     // History stores the resolved mode, so a later default change can't rewrite it.
     const stored = this.store.snapshot().generationSettings, mode = activeCloze(stored);
@@ -276,7 +288,7 @@ export class GenerationService {
         // Off mode's writer doesn't know the placeholder, so it sees the blank as [...].
         : mode === 'off' ? { kind: c.kind, front: c.front.replace('{{blank}}', '[...]'), back: c.back } : { kind: c.kind, front: c.front, back: c.back, format: 'cloze' as const }) });
     const base = { version: 1 as const, maxCardsPerNode: settings.cardsPerNode, enabledKinds: settings.enabledKinds,
-      ...(mode === 'off' ? {} : { cloze: mode }), ...(settings.writerNotes ? { writerNotes: settings.writerNotes } : {}) };
+      ...(mode === 'off' ? {} : { cloze: mode }), ...(settings.writerNotes ? { writerNotes: settings.writerNotes } : {}), ...(writeAnyway && { writeAnyway }) };
     const definition = definitions()[mode === 'off' ? WORKER : CLOZE_WORKER];
     const overhead = estimateTokens(definition.instructions + JSON.stringify(definition.resultSchema));
     const batch = (input: WriterInput): Batch => ({ input, inputTokens: estimateTokens(writerPrompt(input)) + overhead, outputAllowance: targetsAllowance(input.targets, settings.cardsPerNode) });
@@ -328,6 +340,18 @@ export class GenerationService {
       const reserve = Math.min(MAX_BATCH_CONTEXT_TOKENS, Math.floor(available));
       if (reserve > 0) { b.batchContextTokens = reserve; b.inputTokens += reserve; }
     }
+    // Add optional historical evidence after groups and same-run reserves are fixed.
+    const earlier = indexEarlierRepeats(state.cards);
+    const sourceText = new Map(sources.map(source => [source.nodeId, source]));
+    for (const b of batches) {
+      const reserve = b.batchContextTokens ?? 0;
+      const original = b.inputTokens - reserve;
+      const limit = Math.min(DEFAULT_CHUNK_BUDGET + overhead,
+        model.contextWindow === null ? Infinity : model.contextWindow - b.outputAllowance - reserve);
+      if (limit <= original) continue;
+      b.input = addEarlierRepeatCandidates(b.input, earlier, input => batch(input).inputTokens <= limit, sourceText);
+      b.inputTokens = batch(b.input).inputTokens + reserve;
+    }
     // Bind the initial input, bounded reserve, model entry and skips.
     const coverageBinding = { destination: state.destination, nodes: coverage.nodes.filter(n => ids.includes(n.id)),
       dismissals: state.dismissals.filter(d => ids.includes(d.nodeId)) };
@@ -336,18 +360,28 @@ export class GenerationService {
     const { skippedFlagRequests } = noted;
     return { binding: digest({ batches, skipped, skippedFlagRequests, settings, model, spec, sources, coverageBinding, backfillNodeIds, flags, selection }), settings, model, spec, batches, skipped, skippedFlagRequests, sources };
   }
-  private async preflight(ids: string[], backfillNodeIds: string[], selection: FlagSelection): Promise<unknown> {
-    const prepared = await this.prepare(ids, backfillNodeIds, selection), id = randomUUID();
+  private async preflight(ids: string[], backfillNodeIds: string[], selection: FlagSelection, repeatOverride?: EarlierRepeatSkipRef): Promise<unknown> {
+    const prepared = await this.prepare(ids, backfillNodeIds, selection, repeatOverride && true), id = randomUUID();
     // Preflights are ephemeral confirmations, never autonomous durable work.
     if (this.preflights.size >= 32) this.preflights.delete(this.preflights.keys().next().value!);
-    this.preflights.set(id, { id, nodeIds: ids, backfillNodeIds, selection, prepared });
+    this.preflights.set(id, { id, nodeIds: ids, backfillNodeIds, selection, prepared, repeatOverride });
     const inputTokens = prepared.batches.reduce((n, b) => n + b.inputTokens, 0);
     const outputTokens = prepared.batches.reduce((n, b) => n + b.outputAllowance, 0);
     return { preflightId: id, nodeIds: ids, backfillNodeIds, nodeCount: ids.length, maximumCards: prepared.batches.reduce((n, b) => n + b.input.targets.reduce((sum, target) => sum + capFor(target, b.input.maxCardsPerNode), 0), 0),
       inputTokens, outputTokens, estimatedCost: prepared.model.cost ? (inputTokens * prepared.model.cost.input + outputTokens * prepared.model.cost.output) / 1_000_000 : null,
       model: prepared.spec, modelName: prepared.model.name, followsCheapSlot: !prepared.settings.model, settings: prepared.settings, skipped: prepared.skipped,
       ...(prepared.skippedFlagRequests.length && { skippedFlagRequests: prepared.skippedFlagRequests }),
+      earlierRepeatCandidateCount: prepared.batches.reduce((n, b) => n + b.input.targets.reduce((sum, t) => sum + (t.earlierRepeatCandidates?.length ?? 0), 0), 0),
       batches: prepared.batches.map(b => ({ nodeIds: b.input.targets.map(t => t.nodeId), inputTokens: b.inputTokens, outputAllowance: b.outputAllowance })) };
+  }
+  private checkRepeatOverride(ref: EarlierRepeatSkipRef): void {
+    const generations = this.store.snapshot().generations;
+    const original = generations.find(g => g.id === ref.generationId);
+    const task = original?.tasks.find(t => t.requestId === ref.requestId && t.status === 'applied');
+    if (original?.status === 'running' || !task?.result?.targets.some(t => t.nodeId === ref.nodeId && t.earlierRepeatOf)) throw new Error('Choose a previously skipped idea after its write finishes.');
+    if (generations.some(g => g.repeatOverride?.generationId === ref.generationId && g.repeatOverride.requestId === ref.requestId && g.repeatOverride.nodeId === ref.nodeId && g.tasks.some(t => t.status === 'applied' || t.resultPending))) {
+      throw new Error('This idea already has a Write anyway result.');
+    }
   }
   async command(name: string, input: unknown = {}): Promise<unknown> {
     if (name === 'generationStatus') { this.active(); keys(object(input), []); return this.delivery.snapshot(); }
@@ -399,6 +433,16 @@ export class GenerationService {
         keys(value, ['nodeIds', 'backfillNodeIds', 'flagScopes', 'independentNodeIds']);
         const ids = nodeIds(value.nodeIds), backfill = backfillIds(value.backfillNodeIds, ids);
         return this.preflight(ids, backfill, readFlagSelection(value.flagScopes, value.independentNodeIds, ids, backfill));
+      } else if (name === 'preflightWriteAnyway') {
+        keys(value, ['generationId', 'requestId', 'nodeId']);
+        const g = this.generation(value.generationId);
+        const nodeId = value.nodeId, task = g.tasks.find(t => t.requestId === value.requestId);
+        if (typeof nodeId !== 'string' || !task) throw new Error('Choose a previously skipped idea.');
+        const ref = { generationId: g.id, requestId: task.requestId, nodeId };
+        this.checkRepeatOverride(ref);
+        const scopes = (task.flagRefs ?? []).filter(f => f.nodeIds.includes(nodeId)).map(f => ({ id: f.id, revision: f.revision, nodeIds: [nodeId] }));
+        return this.preflight([nodeId], (g.backfillNodeIds ?? []).filter(id => id === nodeId),
+          { scopes, independent: (g.independentNodeIds ?? g.nodeIds).filter(id => id === nodeId) }, ref);
       } else if (name === 'retryGeneration') {
         keys(value, ['id']); const g = this.generation(value.id);
         if (g.status === 'running') throw new Error('Cancel or finish this generation before retrying.');
@@ -422,7 +466,7 @@ export class GenerationService {
           scopes.set(ref.id, { id: ref.id, nodeIds: [...new Set([...prior, ...ref.nodeIds])] });
         }
         return this.preflight(selected, (g.backfillNodeIds ?? []).filter(id => selected.includes(id)),
-          { scopes: [...scopes.values()], independent: selected.filter(id => (g.independentNodeIds ?? selected).includes(id)) });
+          { scopes: [...scopes.values()], independent: selected.filter(id => (g.independentNodeIds ?? selected).includes(id)) }, g.repeatOverride);
       } else if (name === 'abandonGenerationResult') {
         keys(value, ['id', 'confirmed']); const g = this.generation(value.id);
         if (value.confirmed !== true) throw new Error('Confirm abandoning the unavailable result.');
@@ -447,11 +491,13 @@ export class GenerationService {
         if (this.store.snapshot().generations.some(g => g.status === 'running')) throw new Error('A generation is already running.');
         const p = this.preflights.get(value.preflightId);
         if (!p) throw new Error('Preflight expired. Run preflight again.');
-        const fresh = await this.prepare(p.nodeIds, p.backfillNodeIds, p.selection);
+        if (p.repeatOverride) this.checkRepeatOverride(p.repeatOverride);
+        const fresh = await this.prepare(p.nodeIds, p.backfillNodeIds, p.selection, p.repeatOverride && true);
         if (fresh.binding !== p.prepared.binding) throw new Error('Preflight is stale. Review a new preflight before generating.');
         if (!fresh.batches.length) throw new Error('No targets fit this preflight. Review the skipped reasons.');
         const g: Generation = { id: p.id, createdAt: new Date().toISOString(), status: 'running', nodeIds: p.nodeIds, backfillNodeIds: p.backfillNodeIds,
           independentNodeIds: p.selection.independent, settings: fresh.settings, modelSpec: fresh.spec, skipped: fresh.skipped,
+          ...(p.repeatOverride && { repeatOverride: p.repeatOverride }),
           tasks: fresh.batches.map(b => ({ requestId: randomUUID(), definitionId: definitionFor(b.input), status: 'pending', input: b.input, outputAllowance: b.outputAllowance,
             ...(b.batchContextTokens ? { batchContextTokens: b.batchContextTokens } : {}), ...(b.flagRefs ? { flagRefs: b.flagRefs } : {}), sources: fresh.sources.filter(s => b.input.targets.some(t => t.nodeId === s.nodeId)) })) };
         try { await this.delivery.save(s => { s.generations.push(g); }); }
@@ -557,4 +603,4 @@ export class GenerationService {
   }
 }
 
-export const GENERATION_OPERATIONS = ['generationContext', 'generationSettings', 'writerModelLevels', 'preflight', 'generate', 'generationStatus', 'cancelGeneration', 'retryGeneration', 'abandonGenerationResult', 'dismissGeneration'] as const;
+export const GENERATION_OPERATIONS = ['generationContext', 'generationSettings', 'writerModelLevels', 'preflight', 'preflightWriteAnyway', 'generate', 'generationStatus', 'cancelGeneration', 'retryGeneration', 'abandonGenerationResult', 'dismissGeneration'] as const;

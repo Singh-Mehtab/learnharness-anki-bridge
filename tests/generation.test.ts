@@ -422,7 +422,9 @@ test('stale preflights are refused after settings, graph or card changes', () =>
     await assert.rejects(c.call('generate', { preflightId: p.preflightId }), /stale/);
     p = await c.call('preflight', { nodeIds: ['n_a'] });
     await c.call('draft', { front: 'Hand', back: 'Written' });
-    // Hand-written cards are not in any selected node's prompt, so this preflight remains valid.
+    // A live hand-written draft can now be ranked across nodes, changing the prompt.
+    await assert.rejects(c.call('generate', { preflightId: p.preflightId }), /stale/);
+    p = await c.call('preflight', { nodeIds: ['n_a'] });
     await c.call('generate', { preflightId: p.preflightId });
     assert.equal((await c.call('generationStatus')).generations.length, 1);
     await assert.rejects(c.call('preflight', { nodeIds: ['n_b'] }).then(q => c.call('generate', { preflightId: q.preflightId })), /already running/);
@@ -963,8 +965,8 @@ test('Off uses the basic writer; auto and prefer use the cloze writer and save c
   const c = host.context(directory), close = await activate(c.ctx);
   try {
     const basic = host.workers.definitions.get('manual-card-writer')!, cloze = host.workers.definitions.get('manual-card-writer-cloze')!;
-    assert.equal(basic.instructions, writerInstructions({ checkBatchDuplicates: true }));
-    assert.equal(cloze.instructions, writerInstructions({ cloze: true, checkBatchDuplicates: true }));
+    assert.equal(basic.instructions, writerInstructions({ checkBatchDuplicates: true, earlierRepeats: true }));
+    assert.equal(cloze.instructions, writerInstructions({ cloze: true, checkBatchDuplicates: true, earlierRepeats: true }));
     assert.match(basic.instructions, /across targets/);
     for (const { instructions } of [basic, cloze]) {
       assert.match(instructions, /interchangeable cue and recall direction/);
@@ -972,7 +974,7 @@ test('Off uses the basic writer; auto and prefer use the cloze writer and save c
     }
     assert.match(cloze.instructions, /repeat the same recall task in the other format/);
     assert.match(cloze.instructions, /prefer the clearer card that directly satisfies the flag/);
-    assert.deepEqual(basic.resultSchema, resultSchemaFor());
+    assert.deepEqual(basic.resultSchema, resultSchemaFor(undefined, { earlierRepeats: true }));
     assert.ok(cloze.instructions.includes('{{blank}}') && !basic.instructions.includes('{{blank}}'));
     await c.call('generationSettings', { model: { provider: 'scratch', id: 'writer' } });
     await assert.rejects(c.call('generationSettings', { cloze: 'always' }), /cloze setting/);

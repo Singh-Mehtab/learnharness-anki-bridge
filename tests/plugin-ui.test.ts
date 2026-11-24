@@ -581,6 +581,54 @@ test("clicking Approved returns only that card to Draft without sending", async 
   } finally { await f.dispose(); }
 });
 
+test("Review compares possible repeats side by side and counts them in a non-blocking send confirmation", async () => {
+  const state = fixture(); state.cards = [card("earlier", { status: "sent", deck: "Another deck", front: "Earlier question" }),
+    card("repeat", { status: "approved", front: "Current question", possibleRepeatOf: "earlier" }), card("ordinary", { status: "approved" })];
+  const f = await setup({ state });
+  try {
+    const row = f.review().querySelector('[data-card-id="repeat"]')!;
+    assert.match(row.textContent!, /Possible repeat/);
+    const compare = Array.from(row.querySelectorAll("details")).find(d => d.textContent?.includes("Compare with earlier card"))!;
+    const columns = compare.querySelectorAll(".ab-card-field");
+    assert.equal(columns.length, 2);
+    assert.match(columns[0].textContent!, /Current question/);
+    assert.match(columns[1].textContent!, /Earlier question/);
+    f.button("Send 2 cards to Anki").click(); await tick();
+    assert.match(f.dialog().textContent!, /1 of 2 cards to send is a possible repeat/);
+    assert.equal(f.calls.some(c => c.name === "send"), false);
+    f.button("Cancel", f.dialog()).click(); await tick();
+    assert.equal(f.calls.some(c => c.name === "send"), false);
+    f.button("Send 2 cards to Anki").click(); await tick();
+    f.button("Send", f.dialog()).click(); await tick();
+    assert.deepEqual(f.calls.find(c => c.name === "send")?.input.ids, ["repeat", "ordinary"]);
+  } finally { await f.dispose(); }
+});
+
+test("Review shows a sure historical skip and only starts Write anyway after confirming a one-target estimate", async () => {
+  const state = fixture();
+  const ref = { generationId: "g", requestId: "r", nodeId: "n" };
+  const covering = { id: "earlier", front: "Earlier question", back: "Earlier answer" };
+  state.cards = [card(covering.id, { ...covering, status: "sent" })];
+  const generations = [{ id: ref.generationId, status: "completed", tasks: [{ requestId: ref.requestId, status: "applied",
+    input: { targets: [{ nodeId: ref.nodeId, name: "Skipped idea", earlierRepeatCandidates: [covering] }] },
+    result: { targets: [{ nodeId: ref.nodeId, cards: [], skipReason: "Same recall task.", earlierRepeatOf: covering.id }] } }] }];
+  const f = await setup({ state, handler: (name) => {
+    if (name === "snapshot" || name === "generate") return { ...state, generations };
+    if (name === "preflightWriteAnyway") return { preflightId: "override", batches: [{ nodeIds: [ref.nodeId] }], modelName: "Fake writer", estimatedCost: null };
+  } });
+  try {
+    const skip = f.container.querySelector(".ab-repeat-skips")!;
+    assert.match(skip.textContent!, /Skipped ideaNot drafted/);
+    assert.match(skip.textContent!, /Earlier question/);
+    f.button("Write anyway", skip).click(); await tick();
+    assert.deepEqual(f.calls.find(c => c.name === "preflightWriteAnyway")?.input, ref);
+    assert.match(f.dialog().textContent!, /one request using Fake writer/);
+    assert.equal(f.calls.some(c => c.name === "generate"), false);
+    f.button("Write anyway", f.dialog()).click(); await tick();
+    assert.deepEqual(f.calls.find(c => c.name === "generate")?.input, { preflightId: "override" });
+  } finally { await f.dispose(); }
+});
+
 test("approve and send use named calls with deck, tags and destination; an empty deck explains itself", async () => {
   const state = fixture(); state.cards = [card("a"), card("b")];
   const f = await setup({ state });

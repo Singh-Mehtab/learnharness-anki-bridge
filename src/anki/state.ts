@@ -42,6 +42,7 @@ export interface Card {
   sourceSnapshot?: SourceSnapshot;
   generationId?: string;
   requestId?: string;
+  possibleRepeatOf?: string;
 }
 export interface State {
   schemaVersion: 9;
@@ -85,6 +86,7 @@ function validateStateFormat(value: unknown, version: 6 | 7 | 8 | 9): void {
   for (const card of value.cards) {
     if (!object(card) || !['id', 'nodeId', 'statementHash', 'sessionId', 'nodeName', 'sessionName', 'front', 'back', 'extra'].every(k => text(card[k])) || !/^[\da-f]{8}-(?:[\da-f]{4}-){3}[\da-f]{12}$/i.test(card.id as string) || ids.has(card.id as string) || !isStoredKind(card.kind) || !(version >= 8 ? ['draft', 'approved', 'sending', 'sent', 'imported', 'failed', 'dropped'] : ['draft', 'approved', 'sending', 'sent', 'failed', 'dropped']).includes(card.status as string)) throw new Error('Invalid card state.');
     ids.add(card.id as string);
+    if (card.possibleRepeatOf !== undefined && (version < 9 || !text(card.possibleRepeatOf) || !card.possibleRepeatOf || card.possibleRepeatOf === card.id)) throw new Error('Invalid possible repeat reference.');
     if (card.sourceSnapshot !== undefined && !validSource(card.sourceSnapshot) || card.generationId !== undefined && !text(card.generationId) || card.requestId !== undefined && !text(card.requestId)) throw new Error('Invalid generation card metadata.');
     if (card.destination !== undefined && !destination(card.destination)) throw new Error('Invalid card destination.');
     if (card.noteId !== undefined && (!Number.isSafeInteger(card.noteId) || (card.noteId as number) <= 0)) throw new Error('Invalid Anki note ID.');
