@@ -1,5 +1,5 @@
 import type { PluginFrontendContext } from "../sdk/index.d.ts";
-import { activeCloze } from "./generation/types.ts";
+import { activeCloze, skipSummary } from "./generation/types.ts";
 import type { ClozeSetting, Generation, GenerationSettings } from "./generation/types.ts";
 import { FLAGGED_CARD_CAP, SETTINGS_KINDS, WRITE_KINDS } from "./writer/types.ts";
 import { exampleCard, KIND_HELP, KIND_NAMES } from "./kinds-ui.ts";
@@ -326,7 +326,10 @@ export function mountDrafting(ctx: PluginFrontendContext, ideasHost: HTMLElement
           await snapshot("dismissGeneration", { id: generation.id });
         }, false) }));
       }
-      const skipped = [...generation.skipped, ...applied.flatMap(t => (t.result?.targets ?? []).filter(x => x.skipReason).map(x => ({ nodeId: x.nodeId, reason: x.skipReason! })))];
+      const skipped = [...generation.skipped, ...applied.flatMap(t => (t.result?.targets ?? []).flatMap(x => {
+        const reason = skipSummary(x);
+        return reason ? [{ nodeId: x.nodeId, reason }] : [];
+      }))];
       if (skipped.length && generation.status !== "running") {
         const details = el("details", undefined, "ab-progress-skips");
         details.append(el("summary", `${plural(skipped.length, "idea")} skipped`));

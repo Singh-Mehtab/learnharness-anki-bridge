@@ -1,6 +1,6 @@
 import { CORE_KINDS, DEFAULT_KINDS, FLAGGED_CARD_CAP, isCoreKind, isStoredKind, WRITER_NOTES_LIMIT } from '../writer/types.ts';
 import type { CoreCardKind, StoredCardKind } from '../writer/types.ts';
-import type { WriterInput, WriterResult } from '../writer/types.ts';
+import type { TargetResult, WriterInput, WriterResult } from '../writer/types.ts';
 import type { PluginModelSpec } from '../../sdk/index.d.ts';
 import { MAX_FLAGS, validFlagReferences, type FlagReference } from '../session/flow.ts';
 import { MAX_EARLIER_REPEAT_CANDIDATES } from './earlier-repeats.ts';
@@ -77,6 +77,10 @@ export interface GenerationTask {
   error?: string;
 }
 export interface EarlierRepeatSkipRef { generationId: string; requestId: string; nodeId: string }
+
+// Summary views don't check live comparisons. Refer to the historical decision only.
+export const skipSummary = (target: TargetResult): string | undefined => target.earlierRepeatOf
+  ? 'Skipped as a repeat when writing. See Review for the comparison.' : target.skipReason;
 export interface Generation {
   id: string;
   createdAt: string;

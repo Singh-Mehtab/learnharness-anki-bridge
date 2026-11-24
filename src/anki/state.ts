@@ -156,7 +156,8 @@ export function migrateState(raw: unknown): State {
   }
   validateState(value);
   const restoreAbsence = (entry: Pick<Card, 'status' | 'destination' | 'presence' | 'lastError' | 'deliveryAbsent'>) => {
-    if (entry.status === 'failed' && entry.destination && entry.presence === undefined && entry.lastError === NO_NOTE_AFTER_INTERRUPTED_SEND) entry.deliveryAbsent = true;
+    // Approval and unapproval used to preserve this message and the destination.
+    if (['failed', 'approved', 'draft'].includes(entry.status) && entry.destination && entry.presence === undefined && entry.lastError === NO_NOTE_AFTER_INTERRUPTED_SEND) entry.deliveryAbsent = true;
   };
   for (const card of value.cards) {
     if (card.noteId === undefined && !card.existingNote) restoreAbsence(card);

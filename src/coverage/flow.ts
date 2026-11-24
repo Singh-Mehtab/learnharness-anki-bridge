@@ -1,6 +1,7 @@
 // Browser-safe coverage rules. Hashing and graph access belong to the backend.
 import type { Card, State } from '../anki/state.ts';
 import { sameDestination } from '../anki/destination.ts';
+import { skipSummary } from '../generation/types.ts';
 
 export const MAX_SELECTED_NODES = 1000;
 export interface Dismissal { nodeId: string; statementHash: string; dismissedAt: string }
@@ -68,7 +69,8 @@ export function projectCoverage(sources: readonly CoverageSource[], state: Pick<
     for (const task of generation.tasks) {
       if (task.resultPending || (generation.status === 'running' && ['pending', 'running'].includes(task.status))) for (const target of task.input.targets) active.add(target.nodeId);
       for (const target of task.result?.targets ?? []) {
-        if (target.skipReason) skips.set(target.nodeId, target.skipReason);
+        const reason = skipSummary(target);
+        if (reason) skips.set(target.nodeId, reason);
         else if (target.cards.length) skips.delete(target.nodeId);
       }
     }

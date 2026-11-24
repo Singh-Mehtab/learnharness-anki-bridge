@@ -330,17 +330,19 @@ test('a verified no-note reconciliation enables rewriting without changing the d
 
 test('opening an old no-note record enables rewriting without querying Anki or unlocking other failures', async () => {
   const destination = { url: 'http://localhost:1234/', profile: 'Throwaway' };
-  const verified = makeCard({ status: 'failed', deck: 'Scratch', destination, lastError: 'No note found for the interrupted send. You can retry this card.' });
+  const verified = (['failed', 'approved', 'draft'] as const).map(status =>
+    makeCard({ status, deck: 'Scratch', destination, lastError: 'No note found for the interrupted send. You can retry this card.' }));
   const conflict = makeCard({ status: 'failed', deck: 'Scratch', destination, lastError: 'This card is already in Anki as a cloze note.' });
-  await withBackend([verified, conflict], async (host, c) => {
+  await withBackend([...verified, conflict], async (host, c) => {
     const snapshot = await c.call('snapshot');
-    assert.equal(byId(snapshot, verified.id).canRegenerate, true);
+    for (const card of verified) assert.equal(byId(snapshot, card.id).canRegenerate, true, `legacy ${card.status}`);
     assert.equal(byId(snapshot, conflict.id).canRegenerate, undefined);
-    const job = byId(await c.call('regenerateCard', startInput(verified)), verified.id).regeneration!;
+    const legacyDraft = verified[2];
+    const job = byId(await c.call('regenerateCard', startInput(legacyDraft)), legacyDraft.id).regeneration!;
     await until(() => !!workerFor(host, job.requestId));
     host.workers.succeed(workerFor(host, job.requestId).id, result());
-    await waitForJob(c, verified.id, 'ready');
-    const accepted = byId(await c.call('acceptRegeneration', { id: verified.id, requestId: job.requestId }), verified.id);
+    await waitForJob(c, legacyDraft.id, 'ready');
+    const accepted = byId(await c.call('acceptRegeneration', { id: legacyDraft.id, requestId: job.requestId }), legacyDraft.id);
     assert.equal(accepted.canRegenerate, true);
     assert.deepEqual(accepted.destination, destination);
   });
