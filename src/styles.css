@@ -179,6 +179,18 @@
 .anki-bridge .ab-card-source { padding: 0 14px 10px; font-size: 12px; color: var(--ab-muted); }
 .anki-bridge .ab-card-source summary { cursor: pointer; }
 .anki-bridge .ab-card-source p { margin-top: 4px; }
+.anki-bridge .ab-rewrite-form { padding-top: 8px; border-top: 1px solid var(--ab-border); }
+.anki-bridge .ab-rewrite-form > label { margin: 8px 0; }
+.anki-bridge .ab-rewrite-comparison { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.anki-bridge .ab-rewrite-comparison > section + section { border-left: 1px solid var(--ab-border); }
+.anki-bridge .ab-rewrite-comparison > section > h4 { padding: 8px 14px 0; }
+.anki-bridge .ab-rewrite-comparison .ab-card-fields { grid-auto-flow: row; }
+.anki-bridge .ab-rewrite-comparison .ab-card-field + .ab-card-field { border-left: 0; border-top: 1px solid var(--ab-border); }
+.anki-bridge .ab-rewrite-decision { padding: 8px 14px; border-top: 1px solid var(--ab-border); overflow-wrap: anywhere; }
+@media (max-width: 640px) {
+  .anki-bridge .ab-rewrite-comparison { grid-template-columns: minmax(0, 1fr); }
+  .anki-bridge .ab-rewrite-comparison > section + section { border-left: 0; border-top: 1px solid var(--ab-border); }
+}
 .anki-bridge .ab-card-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 10px; border-top: 1px solid var(--ab-border); }
 .anki-bridge .ab-empty-card { border: 1px dashed var(--ab-border); border-radius: 10px; padding: 20px; text-align: center; display: grid; gap: 4px; }
 .anki-bridge .ab-empty-title { font-weight: 600; }

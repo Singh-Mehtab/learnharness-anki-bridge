@@ -9,11 +9,12 @@ import { expandTagTemplate, systemTags, validateTags } from './tags.ts';
 import type { Card, CardKind, Destination, State } from './state.ts';
 import { isStoredKind } from '../writer/types.ts';
 import type { Generation, GenerationSettings } from '../generation/types.ts';
+import { assertNotRegenerating, canRegenerate, type RegenerationReview } from '../regeneration/types.ts';
 
 export interface PublicSnapshot {
   settings: { url: string; lastDeck: string; hasApiKey: boolean; tagTemplate: string; systemTags: boolean };
   destination: Destination | null;
-  cards: (Card & { sourceStatement?: string; sourceChanged?: boolean; sourceMissing?: boolean; sourceUnavailable?: boolean })[];
+  cards: (Card & { sourceStatement?: string; sourceChanged?: boolean; sourceMissing?: boolean; sourceUnavailable?: boolean; canRegenerate?: true; regeneration?: RegenerationReview })[];
   generationSettings: GenerationSettings;
   generations: Generation[];
   recoveryError?: string;
@@ -101,17 +102,24 @@ export class DeliveryService {
   }
   reportGenerationRecoveryError(error: unknown): void { this.generationRecoveryError = this.message(error); }
   snapshot(includeSource = true): PublicSnapshot {
-    const { settings, destination, cards, generationSettings, generations } = this.store.snapshot();
+    const { settings, destination, cards, generationSettings, generations, regenerations } = this.store.snapshot();
     let current: Map<string, string> | undefined, sourceUnavailable = false;
     // Source warnings are advisory. A graph read must not make a saved write look like a failure.
     if (includeSource && cards.some(card => card.sourceSnapshot)) {
       try { current = this.sourceStatements?.(); } catch { sourceUnavailable = true; }
     }
-    const publicCards = cards.map(card => card.sourceSnapshot ? { ...card, sourceStatement: card.sourceSnapshot.statement,
-      ...(sourceUnavailable ? { sourceUnavailable } : {
-        sourceMissing: current ? !current.has(card.nodeId) : false,
-        sourceChanged: current?.has(card.nodeId) ? current.get(card.nodeId) !== card.sourceSnapshot.statement : false,
-      }) } : card);
+    const rewrites = new Map(regenerations?.map(r => [r.cardId, r]));
+    const publicCards: PublicSnapshot['cards'] = cards.map(card => {
+      const r = rewrites.get(card.id);
+      return { ...card, ...(canRegenerate(card) ? { canRegenerate: true } : {}),
+        ...(r ? { regeneration: { requestId: r.requestId, status: r.status, replacement: r.replacement, error: r.error && this.message(r.error) } } : {}),
+        ...(card.sourceSnapshot ? { sourceStatement: card.sourceSnapshot.statement,
+          ...(sourceUnavailable ? { sourceUnavailable } : {
+            sourceMissing: current ? !current.has(card.nodeId) : false,
+            sourceChanged: current?.has(card.nodeId) ? current.get(card.nodeId) !== card.sourceSnapshot.statement : false,
+          }) } : {}),
+      };
+    });
     // A pending-result warning lasts only as long as any result still needs saving.
     const pendingWarning = generations.some(g => g.tasks.some(t => t.resultPending))
       ? 'Stop writing until the finished result can be saved or the unavailable result is abandoned.' : undefined;
@@ -176,7 +184,7 @@ export class DeliveryService {
    *  be switched to cloze and then find the old basic note. Neither a model's
    *  display name nor its fields reliably identify its native type. */
   private async formatConflict(client: AnkiClient, card: Card, found: number[]): Promise<boolean> {
-    await this.destination(client);
+    const destination = await this.destination(client);
     const notes = await client.call<unknown>('notesInfo', { notes: found });
     await this.destination(client);
     if (!Array.isArray(notes)) throw new Error('Invalid notesInfo response.');
@@ -196,7 +204,7 @@ export class DeliveryService {
     if (names.every(name => nativeTypeMatches(types.get(name), noteTypeFor(card)))) return false;
     const other = card.format === 'cloze' ? 'basic' : 'cloze';
     const message = `This card is already in Anki as a ${other} note. Delete that note in Anki or switch the card back to ${other}.`;
-    await this.patchCard(card.id, { status: 'failed', lastError: message });
+    await this.patchCard(card.id, { status: 'failed', destination, lastError: message });
     return true;
   }
   private async recover(client: AnkiClient, destination: Destination): Promise<string[]> {
@@ -229,6 +237,9 @@ export class DeliveryService {
     return this.exclusive(async () => {
       this.active();
       const value = data(input);
+      // Freeze only the affected identities; unrelated cards remain reviewable and sendable.
+      if (['send', 'markImported', 'drop', 'approve'].includes(name)) assertNotRegenerating(this.store.snapshot(), idsInput(value.ids));
+      if ((name === 'edit' || name === 'unapprove') && typeof value.id === 'string') assertNotRegenerating(this.store.snapshot(), [value.id]);
       if (name === 'settings') {
         const allowed = new Set(['url', 'apiKey', 'tagTemplate', 'systemTags']);
         if (Object.keys(value).some(k => !allowed.has(k))) throw new Error('Unsupported setting.');

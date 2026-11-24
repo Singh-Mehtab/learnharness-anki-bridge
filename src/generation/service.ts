@@ -22,14 +22,15 @@ import { MAX_SELECTED_NODES } from '../coverage/flow.ts';
 import { flagRevision, type FlagReference } from '../session/flow.ts';
 import { readFlagSelection, resolveFlags, type FlagScope, type FlagSelection } from './flag-selection.ts';
 import { packNoteBatches, refsForBatch } from './note-batches.ts';
+import { resolveWriterModel } from './writer-model.ts';
 
 const WORKER = 'manual-card-writer';
 /** Auto and prefer use the cloze definition. Off and tasks saved before cloze use WORKER. */
 const CLOZE_WORKER = 'manual-card-writer-cloze';
 type Definition = typeof WORKER | typeof CLOZE_WORKER;
-const definitionFor = (input: WriterInput): Definition => input.cloze ? CLOZE_WORKER : WORKER;
+export const definitionFor = (input: WriterInput): Definition => input.cloze ? CLOZE_WORKER : WORKER;
 /** Instructions and schema per definition, built once. */
-const definitions = (): Record<Definition, { instructions: string; resultSchema: unknown }> => ({
+export const definitions = (): Record<Definition, { instructions: string; resultSchema: unknown }> => ({
   [WORKER]: { instructions: writerInstructions({ checkBatchDuplicates: true }), resultSchema: resultSchemaFor() },
   [CLOZE_WORKER]: { instructions: writerInstructions({ cloze: true, checkBatchDuplicates: true }), resultSchema: resultSchemaFor(undefined, { cloze: true }) },
 });
@@ -249,16 +250,7 @@ export class GenerationService {
     const settings: GenerationSettings = { ...stored, cloze: mode };
     const catalog = await this.ctx.inference.catalog();
     this.active();
-    // Like core Flashcards: follow the host's cheap slot unless the learner overrides it.
-    const pin = settings.model ? { model: settings.model, thinkingLevel: settings.model.thinkingLevel } : catalog.slots?.cheap;
-    if (!pin?.model) throw new Error('Set a cheap model in LearnHarness settings, or choose a model for Anki Bridge.');
-    const pinned = pin.model;
-    const model = catalog.models.find(m => m.provider === pinned.provider && m.id === pinned.id);
-    if (!model || !catalog.providers.some(p => p.id === model.provider && p.keyPresent)) throw new Error(settings.model ? 'The selected model is unavailable. Choose an available model; no fallback is used.' : 'The cheap model slot is unavailable. Fix it in LearnHarness settings or choose a model for Anki Bridge.');
-    if (pin.thinkingLevel !== undefined && !model.supportedLevels?.includes(pin.thinkingLevel)) throw new Error(settings.model
-      ? `The selected model does not support ${pin.thinkingLevel} reasoning. Choose a supported level or Model default.`
-      : `The cheap model does not support its configured thinking level (${pin.thinkingLevel}). Fix it in LearnHarness settings or choose an override.`);
-    const spec: PluginModelSpec = { provider: pinned.provider, id: pinned.id, ...(pin.thinkingLevel !== undefined ? { thinkingLevel: pin.thinkingLevel } : {}) };
+    const { model, spec } = resolveWriterModel(catalog, settings);
     const graph = this.ctx.learning.graph();
     const state = this.store.snapshot(), coverage = graphCoverage(graph, state);
     const cards = state.cards.filter(c => c.status !== 'dropped');

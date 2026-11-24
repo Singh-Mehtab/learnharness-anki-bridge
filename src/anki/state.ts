@@ -9,6 +9,7 @@ import { validateFlags } from '../session/flow.ts';
 import type { Flag } from '../session/flow.ts';
 import { validateDismissals } from '../coverage/flow.ts';
 import type { Dismissal } from '../coverage/flow.ts';
+import { validateRegenerations, type Regeneration } from '../regeneration/types.ts';
 
 export interface Destination { url: string; profile: string }
 export type CardStatus = 'draft' | 'approved' | 'sending' | 'sent' | 'imported' | 'failed' | 'dropped';
@@ -52,6 +53,7 @@ export interface State {
   settings: { url: string; apiKey: string; lastDeck: string; tagTemplate?: string; systemTags?: boolean };
   destination: Destination | null;
   cards: Card[];
+  regenerations?: Regeneration[];
 }
 export const initialState = (): State => ({
   schemaVersion: 9,
@@ -99,6 +101,7 @@ function validateStateFormat(value: unknown, version: 6 | 7 | 8 | 9): void {
     if (card.format !== undefined && (version < 9 || card.format !== 'cloze' || !(CLOZE_KINDS as readonly string[]).includes(card.kind as string))) throw new Error('Invalid card format.');
     if (card.deck !== undefined && !text(card.deck) || card.lastError !== undefined && !text(card.lastError) || card.presence !== undefined && !['present', 'deleted', 'unknown'].includes(card.presence as string)) throw new Error('Invalid delivery metadata.');
   }
+  if (version === 9) validateRegenerations(value.regenerations, ids);
 }
 
 /** Upgrade older snapshots one step per version, then validate the result.

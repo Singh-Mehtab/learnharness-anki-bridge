@@ -15,6 +15,7 @@ import { crc32, deflateRawSync } from 'node:zlib';
 import { BASIC_NOTE_TYPE, CLOZE_NOTE_TYPE, noteTypeFor } from './note-type.ts';
 import type { NoteTypeSpec } from './note-type.ts';
 import { clozeTextField } from '../writer/cloze.ts';
+import { assertNotRegenerating } from '../regeneration/types.ts';
 import { renderMarkdown } from './render.ts';
 import { packageRevision } from './package-revision.ts';
 import { expandTagTemplate, systemTags, validateTags } from './tags.ts';
@@ -92,6 +93,7 @@ export function selectPackageCards(state: State, input: unknown): { deck: string
   const allowed = new Set(['ids', 'deck', 'tags']);
   if (Object.keys(value).some(key => !allowed.has(key))) throw new Error('Unsupported export option.');
   const ids = idsInput(value.ids);
+  assertNotRegenerating(state, ids);
   const deck = deckInput(value.deck);
   const chosen = validateTags(value.tags === undefined ? expandTagTemplate(state.settings.tagTemplate ?? '', deck) : value.tags);
   const withSystemTags = state.settings.systemTags !== false;

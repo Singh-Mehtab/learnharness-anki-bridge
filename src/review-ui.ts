@@ -13,6 +13,8 @@ import { answerPreview, BLANK, questionPreview, toBasic, toCloze } from "./write
 import type { Connection, Destination, Peers, Settings } from "./settings-ui.ts";
 import { base64Bytes, button, confirmDialog, el, field, input, moreMenu, pill, plural, RenderScope, saveFile, status, textarea } from "./ui.ts";
 import type { ButtonHandle } from "./ui.ts";
+import { regenerationRevision, type RegenerationReview } from "./regeneration/types.ts";
+import { replacementComparison, rewriteDecision, rewriteForm } from "./regeneration/review-ui.ts";
 
 interface Card {
   id: string; nodeId: string; statementHash: string; sessionId: string; nodeName: string; sessionName: string;
@@ -23,6 +25,7 @@ interface Card {
   deck?: string; noteId?: number; existingNote?: true; destination?: Destination; lastError?: string;
   presence?: "present" | "deleted" | "unknown";
   sourceStatement?: string; sourceChanged?: boolean; sourceMissing?: boolean; sourceUnavailable?: boolean;
+  canRegenerate?: true; regeneration?: RegenerationReview;
 }
 export interface Snapshot { settings: Settings; destination: Destination | null; cards: Card[]; recoveryError?: string; generationRecoveryError?: string; durabilityWarning?: string; importMarkId?: string }
 /** Editor values. format is part of an edit (FI-8), so a switch with no text change still saves. */
@@ -92,6 +95,7 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
   /** Cards whose save is in flight. Their editors stay read-only across re-renders. */
   const saving = new Set<string>();
   let packageMarkInFlight = false;
+  let regenerationTimer: ReturnType<typeof setTimeout> | undefined;
   const alive = () => !disposed && !signal.aborted && !ctx.signal.aborted;
   const historyScope = new RenderScope(signal), barScope = new RenderScope(signal), bannerScope = new RenderScope(signal);
   const rows = new Map<string, { key: string; scope: RenderScope; view: ReturnType<typeof renderCard> }>();
@@ -177,7 +181,7 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
     // A pending edit, including an unsaved format switch, blocks both actions, as
     // Mark as imported already did: the package must match what the editor shows (S21).
     const pendingEdit = () => result.ids.some(id => editing.has(id));
-    const eligible = () => !packageMarkInFlight && result.ids.every((id, i) => { const card = state?.cards.find(c => c.id === id); return card && result.revisions[i] === packageRevision(card) && (card.status === "approved" || card.status === "failed") && card.noteId === undefined; });
+    const eligible = () => !packageMarkInFlight && result.ids.every((id, i) => { const card = state?.cards.find(c => c.id === id); return card && !card.regeneration && result.revisions[i] === packageRevision(card) && (card.status === "approved" || card.status === "failed") && card.noteId === undefined; });
     const warning = el("p", "", "ab-sent-detail ab-warning"); text.append(warning);
     const again = button(ctx, actionsBox, s, { label: "Download again", onClick: () => {
       if (pendingEdit()) { feedback.show("Save or cancel your edits before downloading these cards again.", "error"); return; }
@@ -244,8 +248,8 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
       if (alive()) { state = next; await options.onChanged(); }
       return next;
     } catch (error) {
-      if (name === "send" && alive()) {
-        // A failed send may still have saved per-card results.
+      if ((name === "send" || name === "regenerateCard" || name === "acceptRegeneration" || name === "keepOriginalCard" || name === "retryRegenerationResult") && alive()) {
+        // A failed or stale action can still leave a different saved snapshot.
         try { const fresh = await ctx.call<Snapshot>("snapshot"); if (alive()) { state = fresh; await options.onChanged(); } } catch { /* Keep the send error. */ }
       }
       throw error;
@@ -289,6 +293,14 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
   const lookupKey = () => state?.destination && state.settings.url === state.destination.url ? destinationKey(state.destination) : "";
   let decksFor = "", lookups = 0;
   let visible = options.visible ?? true, lookupDeferred = false;
+  function syncRegenerationPoll(): void {
+    const polling = visible && alive() && state?.cards.some(c => c.regeneration?.status === "queued" || c.regeneration?.status === "running");
+    if (!polling) { clearTimeout(regenerationTimer); regenerationTimer = undefined; }
+    else if (!regenerationTimer) regenerationTimer = setTimeout(() => {
+      regenerationTimer = undefined;
+      void backgroundRefresh().finally(syncRegenerationPoll);
+    }, 1200);
+  }
   /** Deck names shown for the profile in Anki, or none while that profile isn't the paired one. */
   const knownDecks = () => connection && lookupKey() && connection.profile === state?.destination?.profile ? connection.decks : undefined;
   /** Tag names in that profile, for suggestions and matching the collection's casing. */
@@ -327,8 +339,8 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
     syncDeck(); renderBanner();
   }
 
-  const approvedCards = () => (state?.cards ?? []).filter(c => (c.status === "approved" || c.status === "failed") && c.noteId === undefined);
-  const draftCards = () => (state?.cards ?? []).filter(c => c.status === "draft");
+  const approvedCards = () => (state?.cards ?? []).filter(c => !c.regeneration && (c.status === "approved" || c.status === "failed") && c.noteId === undefined);
+  const draftCards = () => (state?.cards ?? []).filter(c => c.status === "draft" && !c.regeneration);
   const deckName = () => deck.value.trim();
   function tagList(): string[] { return tags.value.split(/\s+/u).filter(Boolean); }
   function syncDeck(): void {
@@ -575,14 +587,17 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
       if (card.nodeId) article.dataset.waitingNode = card.nodeId;
     }
     const importedConflict = card.status === "imported" && editing.has(card.id);
-    const editable = importedConflict || (["draft", "approved", "failed"].includes(card.status) && card.noteId === undefined);
+    const rewriteConflict = !!card.regeneration && editing.has(card.id);
+    const editConflict = importedConflict || rewriteConflict;
+    const editable = editConflict || (!card.regeneration && ["draft", "approved", "failed"].includes(card.status) && card.noteId === undefined);
     if (!editable) { edits.delete(card.id); beforeSwitch.delete(card.id); editing.delete(card.id); }
     const isEditing = editable && editing.has(card.id);
     const values: Fields = (isEditing && edits.get(card.id)) || card;
 
     const head = el("header", undefined, "ab-card-head");
     const title = el("div", undefined, "ab-card-title");
-    title.append(pill(isStoredKind(card.kind) ? KIND_NAMES[card.kind] : card.kind, "info"));
+    const kindName = isStoredKind(card.kind) ? KIND_NAMES[card.kind] : card.kind;
+    title.append(pill(kindName, "info"));
     if (values.format === "cloze") title.append(pill("Cloze", "neutral"));
     title.append(el("span", card.nodeName || "Card", "ab-card-idea"));
     if (card.sessionName && card.sessionName !== "Manual") title.append(el("span", card.sessionName, "ab-muted ab-card-session"));
@@ -592,6 +607,7 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
 
     const notices: string[] = [];
     if (importedConflict) notices.push("This card was marked imported in another view. Copy your unsaved edits before cancelling; they cannot be saved to this imported card.");
+    if (rewriteConflict) notices.push("A rewrite was queued in another view. Copy your unsaved edits before cancelling to review the rewrite.");
     if (card.lastError) notices.push(card.lastError);
     if (card.sourceMissing) notices.push("Source idea wasn't found in this graph snapshot. Check the card before approving.");
     else if (card.sourceChanged) notices.push("Idea changed since this card was written.");
@@ -636,7 +652,8 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
       handles[["front", "back", "extra"].indexOf(key)] = ctx.ui.mountMarkdown(preview, { text: previewText(key, values) || " " }, { signal: s });
       grid.append(col);
     }
-    article.append(grid);
+    const rewrite = card.regeneration;
+    article.append(rewrite?.replacement && !rewriteConflict ? replacementComparison(ctx, s, grid, kindName, rewrite.replacement, previewText) : grid);
     showLength();
     if (isEditing || (editable && length.textContent)) article.append(length);
 
@@ -666,7 +683,7 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
         button(ctx, left, s, { label: "Cancel", disabled: saving.has(card.id), onClick: () => { edits.delete(card.id); beforeSwitch.delete(card.id); editing.delete(card.id); feedback.show(""); render(); } });
         // FI-8: switch an unsent fact or equation draft between basic and cloze. Nothing is saved until Save.
         const formatControls: ButtonHandle[] = [];
-        if (!importedConflict && isClozeKind(card.kind)) {
+        if (!editConflict && isClozeKind(card.kind)) {
           formatControls.push(button(ctx, left, s, { label: cloze ? "Switch to basic" : "Switch to cloze", disabled: saving.has(card.id), onClick: () => {
             if (saving.has(card.id)) return;
             const now = current(), target: Fields["format"] = cloze ? undefined : "cloze";
@@ -688,7 +705,7 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
             area.focus();
           } }));
         }
-        if (!importedConflict) button(ctx, right, s, { label: "Save", variant: "default", onClick: () => run(async () => {
+        if (!editConflict) button(ctx, right, s, { label: "Save", variant: "default", onClick: () => run(async () => {
           // Typing during the save would be lost when the editor closes.
           saving.add(card.id);
           for (const area of Object.values(inputs)) if (area) area.readOnly = true;
@@ -717,7 +734,15 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
       if (where) left.append(el("span", where, "ab-muted"));
       if (atShown(card)) button(ctx, right, s, { label: "Show in Anki", onClick: () => run(async () => { await ctx.call("show", { ids: [card.id] }); }) });
     }
-    article.append(foot);
+    if (!rewrite || rewriteConflict) article.append(foot);
+    if (rewrite && !rewriteConflict) article.append(rewriteDecision(ctx, s, rewrite, name => run(async () => {
+      await call(name, { id: card.id, requestId: rewrite.requestId });
+      if (name === "acceptRegeneration") return "Replacement saved as a draft. Approve it before sending.";
+      if (name === "keepOriginalCard") return "Original kept.";
+    }, true)));
+    else if (editable && !isEditing && card.canRegenerate) article.append(rewriteForm(ctx, s, instruction => run(async () => {
+      await call("regenerateCard", { id: card.id, revision: regenerationRevision(card), instruction });
+    }, true)));
     return { article, updateStatus: (status: Card["status"]) => {
       if (card.status === status) return;
       card = { ...card, status };
@@ -768,7 +793,7 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
       const keepCard = card && list.contains(card) ? card.dataset.cardId : undefined;
       const area = keepCard && active?.tagName === "TEXTAREA" ? active as HTMLTextAreaElement : undefined;
       const keep = area && { key: area.dataset.keep, start: area.selectionStart, end: area.selectionEnd, dir: area.selectionDirection };
-      draw(); syncReceipt?.(); after?.();
+      draw(); syncReceipt?.(); syncRegenerationPoll(); after?.();
       if (keepCard && !active?.isConnected) {
         const row = waitingCard(keepCard);
         const next = keep && [...(row?.querySelectorAll<HTMLTextAreaElement>("textarea[data-keep]") ?? [])].find(a => a.dataset.keep === keep.key);
@@ -846,6 +871,7 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
     refresh: backgroundRefresh,
     setVisible: next => {
       visible = next;
+      syncRegenerationPoll();
       if (visible && lookupDeferred) void loadDecks();
     },
     showWaiting: async nodeId => {
@@ -859,6 +885,6 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
       await backgroundRefresh();
       if (alive() && !focus()) feedback.show("No cards waiting for this idea.");
     },
-    dispose: () => { disposed = true; options.peers.delete(refreshFromPeer); unsubscribe(); for (const row of rows.values()) row.scope.dispose(); historyScope.dispose(); barScope.dispose(); bannerScope.dispose(); sentScope.dispose(); },
+    dispose: () => { disposed = true; clearTimeout(regenerationTimer); options.peers.delete(refreshFromPeer); unsubscribe(); for (const row of rows.values()) row.scope.dispose(); historyScope.dispose(); barScope.dispose(); bannerScope.dispose(); sentScope.dispose(); },
   };
 }
