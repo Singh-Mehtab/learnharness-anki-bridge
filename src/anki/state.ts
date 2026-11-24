@@ -14,6 +14,8 @@ import { validateRegenerations, type Regeneration } from '../regeneration/types.
 export interface Destination { url: string; profile: string }
 export type CardStatus = 'draft' | 'approved' | 'sending' | 'sent' | 'imported' | 'failed' | 'dropped';
 export type CardKind = StoredCardKind;
+// Keep the original text: old records used this outcome in place of deliveryAbsent.
+export const NO_NOTE_AFTER_INTERRUPTED_SEND = 'No note found for the interrupted send. You can retry this card.';
 export interface Card {
   id: string;
   nodeId: string;
@@ -153,6 +155,13 @@ export function migrateState(raw: unknown): State {
     value = { ...value, schemaVersion: 9 };
   }
   validateState(value);
+  const restoreAbsence = (entry: Pick<Card, 'status' | 'destination' | 'presence' | 'lastError' | 'deliveryAbsent'>) => {
+    if (entry.status === 'failed' && entry.destination && entry.presence === undefined && entry.lastError === NO_NOTE_AFTER_INTERRUPTED_SEND) entry.deliveryAbsent = true;
+  };
+  for (const card of value.cards) {
+    if (card.noteId === undefined && !card.existingNote) restoreAbsence(card);
+    if (card.importPrevious) restoreAbsence(card.importPrevious);
+  }
   return value;
 }
 

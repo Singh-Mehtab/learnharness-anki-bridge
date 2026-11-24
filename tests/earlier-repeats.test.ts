@@ -190,20 +190,36 @@ test('an exact repeat on a different node in an earlier run stays reviewable, an
   });
 });
 
-test('GenerationService binds earlier cards to preflight and rejects a sure skip after its covering card is dropped', async () => {
+test('a stale earlier-card skip leaves the target pending for a focused retry without losing the rest of its batch', async () => {
   const covering = row();
   await withEarlierCards([covering], async (host, c) => {
-    const old = await c.call('preflight', { nodeIds: ['n_a'] });
+    const flag = await c.call('flag', { sessionId: 'c1', messageIds: ['m1', 'm2'], note: 'Make a card that compares these ideas.' });
+    const selection = { nodeIds: ['n_a', 'n_b'], flagScopes: [{ id: flag.id, nodeIds: ['n_a', 'n_b'] }], independentNodeIds: [] };
+    const old = await c.call('preflight', selection);
     await c.call('edit', { id: covering.id, front: 'State the equation for rest energy.', back: covering.back });
     await assert.rejects(c.call('generate', { preflightId: old.preflightId }), /stale/);
-    const fresh = await c.call('preflight', { nodeIds: ['n_a'] });
+    const fresh = await c.call('preflight', selection);
+    assert.equal(fresh.batches.length, 1);
     await c.call('generate', { preflightId: fresh.preflightId });
     await until(() => host.workers.starts.length === 1);
     await c.call('drop', { ids: [covering.id] });
-    host.workers.succeed('task-1', { targets: [{ nodeId: 'n_a', cards: [], skipReason: 'Already covered.', earlierRepeatOf: covering.id }] });
-    await until(async () => (await c.call('generationStatus')).generations[0].status === 'failed');
+    host.workers.succeed('task-1', { targets: [
+      { nodeId: 'n_a', cards: [], skipReason: 'Already covered.', earlierRepeatOf: covering.id },
+      { nodeId: 'n_b', cards: [{ kind: 'fact', front: 'Where is beta conserved?', back: 'In closed systems.' }], flagMatches: [flag.id] },
+    ] });
+    await until(async () => (await c.call('generationStatus')).generations[0].status === 'completed');
     const snap = await c.call('snapshot');
-    assert.match(snap.generations[0].tasks[0].error, /used to skip writing changed/);
-    assert.deepEqual(earlierRepeatSkips(snap.generations, snap.cards), []);
+    assert.deepEqual(snap.cards.filter((card: Card) => card.status === 'draft').map((card: Card) => card.nodeId), ['n_b']);
+    const skips = earlierRepeatSkips(snap.generations, snap.cards);
+    assert.equal(skips.length, 1);
+    assert.equal(skips[0].covering.front, 'State the equation for rest energy.');
+    const retry = await c.call('preflightWriteAnyway', skips[0].ref);
+    assert.deepEqual(retry.nodeIds, ['n_a']);
+    await c.call('generate', { preflightId: retry.preflightId });
+    await until(() => host.workers.starts.length === 2);
+    const input = host.workers.starts[1].input as WriterInput;
+    assert.deepEqual(input.flagRequests?.map(request => request.id), [flag.id], 'a stale skip does not settle the flagged idea');
+    assert.deepEqual(input.targets.map(t => t.nodeId), ['n_a']);
+    assert.ok(!input.targets[0].earlierRepeatCandidates?.some(c => c.id === covering.id));
   });
 });

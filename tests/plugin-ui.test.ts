@@ -604,26 +604,35 @@ test("Review compares possible repeats side by side and counts them in a non-blo
   } finally { await f.dispose(); }
 });
 
-test("Review shows a sure historical skip and only starts Write anyway after confirming a one-target estimate", async () => {
+for (const saveWarn of [false, true]) test(`Review runs a confirmed Write anyway and picks up the result${saveWarn ? " after a save reports an error" : ""}`, async () => {
   const state = fixture();
   const ref = { generationId: "g", requestId: "r", nodeId: "n" };
   const covering = { id: "earlier", front: "Earlier question", back: "Earlier answer" };
-  state.cards = [card(covering.id, { ...covering, status: "sent" })];
+  state.cards = [card(covering.id, { ...covering, status: "sent", ...(saveWarn && { front: "Changed question" }) })];
   const generations = [{ id: ref.generationId, status: "completed", tasks: [{ requestId: ref.requestId, status: "applied",
     input: { targets: [{ nodeId: ref.nodeId, name: "Skipped idea", earlierRepeatCandidates: [covering] }] },
     result: { targets: [{ nodeId: ref.nodeId, cards: [], skipReason: "Same recall task.", earlierRepeatOf: covering.id }] } }] }];
-  let started = false;
+  let started = false, readsAfterStart = 0;
   const activeOverride = { id: "override", status: "running", repeatOverride: ref, tasks: [] };
   const f = await setup({ state, handler: (name) => {
-    if (name === "snapshot") return started ? { ...state, cards: [...state.cards, card("new-repeat", { nodeId: ref.nodeId, generationId: "override", front: "New question from Write anyway" })],
-      generations: [...generations, { ...activeOverride, status: "completed" }] } : { ...state, generations };
-    if (name === "generate") { started = true; return { ...state, generations: [...generations, activeOverride] }; }
+    if (name === "snapshot") {
+      if (!started) return { ...state, generations };
+      if (saveWarn && readsAfterStart++ === 0) return { ...state, generations: [...generations, activeOverride] };
+      return { ...state, cards: [...state.cards, card("new-repeat", { nodeId: ref.nodeId, generationId: "override", front: "New question from Write anyway" })],
+        generations: [...generations, { ...activeOverride, status: "completed" }] };
+    }
+    if (name === "generate") {
+      started = true;
+      if (saveWarn) throw new Error("Could not confirm the save.");
+      return { ...state, generations: [...generations, activeOverride] };
+    }
     if (name === "preflightWriteAnyway") return { preflightId: "override", batches: [{ nodeIds: [ref.nodeId] }], modelName: "Fake writer", estimatedCost: null };
   } });
   try {
     const skip = f.container.querySelector(".ab-repeat-skips")!;
     assert.match(skip.textContent!, /Skipped ideaNot drafted/);
     assert.match(skip.textContent!, /Earlier question/);
+    if (saveWarn) assert.match(skip.textContent!, /the earlier card changed or is no longer available/);
     f.button("Write anyway", skip).click(); await tick();
     assert.deepEqual(f.calls.find(c => c.name === "preflightWriteAnyway")?.input, ref);
     assert.match(f.dialog().textContent!, /one card for this idea using Fake writer/);
@@ -631,6 +640,7 @@ test("Review shows a sure historical skip and only starts Write anyway after con
     f.button("Write anyway", f.dialog()).click(); await tick();
     assert.deepEqual(f.calls.find(c => c.name === "generate")?.input, { preflightId: "override" });
     assert.doesNotMatch(f.review().textContent!, /New question from Write anyway/);
+    if (saveWarn) assert.match(f.container.textContent!, /Could not confirm the save/);
     for (let i = 0; i < 45 && !f.review().textContent?.includes("New question from Write anyway"); i++) await new Promise(resolve => setTimeout(resolve, 50));
     assert.match(f.review().textContent!, /New question from Write anyway/);
   } finally { await f.dispose(); }

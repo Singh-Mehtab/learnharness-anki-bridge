@@ -197,15 +197,13 @@ export class GenerationService {
         return;
       }
       const earlier = indexEarlierRepeats(s.cards, { generationId: id });
-      for (const target of result.targets) {
-        if (target.earlierRepeatOf === undefined) continue;
+      // Retain a stale skip as historical evidence for a focused retry in Review.
+      // It must not resolve a flag or prevent saving the rest of the batch.
+      const staleSkips = new Set(result.targets.filter(target => {
+        if (target.earlierRepeatOf === undefined) return false;
         const candidate = stored.input.targets.find(t => t.nodeId === target.nodeId)?.earlierRepeatCandidates?.find(c => c.id === target.earlierRepeatOf);
-        if (!candidate || !earlier.current(candidate)) {
-          stored.taskId = worker.id; stored.status = 'failed'; delete stored.resultPending;
-          stored.error = 'An earlier card used to skip writing changed or is no longer available. Retry requires a new estimate.';
-          return;
-        }
-      }
+        return !candidate || !earlier.current(candidate);
+      }).map(target => target.nodeId));
       const matching = new Map<string, typeof s.cards>();
       for (const card of s.cards) {
         if (!card.requestId || card.requestId === requestId || currentHashes.get(card.nodeId) !== card.statementHash
@@ -246,7 +244,7 @@ export class GenerationService {
         if (!flag || (noted.has(ref.id) && !answered.has(ref.id))) continue;
         const handled = new Map((flag.handledIdeas ?? []).map(n => [n.nodeId, n]));
         for (const source of stored.sources) {
-          if (ref.nodeIds.includes(source.nodeId) && (noted.has(ref.id) ? current.has(source.nodeId) : drafted.has(source.nodeId))) {
+          if (ref.nodeIds.includes(source.nodeId) && (noted.has(ref.id) ? current.has(source.nodeId) && !staleSkips.has(source.nodeId) : drafted.has(source.nodeId))) {
             handled.set(source.nodeId, { nodeId: source.nodeId, statementHash: source.statementHash });
           }
         }

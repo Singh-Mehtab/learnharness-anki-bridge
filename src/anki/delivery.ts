@@ -4,7 +4,7 @@ import { noteFields, packageFingerprint } from './apkg.ts';
 import { ensureNoteType, nativeTypeMatches, noteTypeFor, noteTypeInput, readNativeModels, repairFields, updateStyling } from './note-type.ts';
 import { clozeCardProblems } from '../writer/cloze.ts';
 import { renderMarkdown } from './render.ts';
-import { StateStore, sameDestination } from './state.ts';
+import { NO_NOTE_AFTER_INTERRUPTED_SEND, StateStore, sameDestination } from './state.ts';
 import { expandTagTemplate, systemTags, validateTags } from './tags.ts';
 import type { Card, CardKind, Destination, State } from './state.ts';
 import { isStoredKind } from '../writer/types.ts';
@@ -222,7 +222,7 @@ export class DeliveryService {
       // Recovery adopts through the same note type check as a send (S1, round 1).
       if (found.length && await this.formatConflict(client, card, found)) continue;
       if (found.length) { await this.recordFound(card.id, found, destination); matched.push(card.id); }
-      else await this.patchCard(card.id, { status: 'failed', deliveryAbsent: true, lastError: 'No note found for the interrupted send. You can retry this card.' });
+      else await this.patchCard(card.id, { status: 'failed', deliveryAbsent: true, lastError: NO_NOTE_AFTER_INTERRUPTED_SEND });
     }
     this.recoveryError = undefined;
     return matched;

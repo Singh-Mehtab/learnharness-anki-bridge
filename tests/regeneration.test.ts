@@ -328,6 +328,24 @@ test('a verified no-note reconciliation enables rewriting without changing the d
   }, [card]);
 });
 
+test('opening an old no-note record enables rewriting without querying Anki or unlocking other failures', async () => {
+  const destination = { url: 'http://localhost:1234/', profile: 'Throwaway' };
+  const verified = makeCard({ status: 'failed', deck: 'Scratch', destination, lastError: 'No note found for the interrupted send. You can retry this card.' });
+  const conflict = makeCard({ status: 'failed', deck: 'Scratch', destination, lastError: 'This card is already in Anki as a cloze note.' });
+  await withBackend([verified, conflict], async (host, c) => {
+    const snapshot = await c.call('snapshot');
+    assert.equal(byId(snapshot, verified.id).canRegenerate, true);
+    assert.equal(byId(snapshot, conflict.id).canRegenerate, undefined);
+    const job = byId(await c.call('regenerateCard', startInput(verified)), verified.id).regeneration!;
+    await until(() => !!workerFor(host, job.requestId));
+    host.workers.succeed(workerFor(host, job.requestId).id, result());
+    await waitForJob(c, verified.id, 'ready');
+    const accepted = byId(await c.call('acceptRegeneration', { id: verified.id, requestId: job.requestId }), verified.id);
+    assert.equal(accepted.canRegenerate, true);
+    assert.deepEqual(accepted.destination, destination);
+  });
+});
+
 test('regenerateCard cannot queue while a send owns the writer fence', async () => {
   const card = makeCard({ status: 'approved' });
   await fixture(async (host, directory, state) => {

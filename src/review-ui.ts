@@ -254,7 +254,7 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
       if (alive()) { state = next; await options.onChanged(); }
       return next;
     } catch (error) {
-      if ((name === "send" || name === "regenerateCard" || name === "acceptRegeneration" || name === "keepOriginalCard" || name === "retryRegenerationResult" || name === "rewriteAnyway") && alive()) {
+      if ((name === "send" || name === "generate" || name === "regenerateCard" || name === "acceptRegeneration" || name === "keepOriginalCard" || name === "retryRegenerationResult" || name === "rewriteAnyway") && alive()) {
         // A failed or stale action can still leave a different saved snapshot.
         try { const fresh = await ctx.call<Snapshot>("snapshot"); if (alive()) { state = fresh; await options.onChanged(); } } catch { /* Keep the send error. */ }
       }
@@ -884,7 +884,7 @@ export function mountReview(ctx: PluginFrontendContext, host: HTMLElement, signa
       const title = el("header", undefined, "ab-card-head");
       title.append(el("strong", name), pill("Not drafted", "neutral"));
       const current = live && live.front === covering.front && live.back === covering.back && live.format === covering.format;
-      row.append(title, el("p", reason || "An earlier card covers this recall task."),
+      row.append(title, el("p", current ? reason || "An earlier card covers this recall task." : "The writer skipped this idea, but the earlier card changed or is no longer available."),
         repeatCardPreview(ctx, current ? live.nodeName || "Covering card" : "Earlier card at write time (since changed or unavailable)", covering, s));
       const actions = el("div", undefined, "ab-card-foot");
       button(ctx, actions, s, { label: "Write anyway", disabled: running, onClick: () => run(() => writeAnyway(ref)) });
