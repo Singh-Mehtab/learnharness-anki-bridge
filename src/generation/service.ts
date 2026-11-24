@@ -260,7 +260,7 @@ export class GenerationService {
     this.active();
     // History stores the resolved mode, so a later default change can't rewrite it.
     const stored = this.store.snapshot().generationSettings, mode = activeCloze(stored);
-    const settings: GenerationSettings = { ...stored, cloze: mode };
+    const settings: GenerationSettings = { ...stored, cloze: mode, ...(writeAnyway ? { cardsPerNode: 1 } : {}) };
     const catalog = await this.ctx.inference.catalog();
     this.active();
     const { model, spec } = resolveWriterModel(catalog, settings);

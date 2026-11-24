@@ -115,6 +115,7 @@ test('GenerationService persists a sure skip, and Write anyway starts exactly on
     await c.call('generate', { preflightId: retry.preflightId });
     await until(() => host.workers.starts.length === 2);
     assert.equal((host.workers.starts[1].input as WriterInput).writeAnyway, true);
+    assert.equal((host.workers.starts[1].input as WriterInput).maxCardsPerNode, 1);
     host.workers.succeed('task-2', { targets: [{ nodeId: 'n_a', cards: [equation] }] });
     await until(async () => (await c.call('generationStatus')).generations[1]?.status === 'completed');
     const done = await c.call('snapshot');
