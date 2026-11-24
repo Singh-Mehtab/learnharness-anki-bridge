@@ -11,6 +11,7 @@ import { initialState, StateStore } from "../src/anki/state.ts";
 import type { State } from "../src/anki/state.ts";
 import { REVIEW_READ_ACTIONS } from "../src/anki/review-reader.ts";
 import { ReviewService } from "../src/reviews/service.ts";
+import type { ReviewCheck } from "../src/reviews/signals.ts";
 import type { PluginAction, PluginActionContext, PluginFrontendContext, PluginView } from "../sdk/index.d.ts";
 import { fakeAnkiConnect } from "./fake-anki-connect.ts";
 import { delayedButtons, fakeUi } from "./fake-ui.ts";
@@ -202,7 +203,7 @@ test("Topics to revisit reads nothing until Check Anki reviews, then groups card
     assert.ok(!t.anki.state.requests.some(r => (r.params.cards ?? []).includes(9900) || (r.params.cards ?? []).includes(2003)));
 
     // Clear asks first and forgets the in-memory result.
-    await t.click("Clear");
+    await t.click("Clear results");
     const confirm = Array.from(t.doc.querySelectorAll(".ab-dialog button") as ArrayLike<HTMLButtonElement>).find(b => b.textContent === "Clear")!;
     confirm.click(); await settle(() => !t.container.querySelector(".ab-topic"));
     assert.match(t.text(), /Not checked yet/);
@@ -562,17 +563,17 @@ test("Clear cannot report success while a check started in a previous mount is r
     const dispose = await t.mountReviews();
     await t.click("Check Anki reviews");
     await settle(() => !!t.container.querySelector(".ab-topic"));
-    assert.ok(t.find("Clear"));
+    assert.ok(t.find("Clear results"));
     t.anki.state.after = action => action === "version" ? held : undefined;
     await t.click("Check Anki reviews");
     assert.equal((await t.service.command("lastReviewCheck")).running, true);
     dispose();
     await t.mount();
     assert.equal(t.panel("Check Anki reviews").hidden, false);
-    assert.ok(t.find("Clear"), "the prior result is restored from memory");
+    assert.ok(t.find("Clear results"), "the prior result is restored from memory");
 
     const confirmClear = async () => {
-      await t.click("Clear");
+      await t.click("Clear results");
       const confirm = Array.from(t.doc.querySelectorAll(".ab-dialog button") as ArrayLike<HTMLButtonElement>).find(b => b.textContent === "Clear")!;
       confirm.click(); await tick();
     };
@@ -603,19 +604,19 @@ test("#52: a rejected Clear does not discard a pending pairing refresh", async (
     assert.equal((await t.service.command("lastReviewCheck")).running, true);
     dispose();
     await t.mount();
-    assert.ok(t.find("Clear"));
+    assert.ok(t.find("Clear results"));
 
     await t.store.replace({ ...t.store.snapshot(), destination: null });
     t.setHold(new Promise<void>(resolve => { releaseRefresh = resolve; }));
     for (const refresh of t.resyncs) refresh();
     await tick();
-    await t.click("Clear");
+    await t.click("Clear results");
     const confirm = Array.from(t.doc.querySelectorAll(".ab-dialog button") as ArrayLike<HTMLButtonElement>).find(b => b.textContent === "Clear")!;
     confirm.click(); await tick();
     assert.match(t.text(), /Wait for the review check to finish/);
     releaseRefresh(); await tick();
     assert.match(t.text(), /Not checked yet/);
-    assert.ok(!t.find("Clear"));
+    assert.ok(!t.find("Clear results"));
   } finally { releaseRefresh?.(); releaseCheck(); await t.cleanup(); }
 });
 
@@ -630,7 +631,7 @@ test("round 4 S2: a reload begun before Clear cannot bring the cleared result ba
     for (const f of t.resyncs) f();            // reload 1 has the old result and waits on snapshot
     await tick();
     t.setHold(undefined);
-    await t.click("Clear");
+    await t.click("Clear results");
     const confirm = Array.from(t.doc.querySelectorAll(".ab-dialog button") as ArrayLike<HTMLButtonElement>).find(b => b.textContent === "Clear")!;
     confirm.click();
     await settle(() => !t.container.querySelector(".ab-topic"));
@@ -686,7 +687,7 @@ test("#52: Practise selected starts a Practice session with only the ticked idea
   } finally { globalThis.fetch = original; await t.cleanup(); }
 });
 
-test("#52: ideas missing from the graph can't be ticked, and Clear drops the selection", async () => {
+test("#52: Select all skips missing topics and Clear results drops the selection", async () => {
   const t = await setup({ onlyNodes: ["node-f"] });
   try {
     await t.mountReviews();
@@ -695,12 +696,47 @@ test("#52: ideas missing from the graph can't be ticked, and Clear drops the sel
     const radius = t.container.querySelector('[data-node-id="node-r"]') as HTMLElement;
     assert.match(radius.textContent!, /Missing from this graph read/);
     assert.equal(radius.querySelector('input[type="checkbox"]'), null);
-    (t.container.querySelector('[data-node-id="node-f"] input[type="checkbox"]') as HTMLInputElement).click(); await tick();
+    assert.equal(topicBox(t, "node-f")!.checked, false);
+    const before = t.calls.length;
+    await t.click("Select all topics");
+    assert.equal(t.calls.length, before, "selecting topics is local to the view");
+    assert.equal(topicBox(t, "node-f")!.checked, true);
+    assert.equal(t.find("Select all topics")!.disabled, true);
     assert.equal(t.find(/^Practise selected/)!.textContent, "Practise selected (1)");
-    await t.click("Clear");
+    topicBox(t, "node-f")!.click(); await tick();
+    assert.equal(t.find("Select all topics")!.disabled, false);
+    assert.equal(t.find("Practise selected")!.disabled, true);
+    await t.click("Select all topics");
+    await t.click("Clear results");
     const dialogConfirm = Array.from(t.doc.querySelectorAll("button") as ArrayLike<HTMLButtonElement>).filter(b => b.textContent === "Clear").pop()!;
     dialogConfirm.click(); await settle(() => /Not checked yet/.test(t.text()));
     assert.equal(t.find(/^Practise selected/), undefined);
+    assert.equal(t.find("Select all topics"), undefined);
+  } finally { await t.cleanup(); }
+});
+
+test("#52: Select first 64 replaces picks with the first 64 selectable topics in list order", async () => {
+  const t = await setup();
+  const call = t.ctx.call.bind(t.ctx);
+  t.ctx.call = async <T>(name: string, input?: unknown) => {
+    if (name !== "checkReviews") return call<T>(name, input);
+    const answer = await call<{ check: ReviewCheck; running: boolean }>(name, input);
+    const sample = answer.check.topics[0]!;
+    return { ...answer, check: { ...answer.check, topics: Array.from({ length: 66 }, (_, i) => ({
+      ...sample, nodeId: `n${i}`, inGraph: i !== 0, sessions: [], cards: [],
+    })) } } as T;
+  };
+  try {
+    await t.mountReviews();
+    await t.click("Check Anki reviews");
+    await settle(() => !!topicBox(t, "n65"));
+    topicBox(t, "n65")!.click(); await tick();
+    await t.click("Select first 64");
+    assert.ok(!topicBox(t, "n0"));
+    assert.ok(Array.from({ length: 64 }, (_, i) => topicBox(t, `n${i + 1}`)!.checked).every(Boolean));
+    assert.equal(topicBox(t, "n65")!.checked, false);
+    assert.equal(t.find("Select first 64")!.disabled, true);
+    assert.ok(t.find("Practise selected (64)"));
   } finally { await t.cleanup(); }
 });
 
@@ -767,10 +803,11 @@ test("#52: Clear and a new check are disabled while the Practice picks are being
     globalThis.fetch = (async (url, init) => url === "/api/chats" ? new Response(null, { status: 404 }) : original(url, init)) as typeof fetch;
     await t.click("Practise selected (1)");
     assert.ok(t.calls.includes("practiceNodes"));
-    assert.equal(t.find("Clear")!.disabled, true);
+    assert.equal(t.find("Clear results")!.disabled, true);
+    assert.equal(t.find("Select all topics")!.disabled, true);
     assert.equal(t.find("Check Anki reviews")!.disabled, true);
     release();
-    await settle(() => !t.find("Clear")!.disabled);
-    assert.equal(t.find("Clear")!.disabled, false);
+    await settle(() => !t.find("Clear results")!.disabled);
+    assert.equal(t.find("Clear results")!.disabled, false);
   } finally { release?.(); globalThis.fetch = original; await t.cleanup(); }
 });

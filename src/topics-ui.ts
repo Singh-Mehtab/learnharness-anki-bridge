@@ -102,9 +102,21 @@ export function mountTopics(ctx: PluginFrontendContext, container: HTMLElement, 
     const criteria = "Checks only cards sent by Bridge. Lists cards with 3+ lapses, 2+ Again presses in 30 days, or a leech tag. Again counts in review and relearning, not initial learning. Results are kept in memory only.";
     const profile = destination ? (check ? "" : ` Paired profile: "${destination.profile}".`) : " Pair an Anki profile in Settings first.";
     intro.textContent = criteria + profile;
-    if (check) button(ctx, actions, s, { label: "Clear", variant: "ghost", disabled: locked(), onClick: () => void clear() });
+    if (check) button(ctx, actions, s, { label: "Clear results", variant: "ghost", disabled: locked(), onClick: () => void clear() });
     if (!destination) button(ctx, actions, s, { label: "Open settings", onClick: () => ctx.app.openSettings() });
-    if (check?.topics.some(selectable)) {
+    const available = check?.topics.filter(selectable) ?? [];
+    if (available.length) {
+      const picks = available.slice(0, PRACTICE_LIMIT);
+      button(ctx, actions, s, {
+        label: available.length > PRACTICE_LIMIT ? `Select first ${PRACTICE_LIMIT}` : "Select all topics",
+        variant: "ghost", disabled: locked() || picks.every(t => chosen.has(t.nodeId)),
+        onClick: () => {
+          if (!alive() || locked()) return;
+          chosen.clear();
+          for (const topic of picks) chosen.add(topic.nodeId);
+          renderAll();
+        },
+      });
       button(ctx, actions, s, { label: starting ? "Starting…" : chosen.size ? `Practise selected (${chosen.size})` : "Practise selected",
         disabled: locked() || !chosen.size, onClick: () => void practise() });
     }

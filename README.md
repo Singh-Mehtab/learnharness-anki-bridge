@@ -107,9 +107,9 @@ Open the **Check Anki reviews** tab and press **Check Anki reviews**. Anki Bridg
 - 2 or more Again presses in the last 30 days, counting reviews and relearning steps
 - Anki's leech tag
 
-Each topic lists its cards with their lapses, reviews, recent Again dates and deck. **Open session** goes to the session the idea came from, and **Show in Anki** opens the card. A topic on the list may mean the card is badly worded, not that you don't know it. Results stay in memory until you press **Clear**, change the Anki address, key or profile, or close LearnHarness. They are not saved, added to your graph or sent to a model.
+Each topic lists its cards with their lapses, reviews, recent Again dates and deck. **Open session** goes to the session the idea came from, and **Show in Anki** opens the card. A topic on the list may mean the card is badly worded, not that you don't know it. Results stay in memory until you press **Clear results**, change the Anki address, key or profile, or close LearnHarness. They are not saved, added to your graph or sent to a model.
 
-To practise topics from the list, tick them and press **Practise selected**. Anki Bridge starts a LearnHarness Practice session with those ideas attached and opens it, the same as picking them in **Practice → Pick nodes**. Type your first message there. Practice gets each idea's name and statement from your graph, not its review counts or cards. Nothing is preselected, and topics missing from your graph can't be ticked.
+Tick topics individually or use **Select all topics** to tick every topic still in your graph. For longer lists, **Select first 64** ticks the first 64 available topics. Untick any you want to leave out, then press **Practise selected**. Anki Bridge starts a LearnHarness Practice session with those ideas attached and opens it, the same as picking them in **Practice → Pick nodes**. Type your first message there. Practice gets each idea's name and statement from your graph, not its review counts or cards. Nothing is preselected, and topics missing from your graph can't be ticked.
 
 ![Two review-check results, each with a card, review counts, Open session and Show in Anki.](docs/images/readme/topics.png)
 
