@@ -99,6 +99,10 @@ export interface WriterTarget {
   flagged?: boolean;
   /** The learner's flag note ("I got the sign wrong"). Untrusted. */
   flagNote?: string;
+  /** No independent or blank-flag request. Write only cards that answer a listed note. */
+  noteOnly?: true;
+  /** Also explicitly requested by a blank-note flag, even when in a noted group. */
+  blankFlag?: true;
   /** Per-target cap when it differs from maxCardsPerNode (flagged targets). */
   maxCards?: number;
   /** Newest first, at most 6. */
@@ -123,6 +127,8 @@ export interface WriterInput {
    *  share them and history keeps the exact text. Absent when there are none.
    *  The prompt sends them apart from the quoted input. */
   writerNotes?: string;
+  /** Each reply note is sent once, alongside its candidate IDs. */
+  flagRequests?: { id: string; note: string; nodeIds: string[] }[];
   targets: WriterTarget[];
 }
 
@@ -138,6 +144,8 @@ export interface DraftCard {
 export interface TargetResult {
   nodeId: string;
   cards: DraftCard[];
+  /** IDs of note requests that at least one card on this row directly answers. */
+  flagMatches?: string[];
   skipReason?: string;
 }
 

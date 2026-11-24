@@ -4,7 +4,7 @@ import type { ClozeSetting, Generation, GenerationSettings } from "./generation/
 import { FLAGGED_CARD_CAP, SETTINGS_KINDS, WRITE_KINDS } from "./writer/types.ts";
 import { exampleCard, KIND_HELP, KIND_NAMES } from "./kinds-ui.ts";
 import { CoveragePicker } from "./coverage-ui.ts";
-import type { CoverageRow, CoverageView } from "./coverage-ui.ts";
+import type { CoverageFlag, CoverageRow, CoverageView } from "./coverage-ui.ts";
 import { button, confirmDialog, el, plural, status } from "./ui.ts";
 import type { ButtonHandle } from "./ui.ts";
 import type { Peers } from "./settings-ui.ts";
@@ -20,9 +20,10 @@ interface Preflight {
   preflightId: string; nodeCount: number; maximumCards: number; inputTokens: number; outputTokens: number;
   estimatedCost: number | null; model: { provider: string; id: string; thinkingLevel?: string }; modelName?: string; followsCheapSlot?: boolean;
   batches: Array<{ nodeIds: string[] }>; skipped: Array<{ nodeId: string; reason: string }>;
+  skippedFlagRequests?: Array<{ count: number; reason: string }>;
   settings?: { writerNotes?: string };
 }
-interface SessionFlowNodes { session: { id: string; title: string; exists: boolean }; nodes: CoverageRow[]; missing?: CoverageRow[]; cardsPerNode: number; paired: boolean; pairingWarning?: boolean }
+type SessionFlowNodes = Omit<CoverageView, "flags"> & { flags: CoverageFlag[] };
 export { KIND_NAMES } from "./kinds-ui.ts";
 
 /** Provider errors often arrive as raw JSON; show the message and status only. */
@@ -104,7 +105,7 @@ export function mountDrafting(ctx: PluginFrontendContext, ideasHost: HTMLElement
   const invalidate = () => { revision++; };
   const alive = () => !disposed && !signal.aborted && !ctx.signal.aborted;
   const picker = new CoveragePicker({
-    ctx, signal, reviewWaiting, defaults: false,
+    ctx, signal, reviewWaiting,
     empty: () => loading ? "Loading ideas…" : scope ? "No ideas yet." : "No ideas yet. Teach a session first.",
     changed: source => { if (source === "user") choiceRevision++; invalidate(); syncWrite(); },
     mutate: (name, node) => { invalidate(); void run(async () => {
@@ -130,7 +131,7 @@ export function mountDrafting(ctx: PluginFrontendContext, ideasHost: HTMLElement
       let view: CoverageView;
       if (wanted) {
         const flow = await ctx.call<SessionFlowNodes>("sessionFlow", { sessionId: wanted.sessionId });
-        view = { nodes: flow.nodes, missing: flow.missing, cardsPerNode: flow.cardsPerNode, paired: flow.paired, pairingWarning: flow.pairingWarning ?? false };
+        view = { nodes: flow.nodes, missing: flow.missing, flags: flow.flags, cardsPerNode: flow.cardsPerNode, paired: flow.paired, pairingWarning: flow.pairingWarning ?? false };
       } else view = await ctx.call<CoverageView>("coverageContext");
       if (!alive() || request !== coverageRequest || wanted !== scope) return;
       nodes = (view.nodes ?? []).map(n => ({ ...n, cards: n.cards ?? { waiting: 0, sent: 0, sentElsewhere: 0 } }));
@@ -216,7 +217,7 @@ export function mountDrafting(ctx: PluginFrontendContext, ideasHost: HTMLElement
     const body = el("div", undefined, "ab-estimate");
     const facts = el("dl", undefined, "ab-facts");
     const fact = (term: string, value: string) => { facts.append(el("dt", term), el("dd", value)); };
-    const sent = p.batches.reduce((n, b) => n + b.nodeIds.length, 0);
+    const sent = new Set(p.batches.flatMap(b => b.nodeIds)).size;
     fact("Ideas", sent === p.nodeCount ? String(sent) : `${sent} of ${p.nodeCount} selected`);
     fact("Cards", `Up to ${p.maximumCards}`);
     fact("Model", `${p.modelName ?? p.model.id}${p.model.thinkingLevel ? `, ${p.model.thinkingLevel} reasoning` : ""}${p.followsCheapSlot ? " (cheap model)" : ""}`);
@@ -233,11 +234,17 @@ export function mountDrafting(ctx: PluginFrontendContext, ideasHost: HTMLElement
       for (const skip of p.skipped) skipped.append(el("li", `${name(skip.nodeId)}: ${skip.reason}`));
       body.append(el("p", `${plural(p.skipped.length, "idea")} skipped:`, "ab-muted"), skipped);
     }
+    const flagSkipCounts = new Map<string, number>();
+    for (const { count, reason } of p.skippedFlagRequests ?? []) {
+      flagSkipCounts.set(reason, (flagSkipCounts.get(reason) ?? 0) + count);
+    }
+    const flagSkips = [...flagSkipCounts].map(([reason, count]) => `${plural(count, "flag request")} skipped. ${reason}`);
+    for (const skip of flagSkips) body.append(el("p", skip, "ab-muted"));
     body.append(el("p", "Safe to leave this page.", "ab-muted"));
     if (!p.batches.length) {
       const reasons = p.skipped.slice(0, 3).map(skip => `${name(skip.nodeId)}: ${skip.reason}`);
       if (p.skipped.length > 3) reasons.push(`and ${plural(p.skipped.length - 3, "more idea")}.`);
-      throw new Error(["No ideas can be carded.", ...reasons].join(" "));
+      throw new Error(["No ideas can be carded.", ...flagSkips, ...reasons].join(" "));
     }
     const ok = await confirmDialog(ctx, signal, { title: "Write cards", body, confirm: "Start writing" });
     if (!ok || !alive()) return;
@@ -444,8 +451,11 @@ export function mountDrafting(ctx: PluginFrontendContext, ideasHost: HTMLElement
 
     writeButton = button(ctx, writeBar, signal, { label: "Write cards", variant: "default", onClick: () => run(async () => {
       if (!picker.ids.length) throw new Error("Select an idea first.");
-      const ids = picker.ids, backfill = picker.backfillNodeIds;
-      await estimateAndStart(() => ctx.call<Preflight>("preflight", { nodeIds: ids, backfillNodeIds: backfill }));
+      const input = {
+        nodeIds: picker.ids, backfillNodeIds: picker.backfillNodeIds,
+        ...(scope && { flagScopes: picker.flagScopes, independentNodeIds: picker.independentNodeIds }),
+      };
+      await estimateAndStart(() => ctx.call<Preflight>("preflight", input));
     }, false) });
     widgets.push(writeButton);
     renderActivity();
@@ -458,7 +468,6 @@ export function mountDrafting(ctx: PluginFrontendContext, ideasHost: HTMLElement
     setScope: (next, select) => {
       invalidate();
       scope = next;
-      picker.setDefaults(!!next);
       const at = ++choiceRevision;
       coverageRequest++;
       loading = true;

@@ -16,7 +16,15 @@ export interface Flag {
   messageIds: string[];
   note: string;
   flaggedAt: string;
+  /** Replacing the note or message anchors renews the request. */
+  revision?: string;
+  handledIdeas?: { nodeId: string; statementHash: string }[];
 }
+
+export interface FlagReference { id: string; revision: string; nodeIds: string[] }
+export const flagRevision = (flag: Flag): string => flag.revision ?? flag.id;
+export const flagIdeaHandled = (flag: Flag, nodeId: string, statementHash: string): boolean =>
+  flag.handledIdeas?.some(n => n.nodeId === nodeId && n.statementHash === statementHash) ?? false;
 
 /** Structural subset of LhMessage that this module reads. */
 export interface MessageLike {
@@ -140,8 +148,20 @@ export function validFlag(v: unknown): v is Flag {
   return object(v) && text(v.id) && UUID.test(v.id) && text(v.sessionId) && !!v.sessionId && v.sessionId.length <= 500 &&
     text(v.sessionTitle) && v.sessionTitle.length <= 1000 && text(v.note) && v.note.length <= MAX_FLAG_NOTE && !/[\r\n]/.test(v.note) &&
     text(v.flaggedAt) && !Number.isNaN(Date.parse(v.flaggedAt)) &&
+    (v.revision === undefined || text(v.revision) && UUID.test(v.revision)) &&
+    (v.handledIdeas === undefined || Array.isArray(v.handledIdeas) && v.handledIdeas.length <= 100_000 &&
+      v.handledIdeas.every(n => object(n) && text(n.nodeId) && !!n.nodeId && text(n.statementHash) && /^[\da-f]{64}$/.test(n.statementHash)) &&
+      new Set(v.handledIdeas.map(n => n.nodeId)).size === v.handledIdeas.length) &&
     Array.isArray(v.messageIds) && v.messageIds.length > 0 && v.messageIds.length <= MAX_FLAG_MESSAGES &&
     v.messageIds.every(id => text(id) && !!id && id.length <= 500) && new Set(v.messageIds).size === v.messageIds.length;
+}
+
+export function validFlagReferences(value: unknown, nodeIds: ReadonlySet<string>): value is FlagReference[] {
+  return Array.isArray(value) && value.length <= MAX_FLAGS && value.every(ref => object(ref) &&
+    text(ref.id) && UUID.test(ref.id) && text(ref.revision) && UUID.test(ref.revision) &&
+    Array.isArray(ref.nodeIds) && ref.nodeIds.length > 0 && ref.nodeIds.length <= nodeIds.size &&
+    ref.nodeIds.every(id => text(id) && nodeIds.has(id)) && new Set(ref.nodeIds).size === ref.nodeIds.length) &&
+    new Set(value.map(ref => ref.id)).size === value.length;
 }
 
 export function validateFlags(value: unknown): asserts value is Flag[] {

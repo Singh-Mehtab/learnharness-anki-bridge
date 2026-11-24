@@ -244,7 +244,7 @@ test("instructions describe only requested kinds; prompt carries cap and kinds",
 // #37: no constant-values toggle. A flag, or a flag note, is how a learner asks for a value.
 test("constant values are carded only on an explicit flag", () => {
   const text = writerInstructions();
-  assert.match(text, /Numerical values of physical constants.*are carded only on request: when the learner flagged a target that states the value, or a flag note asks for it\./);
+  assert.match(text, /Numerical values of physical constants.*are carded only on request: when a blank flag requests a target that states the value, or an applicable flag note asks for it\./);
   assert.doesNotMatch(text, /constant values are on/i);
   const flagged = writerPrompt({ ...input(), targets: [{ ...input().targets[0]!, flagged: true, maxCards: 12 }] });
   assert.match(flagged, /"flagged":true/);
@@ -274,6 +274,17 @@ test("a flagged target may exceed the per-node cap, up to FLAGGED_CARD_CAP", () 
   assert.match(findProblems({ targets: [{ nodeId: "b", cards: cards(3) }] }, plain).join(), /the cap is 2/);
   const packed = pack(graph, ["b", "c"], (id) => (id === "b" ? { flagged: true } : {}), { maxCardsPerNode: 2, enabledKinds: ["fact"] });
   assert.equal(packed.batches[0].outputAllowance, 300 * 12 + 200 + 300 * 2 + 200);
+});
+
+test("a directly selected note candidate keeps the ordinary cap unless it answers the note or has a blank flag", () => {
+  const target = buildTarget(graph, "b", { flagged: true });
+  const fi = input({ enabledKinds: ["fact"], targets: [target], flagRequests: [{ id: "r", note: "Only ask about edge cases", nodeIds: ["b"] }] });
+  const cards = Array.from({ length: 3 }, (_, i) => ({ kind: "fact", front: `Prefix question ${i}?`, back: `Answer number ${i}` }));
+  const ordinary = { nodeId: "b", cards };
+  assert.deepEqual(findProblems({ targets: [{ ...ordinary, cards: cards.slice(0, 2) }] }, fi), []);
+  assert.match(findProblems({ targets: [ordinary] }, fi).join(), /the cap is 2/);
+  assert.deepEqual(findProblems({ targets: [{ ...ordinary, flagMatches: ["r"] }] }, fi), []);
+  assert.deepEqual(findProblems({ targets: [ordinary] }, { ...fi, targets: [{ ...target, blankFlag: true }] }), []);
 });
 
 test("fact cards may name the idea; apply cards may not", () => {

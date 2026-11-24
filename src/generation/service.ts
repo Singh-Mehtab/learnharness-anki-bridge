@@ -5,7 +5,7 @@ import type { ModelCatalogEntry } from '../../sdk/src/core/contracts/models.d.ts
 import { StateStore } from '../anki/state.ts';
 import { DeliveryService } from '../anki/delivery.ts';
 import { renderMarkdown } from '../anki/render.ts';
-import { pack, sourcePassage, estimateTokens, targetsAllowance, trimTarget } from '../writer/input.ts';
+import { DEFAULT_CHUNK_BUDGET, pack, sourcePassage, estimateTokens, targetsAllowance, trimTarget } from '../writer/input.ts';
 import { writerInstructions, writerPrompt } from '../writer/prompt.ts';
 import { resultSchemaFor } from '../writer/schema.ts';
 import { validateResult } from '../writer/validate.ts';
@@ -19,6 +19,9 @@ import { replayBatchContext, selectBatchContext } from './batch-context.ts';
 import type { Generation, GenerationSettings, GenerationTask, SourceSnapshot } from './types.ts';
 import { graphCoverage, statementHash } from '../coverage/service.ts';
 import { MAX_SELECTED_NODES } from '../coverage/flow.ts';
+import { flagRevision, type FlagReference } from '../session/flow.ts';
+import { readFlagSelection, resolveFlags, type FlagScope, type FlagSelection } from './flag-selection.ts';
+import { packNoteBatches, refsForBatch } from './note-batches.ts';
 
 const WORKER = 'manual-card-writer';
 /** Auto and prefer use the cloze definition. Off and tasks saved before cloze use WORKER. */
@@ -57,11 +60,12 @@ interface Prepared {
   model: ModelCatalogEntry;
   /** What is sent: the override, or the host's cheap slot with its thinking level. */
   spec: PluginModelSpec;
-  batches: (Batch & { batchContextTokens?: number })[];
+  batches: (Batch & { batchContextTokens?: number; flagRefs?: FlagReference[] })[];
   sources: SourceSnapshot[];
   skipped: { nodeId: string; reason: string }[];
+  skippedFlagRequests: { count: number; reason: string }[];
 }
-interface Preflight { id: string; nodeIds: string[]; backfillNodeIds: string[]; prepared: Prepared }
+interface Preflight { id: string; nodeIds: string[]; backfillNodeIds: string[]; selection: FlagSelection; prepared: Prepared }
 
 function settledStatus(g: Generation): Generation['status'] {
   if (g.status === 'cancelled' || g.tasks.some(t => t.status === 'pending' || t.status === 'running')) return g.status;
@@ -80,8 +84,6 @@ export class GenerationService {
   private readonly lifetime = new AbortController();
   private readonly drivers = new Set<Promise<void>>();
   private unregister?: () => void;
-  /** Map membership means flagged, even without a note. Notes are untrusted data. */
-  flagNotes?: () => Map<string, string>;
   private closed = false;
   private readonly abort = () => { this.lifetime.abort(); };
   constructor(ctx: PluginBackendContext, store: StateStore, delivery: DeliveryService) {
@@ -217,12 +219,30 @@ export class GenerationService {
             front: c.front, back: c.back, extra: c.extra ?? '', status: 'draft' });
         }
       }
+      // Keep the completion after a card is dropped, but never resolve a newer flag revision.
+      const current = new Set(stored.sources.filter(n => currentHashes.get(n.nodeId) === n.statementHash).map(n => n.nodeId));
+      const drafted = new Set(result.targets.filter(t => t.cards.length && current.has(t.nodeId)).map(t => t.nodeId));
+      // Each returned card was saved or matched to an exact duplicate above. A
+      // changed source keeps its own request pending without reopening other candidates.
+      const answered = new Set(result.targets.filter(t => t.cards.length).flatMap(t => t.flagMatches ?? []));
+      const noted = new Set(stored.input.flagRequests?.map(r => r.id));
+      for (const ref of stored.flagRefs ?? []) {
+        const flag = s.flags.find(f => f.id === ref.id && flagRevision(f) === ref.revision);
+        if (!flag || (noted.has(ref.id) && !answered.has(ref.id))) continue;
+        const handled = new Map((flag.handledIdeas ?? []).map(n => [n.nodeId, n]));
+        for (const source of stored.sources) {
+          if (ref.nodeIds.includes(source.nodeId) && (noted.has(ref.id) ? current.has(source.nodeId) : drafted.has(source.nodeId))) {
+            handled.set(source.nodeId, { nodeId: source.nodeId, statementHash: source.statementHash });
+          }
+        }
+        if (handled.size) flag.handledIdeas = [...handled.values()].slice(-100_000);
+      }
       stored.taskId = worker.id; stored.status = 'applied'; stored.result = result; delete stored.error; delete stored.resultPending;
       if (omitted) stored.duplicatesOmitted = omitted;
     });
   }
 
-  private async prepare(ids: string[], backfillNodeIds: string[]): Promise<Prepared> {
+  private async prepare(ids: string[], backfillNodeIds: string[], selection: FlagSelection): Promise<Prepared> {
     this.active();
     // History stores the resolved mode, so a later default change can't rewrite it.
     const stored = this.store.snapshot().generationSettings, mode = activeCloze(stored);
@@ -257,39 +277,57 @@ export class GenerationService {
         sessionId, sessionName: session?.title ?? '',
         source: sourcePassage(n, chatId => this.ctx.learning.getSession(chatId)) });
     }
-    const notes = this.flagNotes?.();
-    // An ordinary target should not claim a recall task before a flagged one can cover it.
-    const orderedIds = [...ids.filter(id => notes?.has(id)), ...ids.filter(id => !notes?.has(id))];
-    const packed = pack(graph, orderedIds, id => ({ source: sources.find(s => s.nodeId === id)?.source, flagged: notes?.has(id), flagNote: notes?.get(id) || undefined,
+    const flags = resolveFlags(selection.scopes, state.flags, graph);
+    const blank = new Set(flags.filter(f => !f.note).flatMap(f => f.nodeIds));
+    const extrasFor = (id: string) => ({ source: sources.find(s => s.nodeId === id)?.source, flagged: blank.has(id),
       existingCards: cards.filter(c => c.nodeId === id).reverse().slice(0, 6).map(c => c.format !== 'cloze' ? { kind: c.kind, front: c.front, back: c.back }
         // Off mode's writer doesn't know the placeholder, so it sees the blank as [...].
-        : mode === 'off' ? { kind: c.kind, front: c.front.replace('{{blank}}', '[...]'), back: c.back } : { kind: c.kind, front: c.front, back: c.back, format: 'cloze' as const }) }),
-    { maxCardsPerNode: settings.cardsPerNode, enabledKinds: settings.enabledKinds, contextWindow: model.contextWindow, maxTokens: model.maxTokens });
-    const batches: Prepared['batches'] = [], skipped = [...packed.skipped];
-    // The pure packer budgets source material. Also account for prompt/schema overhead
-    // and the growing output reserve when the selected model has known limits.
-    // Preflight sizes the definition the task will start on (FI-8).
+        : mode === 'off' ? { kind: c.kind, front: c.front.replace('{{blank}}', '[...]'), back: c.back } : { kind: c.kind, front: c.front, back: c.back, format: 'cloze' as const }) });
+    const base = { version: 1 as const, maxCardsPerNode: settings.cardsPerNode, enabledKinds: settings.enabledKinds,
+      ...(mode === 'off' ? {} : { cloze: mode }), ...(settings.writerNotes ? { writerNotes: settings.writerNotes } : {}) };
     const definition = definitions()[mode === 'off' ? WORKER : CLOZE_WORKER];
     const overhead = estimateTokens(definition.instructions + JSON.stringify(definition.resultSchema));
+    const batch = (input: WriterInput): Batch => ({ input, inputTokens: estimateTokens(writerPrompt(input)) + overhead, outputAllowance: targetsAllowance(input.targets, settings.cardsPerNode) });
+    const fits = (b: Batch) => (model.contextWindow === null || b.inputTokens + b.outputAllowance <= model.contextWindow) && (model.maxTokens === null || b.outputAllowance <= model.maxTokens);
+    const noted = packNoteBatches({ graph, flags, independent: selection.independent, extrasFor, base, batch, fits });
+    const ordinary = new Set(selection.independent);
+    const ungrouped = ids.filter(id => !noted.assigned.has(id) && (blank.has(id) || ordinary.has(id)));
+    // Noted groups and blank flags precede ordinary targets, so they get first claim on recall tasks.
+    const orderedIds = [...ungrouped.filter(id => blank.has(id)), ...ungrouped.filter(id => !blank.has(id))];
+    const packed = pack(graph, orderedIds, extrasFor, { ...base, contextWindow: model.contextWindow, maxTokens: model.maxTokens });
+    const batches: Prepared['batches'] = [], excluded = new Map([...noted.skipped, ...packed.skipped].map(s => [s.nodeId, s.reason]));
+    const push = (next: Batch) => {
+      const previous = batches.at(-1);
+      if (previous && (previous.input.flagRequests || next.input.flagRequests)) {
+        const joined = batch({ ...base, targets: [...previous.input.targets, ...next.input.targets],
+          flagRequests: [...(previous.input.flagRequests ?? []), ...(next.input.flagRequests ?? [])] });
+        if (fits(joined) && joined.inputTokens - overhead <= DEFAULT_CHUNK_BUDGET) {
+          batches[batches.length - 1] = joined;
+          return;
+        }
+      }
+      batches.push(next);
+    };
+    for (const b of noted.batches) push(b);
     for (const original of packed.batches) {
-      // #54: every request in the run carries the same notes, frozen here, so the
-      // estimate, the binding and each split request all count the same text.
-      let current: WriterInput = { ...original.input, ...(mode === 'off' ? {} : { cloze: mode }), ...(settings.writerNotes ? { writerNotes: settings.writerNotes } : {}), targets: [] };
-      const batch = (input: WriterInput): Batch => ({ input, inputTokens: estimateTokens(writerPrompt(input)) + overhead, outputAllowance: targetsAllowance(input.targets, settings.cardsPerNode) });
-      const fits = (b: Batch) => (model.contextWindow === null || b.inputTokens + b.outputAllowance <= model.contextWindow) && (model.maxTokens === null || b.outputAllowance <= model.maxTokens);
+      let current: WriterInput = { ...base, targets: [] };
       for (const target of original.input.targets) {
         const next = batch({ ...current, targets: [...current.targets, target] });
-        if (current.targets.length && !fits(next)) { batches.push(batch(current)); current = { ...current, targets: [] }; }
+        if (current.targets.length && !fits(next)) { push(batch(current)); current = { ...current, targets: [] }; }
         if (fits(next)) { current = next.input; continue; }
         const withKinds = (candidate: typeof target) => ({ ...candidate, allowedKinds: allowedKindsFor(candidate, settings.enabledKinds) });
         const trimmed = trimTarget(target, candidate => {
           const node = withKinds(candidate);
           return node.allowedKinds.length > 0 && fits(batch({ ...current, targets: [node] }));
         }, minimumNeighbours(target, settings.enabledKinds));
-        if (!trimmed) skipped.push({ nodeId: target.nodeId, reason: 'Model limits cannot fit this target, prompt and reserved output.' });
+        if (!trimmed) excluded.set(target.nodeId, 'Model limits cannot fit this target, prompt and reserved output.');
         else current = { ...current, targets: [withKinds(trimmed)] };
       }
-      if (current.targets.length) batches.push(batch(current));
+      if (current.targets.length) push(batch(current));
+    }
+    for (const b of batches) {
+      const refs = refsForBatch(flags, b.input);
+      if (refs.length) b.flagRefs = refs;
     }
     // Earlier drafts don't exist at preflight. Reserve space within the model limit
     // without splitting a batch or skipping a target just to fit this context.
@@ -301,19 +339,22 @@ export class GenerationService {
     // Bind the initial input, bounded reserve, model entry and skips.
     const coverageBinding = { destination: state.destination, nodes: coverage.nodes.filter(n => ids.includes(n.id)),
       dismissals: state.dismissals.filter(d => ids.includes(d.nodeId)) };
-    return { binding: digest({ batches, skipped, settings, model, spec, sources, coverageBinding, backfillNodeIds }), settings, model, spec, batches, skipped, sources };
+    const scheduled = new Set(batches.flatMap(b => b.input.targets.map(t => t.nodeId)));
+    const skipped = [...excluded].filter(([nodeId]) => !scheduled.has(nodeId)).map(([nodeId, reason]) => ({ nodeId, reason }));
+    const { skippedFlagRequests } = noted;
+    return { binding: digest({ batches, skipped, skippedFlagRequests, settings, model, spec, sources, coverageBinding, backfillNodeIds, flags, selection }), settings, model, spec, batches, skipped, skippedFlagRequests, sources };
   }
-  private async preflight(ids: string[], backfillNodeIds: string[] = []): Promise<unknown> {
-    ids = nodeIds(ids); backfillNodeIds = backfillIds(backfillNodeIds, ids);
-    const prepared = await this.prepare(ids, backfillNodeIds), id = randomUUID();
+  private async preflight(ids: string[], backfillNodeIds: string[], selection: FlagSelection): Promise<unknown> {
+    const prepared = await this.prepare(ids, backfillNodeIds, selection), id = randomUUID();
     // Preflights are ephemeral confirmations, never autonomous durable work.
     if (this.preflights.size >= 32) this.preflights.delete(this.preflights.keys().next().value!);
-    this.preflights.set(id, { id, nodeIds: ids, backfillNodeIds, prepared });
+    this.preflights.set(id, { id, nodeIds: ids, backfillNodeIds, selection, prepared });
     const inputTokens = prepared.batches.reduce((n, b) => n + b.inputTokens, 0);
     const outputTokens = prepared.batches.reduce((n, b) => n + b.outputAllowance, 0);
     return { preflightId: id, nodeIds: ids, backfillNodeIds, nodeCount: ids.length, maximumCards: prepared.batches.reduce((n, b) => n + b.input.targets.reduce((sum, target) => sum + capFor(target, b.input.maxCardsPerNode), 0), 0),
       inputTokens, outputTokens, estimatedCost: prepared.model.cost ? (inputTokens * prepared.model.cost.input + outputTokens * prepared.model.cost.output) / 1_000_000 : null,
       model: prepared.spec, modelName: prepared.model.name, followsCheapSlot: !prepared.settings.model, settings: prepared.settings, skipped: prepared.skipped,
+      ...(prepared.skippedFlagRequests.length && { skippedFlagRequests: prepared.skippedFlagRequests }),
       batches: prepared.batches.map(b => ({ nodeIds: b.input.targets.map(t => t.nodeId), inputTokens: b.inputTokens, outputAllowance: b.outputAllowance })) };
   }
   async command(name: string, input: unknown = {}): Promise<unknown> {
@@ -363,8 +404,9 @@ export class GenerationService {
         try { await this.delivery.save(s => { s.generationSettings = settings; }); }
         finally { if (sent(this.store.snapshot().generationSettings) !== before) this.preflights.clear(); }
       } else if (name === 'preflight') {
-        keys(value, ['nodeIds', 'backfillNodeIds']);
-        const ids = nodeIds(value.nodeIds); return this.preflight(ids, backfillIds(value.backfillNodeIds, ids));
+        keys(value, ['nodeIds', 'backfillNodeIds', 'flagScopes', 'independentNodeIds']);
+        const ids = nodeIds(value.nodeIds), backfill = backfillIds(value.backfillNodeIds, ids);
+        return this.preflight(ids, backfill, readFlagSelection(value.flagScopes, value.independentNodeIds, ids, backfill));
       } else if (name === 'retryGeneration') {
         keys(value, ['id']); const g = this.generation(value.id);
         if (g.status === 'running') throw new Error('Cancel or finish this generation before retrying.');
@@ -377,10 +419,18 @@ export class GenerationService {
           await this.finish(g.id);
           return { recovery: true, snapshot: this.delivery.snapshot(false) };
         }
-        const ids = g.tasks.filter(t => t.status !== 'applied').flatMap(t => t.input.targets.map(n => n.nodeId));
-        if (!ids.length) throw new Error('No unfinished tasks to retry.');
-        const selected = [...new Set(ids)];
-        return this.preflight(selected, backfillIds((g.backfillNodeIds ?? []).filter(id => selected.includes(id)), selected));
+        const unfinished = g.tasks.filter(t => t.status !== 'applied');
+        const selected = [...new Set(unfinished.flatMap(t => t.input.targets.map(n => n.nodeId)))];
+        if (!selected.length) throw new Error('No unfinished tasks to retry.');
+        const scopes = new Map<string, FlagScope>();
+        const live = new Map(this.store.snapshot().flags.map(f => [f.id, flagRevision(f)]));
+        if (g.independentNodeIds) for (const task of unfinished) for (const ref of task.flagRefs ?? []) {
+          if (live.get(ref.id) !== ref.revision) throw new Error('A flag changed since this run. Select it again to get a new estimate.');
+          const prior = scopes.get(ref.id)?.nodeIds ?? [];
+          scopes.set(ref.id, { id: ref.id, nodeIds: [...new Set([...prior, ...ref.nodeIds])] });
+        }
+        return this.preflight(selected, (g.backfillNodeIds ?? []).filter(id => selected.includes(id)),
+          { scopes: [...scopes.values()], independent: selected.filter(id => (g.independentNodeIds ?? selected).includes(id)) });
       } else if (name === 'abandonGenerationResult') {
         keys(value, ['id', 'confirmed']); const g = this.generation(value.id);
         if (value.confirmed !== true) throw new Error('Confirm abandoning the unavailable result.');
@@ -405,13 +455,13 @@ export class GenerationService {
         if (this.store.snapshot().generations.some(g => g.status === 'running')) throw new Error('A generation is already running.');
         const p = this.preflights.get(value.preflightId);
         if (!p) throw new Error('Preflight expired. Run preflight again.');
-        const fresh = await this.prepare(p.nodeIds, p.backfillNodeIds);
+        const fresh = await this.prepare(p.nodeIds, p.backfillNodeIds, p.selection);
         if (fresh.binding !== p.prepared.binding) throw new Error('Preflight is stale. Review a new preflight before generating.');
         if (!fresh.batches.length) throw new Error('No targets fit this preflight. Review the skipped reasons.');
         const g: Generation = { id: p.id, createdAt: new Date().toISOString(), status: 'running', nodeIds: p.nodeIds, backfillNodeIds: p.backfillNodeIds,
-          settings: fresh.settings, modelSpec: fresh.spec, skipped: fresh.skipped,
+          independentNodeIds: p.selection.independent, settings: fresh.settings, modelSpec: fresh.spec, skipped: fresh.skipped,
           tasks: fresh.batches.map(b => ({ requestId: randomUUID(), definitionId: definitionFor(b.input), status: 'pending', input: b.input, outputAllowance: b.outputAllowance,
-            ...(b.batchContextTokens ? { batchContextTokens: b.batchContextTokens } : {}), sources: fresh.sources.filter(s => b.input.targets.some(t => t.nodeId === s.nodeId)) })) };
+            ...(b.batchContextTokens ? { batchContextTokens: b.batchContextTokens } : {}), ...(b.flagRefs ? { flagRefs: b.flagRefs } : {}), sources: fresh.sources.filter(s => b.input.targets.some(t => t.nodeId === s.nodeId)) })) };
         try { await this.delivery.save(s => { s.generations.push(g); }); }
         catch (error) {
           // The snapshot can be committed even if a later fsync throws; drive it so it cannot stay stuck.

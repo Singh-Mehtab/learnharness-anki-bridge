@@ -122,7 +122,9 @@ export function findProblems(result: unknown, input: WriterInput): string[] {
   if (!Array.isArray(rows)) return ["Return an object with a targets array."];
   const byId = new Map(input.targets.map((t) => [t.nodeId, t]));
   const seen = new Set<string>();
-  for (const row of rows as Array<{ nodeId?: unknown; cards?: unknown; skipReason?: unknown }>) {
+  const groups = new Map(input.flagRequests?.map(r => [r.id, new Set(r.nodeIds)]));
+  const candidates = new Set(input.flagRequests?.flatMap(r => r.nodeIds));
+  for (const row of rows as Array<{ nodeId?: unknown; cards?: unknown; skipReason?: unknown; flagMatches?: unknown }>) {
     const nodeId = typeof row?.nodeId === "string" ? row.nodeId : "";
     const target = byId.get(nodeId);
     if (!target) {
@@ -139,7 +141,15 @@ export function findProblems(result: unknown, input: WriterInput): string[] {
       continue;
     }
     const cards = row.cards as DraftCard[];
-    const cap = capFor(target, input.maxCardsPerNode);
+    const matches = row.flagMatches;
+    if (matches !== undefined && (!Array.isArray(matches) || !cards.length || !matches.length || new Set(matches).size !== matches.length ||
+      matches.some(id => typeof id !== 'string' || !groups.get(id)?.has(nodeId)))) {
+      problems.push(`Target ${nodeId}: flagMatches must list distinct note IDs that include this target and are answered by its cards.`);
+    }
+    if (target.noteOnly && cards.length && matches === undefined) problems.push(`Target ${nodeId}: cards on a note-only target must answer a note in flagMatches.`);
+    const hasNoteMatch = Array.isArray(matches) && matches.some(id => groups.get(id)?.has(nodeId));
+    const cap = candidates.has(nodeId) && !target.blankFlag && !hasNoteMatch
+      ? input.maxCardsPerNode : capFor(target, input.maxCardsPerNode);
     if (cards.length > cap) {
       problems.push(`Target ${nodeId}: ${cards.length} cards, but the cap is ${cap}.`);
     }

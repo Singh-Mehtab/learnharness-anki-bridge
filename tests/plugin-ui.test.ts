@@ -23,7 +23,7 @@ function fixture() {
 }
 const tick = async () => { for (let i = 0; i < 6; i++) await new Promise<void>(resolve => setTimeout(resolve, 0)); };
 
-async function setup(options: { handler?: (name: string, input: any) => unknown; coverageGate?: () => Promise<void> | undefined; state?: ReturnType<typeof fixture>; connection?: () => unknown; ui?: Record<string, unknown> } = {}) {
+async function setup(options: { handler?: (name: string, input: any) => unknown; coverageGate?: () => Promise<void> | undefined; coverageNodes?: () => unknown[]; state?: ReturnType<typeof fixture>; connection?: () => unknown; ui?: Record<string, unknown> } = {}) {
   const window = new Window();
   Object.assign(globalThis, { document: window.document });
   const controller = new AbortController(), activation = new AbortController();
@@ -48,7 +48,7 @@ async function setup(options: { handler?: (name: string, input: any) => unknown;
     call: async (name: string, input: any) => {
       if (name === "coverageContext") coverageReads++;
       if (name === "coverageContext") await options.coverageGate?.();
-      if (name === "coverageContext") return { nodes: [], missing: [], cardsPerNode: 2, paired: true, pairingWarning: false };
+      if (name === "coverageContext") return { nodes: options.coverageNodes?.() ?? [], missing: [], cardsPerNode: 2, paired: true, pairingWarning: false };
       if (name === "generationStatus") return { generationSettings: structuredClone(state.generationSettings), generations: [] };
       if (name === "sessions") return { sessions: [], unresolved: [] };
       calls.push({ name, input });
@@ -642,6 +642,40 @@ test("approving all drafts and dropping all unsent cards need confirmation", asy
     f.button("Drop cards", f.dialog()!).click(); await tick();
     assert.deepEqual(f.calls.find(c => c.name === "drop")!.input, { ids: ["a", "b"] });
     assert.match(f.container.textContent!, /Nothing left to review\./, "dropped cards leave only the sent one");
+  } finally { await f.dispose(); }
+});
+
+test("single Drop offers a separate idea dismissal only after the last draft", async () => {
+  const state = fixture();
+  state.cards = [card("a"), card("b", { nodeId: "node-a" }), card("c")];
+  const f = await setup({ state, coverageNodes: () => ["a", "c"].map(id => ({ id: `node-${id}`, name: `Idea ${id}`, statementHash: "h",
+    cards: { sent: 0 }, coverage: { canDismiss: true } })) });
+  const label = "Don't make cards for this idea";
+  try {
+    f.button("Drop", f.review()).click(); await tick();
+    assert.equal(state.cards[0].status, "dropped");
+    assert.equal(f.find(label), undefined, "another draft is still waiting");
+    f.button("Drop", f.review()).click(); await tick();
+    assert.equal(state.cards[1].status, "dropped");
+    assert.ok(f.find(label));
+    assert.equal(f.calls.some(c => c.name === "dismissNode"), false, "drop itself does not dismiss");
+    f.button(label).click(); await tick();
+    assert.deepEqual(f.calls.filter(c => c.name === "dismissNode"), [{ name: "dismissNode", input: { nodeId: "node-a", statementHash: "h" } }]);
+    assert.equal(state.cards[2].status, "draft");
+    f.button("Drop", f.review()).click(); await tick();
+    f.button("Close", f.container.querySelector('[data-kind="drop"]')).click(); await tick();
+    assert.equal(f.calls.filter(c => c.name === "dismissNode").length, 1, "closing the offer leaves coverage alone");
+  } finally { await f.dispose(); }
+});
+
+test("Drop offers dismissal for the current idea even when an older card was delivered", async () => {
+  const state = fixture();
+  state.cards = [card("a"), card("old", { nodeId: "node-a", statementHash: "older", status: "imported" })];
+  const f = await setup({ state, coverageNodes: () => [{ id: "node-a", name: "Idea a", statementHash: "h",
+    cards: { sent: 1 }, coverage: { canDismiss: true } }] });
+  try {
+    f.button("Drop", f.review()).click(); await tick();
+    assert.ok(f.find("Don't make cards for this idea"));
   } finally { await f.dispose(); }
 });
 
