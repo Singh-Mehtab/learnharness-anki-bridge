@@ -21,7 +21,7 @@ const tick = async () => { for (let i = 0; i < 8; i++) await new Promise<void>(r
 const settle = async (until: () => boolean) => { for (let i = 0; i < 200 && !until(); i++) await new Promise<void>(r => setTimeout(r, 5)); };
 
 /** Real ReviewService and a fake AnkiConnect behind a fake host, so the page drives the actual backend. */
-async function setup(options: { paired?: boolean; deferSessionButtons?: boolean; duplicateSessionTitles?: boolean } = {}) {
+async function setup(options: { paired?: boolean; deferSessionButtons?: boolean; duplicateSessionTitles?: boolean; onlyNodes?: string[] } = {}) {
   const directory = await mkdtemp(path.join(os.tmpdir(), "anki-bridge-topics-ui-"));
   const ids = [randomUUID(), randomUUID(), randomUUID(), randomUUID()];
   const anki = await fakeAnkiConnect({ notes: [
@@ -40,8 +40,9 @@ async function setup(options: { paired?: boolean; deferSessionButtons?: boolean;
   const state: State = { ...initialState(), settings: { url: anki.url, apiKey: "", lastDeck: "Scratch" }, destination: options.paired === false ? null : destination,
     cards: [card(0, "node-r", "Nuclear radius", "What is $R_0$?"), card(1, "node-f", "Femto prefix", "What does femto denote?", "chat-2"), card(2, "node-x", "Gone", "Deleted"), card(3, "node-y", "Changed", "Edited")] };
   await store.replace(state);
+  let onlyNodes = options.onlyNodes;
   const graph = () => ({
-    propositions: [{ id: "node-r" }, { id: "node-f" }],
+    propositions: [{ id: "node-r", name: "Nuclear radius", statement: "Nuclear radius varies with mass number." }, { id: "node-f", name: "Femto prefix", statement: "Femto means 10^-15." }].filter(n => !onlyNodes || onlyNodes.includes(n.id)),
     nodeSessions: { "node-r": options.duplicateSessionTitles ? ["chat-1", "chat-3", "chat-4"] : ["chat-1"], "node-f": options.duplicateSessionTitles ? ["chat-5"] : [] },
     sessions: { "chat-1": "Nuclear lecture", "chat-2": options.duplicateSessionTitles ? "Nuclear lecture" : "Prefixes workshop", "chat-3": "Nuclear  lecture" },
   });
@@ -60,7 +61,7 @@ async function setup(options: { paired?: boolean; deferSessionButtons?: boolean;
   let mountSettings: PluginView["mount"];
   let tagTemplate = "";
   const resyncs: (() => void)[] = [];
-  let hold: Promise<void> | undefined;
+  let hold: Promise<void> | undefined, holdPracticeNodes: Promise<void> | undefined;
   const buttons = delayedButtons();
   const ui = fakeUi();
   const mountButton = ui.mountButton as PluginFrontendContext["ui"]["mountButton"];
@@ -79,6 +80,11 @@ async function setup(options: { paired?: boolean; deferSessionButtons?: boolean;
     call: async (name: string, input: any) => {
       calls.push(name);
       if (["checkReviews", "lastReviewCheck", "clearReviewCheck"].includes(name)) return service.command(name, input ?? {});
+      if (name === "practiceNodes") {
+        const result = service.practiceNodes(input ?? {});
+        if (holdPracticeNodes) await holdPracticeNodes;
+        return result;
+      }
       if (name === "snapshot" || name === "settings") {
         if (name === "settings") tagTemplate = input.tagTemplate;
         const s = store.snapshot(); const wait = hold; if (wait) await wait;
@@ -128,7 +134,7 @@ async function setup(options: { paired?: boolean; deferSessionButtons?: boolean;
   const click = async (label: string | RegExp) => { const b = find(label); assert.ok(b, `button ${label}`); assert.equal(b.disabled, false, `button ${label} is enabled`); b.click(); await tick(); };
   const text = () => reviewRoot().textContent!;
   const cleanup = async () => { scope.abort(); service.close(); await store.close(); await anki.close(); await rm(directory, { recursive: true, force: true }); };
-  return { commitButtons: buttons.commitButtons, setHold: (p: Promise<void> | undefined) => { hold = p; }, ctx, scope, resyncs, destination, anki, store, service, views, actions, calls, shown, sessions, sessionReads, opened: () => opened, settingsOpened: () => settingsOpened, doc, container, window, tab, panel, openReviews, openSettings, mount, mountReviews, find, click, text, cleanup };
+  return { setOnlyNodes: (ids: string[]) => { onlyNodes = ids; }, holdPracticeNodes: (p: Promise<void>) => { holdPracticeNodes = p; }, commitButtons: buttons.commitButtons, setHold: (p: Promise<void> | undefined) => { hold = p; }, ctx, scope, resyncs, destination, anki, store, service, views, actions, calls, shown, sessions, sessionReads, opened: () => opened, settingsOpened: () => settingsOpened, doc, container, window, tab, panel, openReviews, openSettings, mount, mountReviews, find, click, text, cleanup };
 }
 
 test("Topics to revisit reads nothing until Check Anki reviews, then groups cards by node with evidence and links", async () => {
@@ -584,6 +590,35 @@ test("Clear cannot report success while a check started in a previous mount is r
   } finally { release(); await t.cleanup(); }
 });
 
+test("#52: a rejected Clear does not discard a pending pairing refresh", async () => {
+  const t = await setup();
+  let releaseCheck!: () => void, releaseRefresh!: () => void;
+  const heldCheck = new Promise<void>(resolve => { releaseCheck = resolve; });
+  try {
+    const dispose = await t.mountReviews();
+    await t.click("Check Anki reviews");
+    await settle(() => !!topicBox(t, "node-r"));
+    t.anki.state.after = action => action === "version" ? heldCheck : undefined;
+    await t.click("Check Anki reviews");
+    assert.equal((await t.service.command("lastReviewCheck")).running, true);
+    dispose();
+    await t.mount();
+    assert.ok(t.find("Clear"));
+
+    await t.store.replace({ ...t.store.snapshot(), destination: null });
+    t.setHold(new Promise<void>(resolve => { releaseRefresh = resolve; }));
+    for (const refresh of t.resyncs) refresh();
+    await tick();
+    await t.click("Clear");
+    const confirm = Array.from(t.doc.querySelectorAll(".ab-dialog button") as ArrayLike<HTMLButtonElement>).find(b => b.textContent === "Clear")!;
+    confirm.click(); await tick();
+    assert.match(t.text(), /Wait for the review check to finish/);
+    releaseRefresh(); await tick();
+    assert.match(t.text(), /Not checked yet/);
+    assert.ok(!t.find("Clear"));
+  } finally { releaseRefresh?.(); releaseCheck(); await t.cleanup(); }
+});
+
 test("round 4 S2: a reload begun before Clear cannot bring the cleared result back", async () => {
   const t = await setup();
   try {
@@ -603,4 +638,139 @@ test("round 4 S2: a reload begun before Clear cannot bring the cleared result ba
     assert.equal(t.container.querySelectorAll(".ab-topic").length, 0);
     assert.match(t.text(), /Not checked yet/);
   } finally { await t.cleanup(); }
+});
+
+test("#52: Practise selected starts a Practice session with only the ticked ideas and opens it", async () => {
+  const t = await setup();
+  const original = globalThis.fetch;
+  const requests: { url: string; body?: any }[] = [];
+  let create = () => new Response(JSON.stringify({ id: "chat_new" }));
+  globalThis.fetch = (async (url: string, init?: RequestInit) => {
+    if (!String(url).startsWith("/api/chats")) return original(url, init);
+    requests.push({ url, body: init?.body ? JSON.parse(String(init.body)) : undefined });
+    if (url === "/api/chats") return create();
+    const propositions = requests.find(r => r.url === "/api/chats")!.body.graphContext.propositions;
+    return new Response(JSON.stringify({ kind: "practice", messages: [{ customType: "graph-context", details: { propositions } }] }));
+  }) as typeof fetch;
+  try {
+    await t.mountReviews();
+    assert.equal(t.find(/^Practise selected/), undefined, "nothing to practise before a check");
+    await t.click("Check Anki reviews");
+    await settle(() => !!t.container.querySelector(".ab-topic"));
+    assert.match(t.text(), /Practice gets the ideas, not their review counts/);
+    const practise = () => t.find(/^Practise selected/)!;
+    assert.equal(practise().disabled, true, "nothing ticked yet");
+    const boxes = Array.from(t.container.querySelectorAll('.ab-topic input[type="checkbox"]') as ArrayLike<HTMLInputElement>);
+    assert.deepEqual(boxes.map(b => b.getAttribute("aria-label")), ["Select Femto prefix for Practice", "Select Nuclear radius for Practice"]);
+    assert.ok(boxes.every(b => !b.checked), "nothing is preselected");
+    const ankiBefore = t.anki.state.requests.length;
+
+    // A host refusal keeps the selection and explains the fallback.
+    create = () => new Response("{}", { status: 404 });
+    boxes[1]!.click(); await tick();
+    assert.equal(practise().textContent, "Practise selected (1)");
+    await t.click(/^Practise selected/); await tick();
+    assert.match(t.text(), /HTTP 404.*Practice → Pick nodes instead/);
+    assert.deepEqual(t.sessions, []);
+    assert.equal(t.find(/^Practise selected/)!.textContent, "Practise selected (1)");
+
+    create = () => new Response(JSON.stringify({ id: "chat_new" }));
+    requests.length = 0;
+    await t.click(/^Practise selected/); await settle(() => t.sessions.length > 0);
+    assert.deepEqual(requests[0], { url: "/api/chats", body: { title: "Practice: Nuclear radius", kind: "practice",
+      graphContext: { propositions: [{ id: "node-r", name: "Nuclear radius", statement: "Nuclear radius varies with mass number." }] } } });
+    assert.deepEqual(t.sessions, ["chat_new"]);
+    assert.doesNotMatch(JSON.stringify(requests), /lapse|leech|Again|What is/, "no Anki evidence or card text reaches Practice");
+    assert.equal(t.anki.state.requests.length, ankiBefore, "starting Practice sends nothing to Anki");
+    assert.ok(Array.from(t.container.querySelectorAll('.ab-topic input[type="checkbox"]') as ArrayLike<HTMLInputElement>).every(b => !b.checked), "selection clears after opening");
+  } finally { globalThis.fetch = original; await t.cleanup(); }
+});
+
+test("#52: ideas missing from the graph can't be ticked, and Clear drops the selection", async () => {
+  const t = await setup({ onlyNodes: ["node-f"] });
+  try {
+    await t.mountReviews();
+    await t.click("Check Anki reviews");
+    await settle(() => !!t.container.querySelector(".ab-topic"));
+    const radius = t.container.querySelector('[data-node-id="node-r"]') as HTMLElement;
+    assert.match(radius.textContent!, /Missing from this graph read/);
+    assert.equal(radius.querySelector('input[type="checkbox"]'), null);
+    (t.container.querySelector('[data-node-id="node-f"] input[type="checkbox"]') as HTMLInputElement).click(); await tick();
+    assert.equal(t.find(/^Practise selected/)!.textContent, "Practise selected (1)");
+    await t.click("Clear");
+    const dialogConfirm = Array.from(t.doc.querySelectorAll("button") as ArrayLike<HTMLButtonElement>).filter(b => b.textContent === "Clear").pop()!;
+    dialogConfirm.click(); await settle(() => /Not checked yet/.test(t.text()));
+    assert.equal(t.find(/^Practise selected/), undefined);
+  } finally { await t.cleanup(); }
+});
+
+function topicBox(t: Awaited<ReturnType<typeof setup>>, id: string): HTMLInputElement | null {
+  return t.container.querySelector(`[data-node-id="${id}"] input[type="checkbox"]`);
+}
+
+test("#52: rechecking updates the Practice count when a selected topic drops out", async () => {
+  const t = await setup();
+  try {
+    await t.mountReviews();
+    await t.click("Check Anki reviews");
+    await settle(() => !!topicBox(t, "node-r"));
+    topicBox(t, "node-r")!.click();
+    topicBox(t, "node-f")!.click(); await tick();
+    assert.ok(t.find("Practise selected (2)"));
+    t.anki.state.notes.splice(0, 1);
+    await t.click("Check Anki reviews");
+    await settle(() => !topicBox(t, "node-r"));
+    assert.ok(topicBox(t, "node-f")!.checked);
+    assert.ok(t.find("Practise selected (1)"));
+  } finally { await t.cleanup(); }
+});
+
+test("#52: topics deleted after the check stay untickable until a new check", async () => {
+  const t = await setup();
+  try {
+    await t.mountReviews();
+    await t.click("Check Anki reviews");
+    await settle(() => !!topicBox(t, "node-r"));
+    topicBox(t, "node-r")!.click();
+    topicBox(t, "node-f")!.click(); await tick();
+    t.setOnlyNodes(["node-f"]);
+    await t.click("Practise selected (2)");
+    assert.match(t.text(), /Unticked 1 idea no longer in your graph/);
+    assert.ok(!topicBox(t, "node-r"));
+    for (const refresh of t.resyncs) refresh();
+    await tick();
+    assert.ok(!topicBox(t, "node-r"), "reloading the same results does not re-enable a deleted idea");
+    assert.ok(topicBox(t, "node-f")!.checked);
+    topicBox(t, "node-f")!.click(); await tick();
+    assert.equal(t.find("Practise selected")!.disabled, true);
+    assert.doesNotMatch(t.text(), /Press Practise selected again/);
+    topicBox(t, "node-f")!.click(); await tick();
+    t.setOnlyNodes([]);
+    await t.click("Practise selected (1)");
+    assert.ok(!topicBox(t, "node-f"));
+    assert.match(t.text(), /Unticked 1 idea/);
+    assert.doesNotMatch(t.text(), /Press Practise selected again/);
+    assert.deepEqual(t.sessions, []);
+  } finally { await t.cleanup(); }
+});
+
+test("#52: Clear and a new check are disabled while the Practice picks are being resolved", async () => {
+  const t = await setup();
+  const original = globalThis.fetch;
+  let release!: () => void;
+  try {
+    await t.mountReviews();
+    await t.click("Check Anki reviews");
+    await settle(() => !!topicBox(t, "node-r"));
+    topicBox(t, "node-r")!.click(); await tick();
+    t.holdPracticeNodes(new Promise<void>(resolve => { release = resolve; }));
+    globalThis.fetch = (async (url, init) => url === "/api/chats" ? new Response(null, { status: 404 }) : original(url, init)) as typeof fetch;
+    await t.click("Practise selected (1)");
+    assert.ok(t.calls.includes("practiceNodes"));
+    assert.equal(t.find("Clear")!.disabled, true);
+    assert.equal(t.find("Check Anki reviews")!.disabled, true);
+    release();
+    await settle(() => !t.find("Clear")!.disabled);
+    assert.equal(t.find("Clear")!.disabled, false);
+  } finally { release?.(); globalThis.fetch = original; await t.cleanup(); }
 });

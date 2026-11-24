@@ -56,6 +56,7 @@ export async function activate(ctx: PluginBackendContext): Promise<() => Promise
     for (const name of SESSION_OPERATIONS) handlers.push(ctx.handle(name, input => session.command(name, input ?? {})));
     for (const name of COVERAGE_OPERATIONS) handlers.push(ctx.handle(name, input => coverage.command(name, input ?? {})));
     for (const name of REVIEW_OPERATIONS) handlers.push(ctx.handle(name, input => reviews.command(name, input ?? {})));
+    handlers.push(ctx.handle('practiceNodes', input => reviews.practiceNodes(input ?? {})));
     return close;
   } catch (error) {
     await close().catch(() => {});
